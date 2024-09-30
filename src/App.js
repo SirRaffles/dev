@@ -8,6 +8,7 @@ const questions = [
     options: ["0-1 year", "2-3 years", "4-5 years", "6+ years"],
     scores: [0, 1, 2, 3],
   },
+  
   {
     id: 2,
     text: "What percentage of your revenue is recurring?",
@@ -185,7 +186,7 @@ const questions = [
 ];
 
 const detailedRecommendations = {
-  "Focus on improving core financial metrics": {
+ "Focus on improving core financial metrics": {
     title: "Improving Core Financial Metrics",
     steps: [
       "Analyze your revenue streams and identify opportunities to increase recurring revenue",
@@ -307,31 +308,30 @@ const detailedRecommendations = {
   }
 };
 
-const ProgressBar = ({ current, total }) => (
-  <div className="mb-4 bg-blue-100 rounded p-2">
-    <div className="flex items-center">
-      <div className="flex-grow bg-blue-200 rounded-full h-2">
-        <div
-          className="bg-blue-600 rounded-full h-2"
-          style={{ width: `${((current + 1) / total) * 100}%` }}
-        ></div>
-      </div>
-      <span className="ml-2 text-sm text-blue-800">
+const ProgressBar = ({ current, total }) => {
+  const percentage = ((current + 1) / total) * 100;
+  return (
+    <div className="relative w-full bg-gray-300 h-3 rounded-full">
+      <div
+        className="absolute top-0 left-0 h-3 bg-blue-600 rounded-full transition-all duration-500"
+        style={{ width: `${percentage}%` }}
+      />
+      <p className="text-center mt-1 text-sm font-semibold text-gray-800">
         {current + 1} / {total}
-      </span>
+      </p>
     </div>
-  </div>
-);
+  );
+};
 
 const Question = ({ question, onAnswer }) => (
-  <div className="mb-4">
-    <p className="font-semibold text-gray-900">{question.text}</p>
-    <div className="flex flex-col space-y-2 mt-2">
+  <div className="mb-8 p-6 rounded-lg bg-white shadow-md">
+    <h3 className="text-lg font-semibold text-gray-900 mb-4">{question.text}</h3>
+    <div className="flex flex-col space-y-3">
       {question.options.map((option, index) => (
         <button
           key={index}
           onClick={() => onAnswer(question.id, question.scores[index])}
-          className="px-3 py-2 rounded bg-gray-300 text-gray-800 hover:bg-blue-600 hover:text-white transition-colors"
+          className="w-full px-4 py-2 bg-blue-500 text-white font-medium rounded-lg shadow-md hover:bg-blue-700 transition-colors"
         >
           {option}
         </button>
@@ -345,20 +345,20 @@ const RecommendationDetail = ({ recommendation }) => {
   const detail = detailedRecommendations[recommendation];
 
   return (
-    <div className="mt-2">
+    <div className="mt-4">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between w-full px-4 py-2 text-left text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+        className="flex items-center justify-between w-full px-4 py-2 bg-gray-100 text-left text-gray-700 rounded-lg hover:bg-gray-200"
       >
         <span>{recommendation}</span>
         {isOpen ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
       </button>
       {isOpen && detail && (
-        <div className="p-4 mt-2 bg-white rounded shadow">
+        <div className="p-4 mt-2 bg-gray-50 rounded-lg shadow-inner">
           <h4 className="font-semibold mb-2">{detail.title}</h4>
           <ul className="list-disc pl-5">
             {detail.steps.map((step, index) => (
-              <li key={index} className="mb-1">{step}</li>
+              <li key={index} className="mb-2">{step}</li>
             ))}
           </ul>
         </div>
@@ -382,6 +382,7 @@ const ExitReadinessAssessment = () => {
     }
   };
 
+  // Calculate the total score
   const { score } = useMemo(() => {
     const totalScore = Object.values(answers).reduce((a, b) => a + b, 0);
     const maxScore = questions.reduce(
@@ -393,26 +394,31 @@ const ExitReadinessAssessment = () => {
     };
   }, [answers]);
 
-  const getRecommendations = () => {
-    if (score <= 40) return [
-      "Focus on improving core financial metrics",
-      "Develop strategies to diversify your client base",
-      "Implement robust processes and governance structures",
-      "Invest in technology infrastructure and operational efficiency"
-    ];
-    if (score <= 70) return [
-      "Work on increasing market share and brand recognition",
-      "Enhance your product/service offering",
-      "Strengthen your management team",
-      "Improve financial reporting and controls"
-    ];
+  // Recommendations logic based on score
+  const getRecommendations = useMemo(() => {
+    if (score <= 40) {
+      return [
+        "Focus on improving core financial metrics",
+        "Develop strategies to diversify your client base",
+        "Implement robust processes and governance structures",
+        "Invest in technology infrastructure and operational efficiency"
+      ];
+    }
+    if (score <= 70) {
+      return [
+        "Work on increasing market share and brand recognition",
+        "Enhance your product/service offering",
+        "Strengthen your management team",
+        "Improve financial reporting and controls"
+      ];
+    }
     return [
       "Refine your exit strategy",
       "Prepare comprehensive documentation",
       "Continue to innovate",
       "Maintain your strong market position"
     ];
-  };
+  }, [score]);
 
   const handleRetake = () => {
     setAnswers({});
@@ -426,8 +432,10 @@ const ExitReadinessAssessment = () => {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-4 bg-gray-100 text-gray-900">
-      <h1 className="text-2xl font-bold mb-4">Exit Readiness Assessment</h1>
+    <div className="max-w-4xl mx-auto p-6 bg-gray-100 min-h-screen">
+      <h1 className="text-3xl font-bold text-center mb-8 text-gray-800">
+        Exit Readiness Assessment
+      </h1>
       {!showResults ? (
         <>
           <ProgressBar current={currentQuestion} total={questions.length} />
@@ -437,36 +445,36 @@ const ExitReadinessAssessment = () => {
           />
         </>
       ) : (
-        <div>
-          <h2 className="text-xl font-semibold mb-2">
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <h2 className="text-2xl font-bold mb-4">
             Your Exit Readiness Score: {score.toFixed(1)} / 100
           </h2>
-          <p className="mb-4">
+          <p className="mb-6">
             {score <= 40 ? (
-              <><AlertCircle className="inline mr-2 text-red-600" /> You have significant work to do to prepare for an exit.</>
+              <><AlertCircle className="inline mr-2 text-red-600" /> Significant improvements needed for an exit.</>
             ) : score <= 70 ? (
-              <><Info className="inline mr-2 text-blue-600" /> You're on the right track, but there's room for improvement.</>
+              <><Info className="inline mr-2 text-blue-600" /> On the right track, but there's room for improvement.</>
             ) : (
               <><CheckCircle className="inline mr-2 text-green-600" /> You're well-prepared for a potential exit!</>
             )}
           </p>
-          <h3 className="text-lg font-semibold mb-2">Recommendations:</h3>
-          <div className="space-y-2">
-            {getRecommendations().map((rec, index) => (
+          <h3 className="text-xl font-semibold mb-4">Recommendations:</h3>
+          <div className="space-y-3">
+            {getRecommendations.map((rec, index) => (
               <RecommendationDetail key={index} recommendation={rec} />
             ))}
           </div>
-          <div className="mt-4 space-x-4">
+          <div className="mt-8 flex justify-center space-x-4">
             <button
               onClick={handleRetake}
-              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+              className="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700"
             >
               Retake Assessment
             </button>
             {score > 70 && (
               <button
                 onClick={handleEquiteqAdvice}
-                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                className="px-6 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700"
               >
                 Get Equiteq Advice
               </button>
@@ -489,9 +497,6 @@ const ExitReadinessAssessment = () => {
                 <li>Gain valuable insights from our detailed market assessments and research reports</li>
               </ul>
               <p className="mt-2">
-                Our track record of successful deals in the knowledge-based software and services sector speaks for itself. Whether you're considering a full exit, partial sale, or seeking growth capital, Equiteq's specialized M&A and strategic advisory services can help you achieve optimal outcomes.
-              </p>
-              <p className="mt-2 font-semibold">
                 Contact Equiteq today to discuss how we can maximize the value of your knowledge-based business and guide you through a successful transaction in the dynamic Knowledge Economy landscape.
               </p>
             </div>
