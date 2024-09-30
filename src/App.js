@@ -2,309 +2,400 @@ import React, { useState, useMemo } from 'react';
 import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp } from 'lucide-react';
 
 const questions = [
+  // Financial Performance
   {
     id: 1,
+    category: "Financial Performance",
+    tagline: "Consistent Growth",
     text: "How many years of consistent revenue growth does your company have?",
     options: ["0-1 year", "2-3 years", "4-5 years", "6+ years"],
     scores: [0, 1, 2, 3],
   },
   {
     id: 2,
+    category: "Financial Performance",
+    tagline: "Recurring Revenue",
     text: "What percentage of your revenue is recurring?",
-    options: ["0-20%", "21-40%", "41-60%", "61-80%", ">80%"],
-    scores: [0, 1, 2, 3, 4],
+    options: ["0-20%", "21-40%", "41-60%", "61-80%", "81-90%", ">90%"],
+    scores: [0, 1, 2, 3, 4, 5],
   },
   {
     id: 3,
+    category: "Financial Performance",
+    tagline: "Revenue Scale",
     text: "What's your company's annual revenue?",
     options: ["<$5 million", "$5-20 million", "$20-50 million", "$50-100 million", ">$100 million"],
     scores: [0, 1, 2, 3, 4],
   },
   {
     id: 4,
+    category: "Financial Performance",
+    tagline: "Profitability",
     text: "What's your company's EBITDA margin?",
-    options: ["<5%", "5-10%", "11-20%", ">20%"],
-    scores: [0, 1, 2, 3],
+    options: ["<5%", "5-10%", "11-20%", "21-30%", ">30%"],
+    scores: [0, 1, 2, 3, 4],
   },
   {
     id: 5,
+    category: "Financial Performance",
+    tagline: "Rule of 40",
+    text: "How well does your company meet the 'Rule of 40' (sum of revenue growth % and EBITDA margin %)?",
+    options: ["<20%", "20-30%", "31-40%", ">40%"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 6,
+    category: "Financial Performance",
+    tagline: "Cash Flow Management",
+    text: "How would you rate your company's cash flow management?",
+    options: ["Poor", "Adequate", "Good", "Excellent"],
+    scores: [0, 1, 2, 3],
+  },
+  
+  // Market Position
+  {
+    id: 7,
+    category: "Market Position",
+    tagline: "Client Diversification",
     text: "How diversified is your client base?",
     options: ["Single client", "2-5 major clients", "6-10 major clients", "Well diversified"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 6,
+    id: 8,
+    category: "Market Position",
+    tagline: "Market Share",
     text: "What's your company's market share in its primary market?",
     options: ["<5%", "5-10%", "11-20%", "21-30%", ">30%"],
     scores: [0, 1, 2, 3, 4],
   },
   {
-    id: 7,
+    id: 9,
+    category: "Market Position",
+    tagline: "Brand Recognition",
     text: "How would you rate your company's brand recognition?",
     options: ["Unknown", "Some recognition", "Well-known in niche", "Industry leader"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 8,
-    text: "How mature is your product/service offering?",
-    options: ["In development", "Early stage", "Established", "Market-leading", "Disruptive"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 9,
-    text: "How would you describe your company's growth rate compared to the industry average?",
-    options: ["Below average", "Average", "Above average", "Far exceeds average"],
-    scores: [0, 1, 2, 3],
-  },
-  {
     id: 10,
-    text: "How stable is your management team?",
-    options: ["High turnover", "Some key positions unstable", "Mostly stable", "Very stable with succession plans"],
+    category: "Market Position",
+    tagline: "Barriers to Entry",
+    text: "How strong are the barriers to entry in your market segment?",
+    options: ["Low", "Moderate", "High", "Very High"],
     scores: [0, 1, 2, 3],
   },
   {
     id: 11,
+    category: "Market Position",
+    tagline: "Client Retention",
+    text: "What is your client retention rate?",
+    options: ["<70%", "70-80%", "81-90%", ">90%"],
+    scores: [0, 1, 2, 3],
+  },
+  
+  // Operations and Efficiency
+  {
+    id: 12,
+    category: "Operations and Efficiency",
+    tagline: "Process Documentation",
     text: "How well-documented are your company's processes and procedures?",
     options: ["Not documented", "Partially documented", "Mostly documented", "Fully documented and regularly updated"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 12,
+    id: 13,
+    category: "Operations and Efficiency",
+    tagline: "Technology Infrastructure",
     text: "How would you rate your company's technology infrastructure?",
     options: ["Outdated", "Functional but needs upgrading", "Modern and adequate", "Cutting-edge"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 13,
+    id: 14,
+    category: "Operations and Efficiency",
+    tagline: "Financial Reporting",
     text: "How effective is your company's financial reporting and controls?",
     options: ["Basic bookkeeping", "Regular unaudited financials", "Annual audited financials", "Quarterly audited financials with strong controls"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 14,
-    text: "How well-developed is your company's sales and marketing function?",
-    options: ["Ad-hoc efforts", "Basic systems in place", "Well-developed function", "Highly effective with measurable ROI"],
-    scores: [0, 1, 2, 3],
-  },
-  {
     id: 15,
-    text: "How would you describe your company's customer satisfaction and retention rates?",
-    options: ["Poor", "Average", "Good", "Excellent", "Industry-leading"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 16,
-    text: "How scalable is your business model?",
-    options: ["Not scalable", "Scalable with significant investment", "Moderately scalable", "Highly scalable"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 17,
-    text: "How well-protected is your company's intellectual property?",
-    options: ["No IP protection", "Some IP protected", "Most key IP protected", "Comprehensive IP protection strategy"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 18,
-    text: "How would you rate your company's ability to attract and retain top talent?",
-    options: ["Struggling", "Average", "Above average", "Industry leader in talent acquisition"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 19,
-    text: "How well does your company adapt to market changes and new technologies?",
-    options: ["Slow to adapt", "Reactive adaptation", "Proactive adaptation", "Industry trendsetter"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 20,
-    text: "How strong are your company's strategic partnerships and alliances?",
-    options: ["No significant partnerships", "Some partnerships, limited value", "Strong partnerships in key areas", "Extensive high-value partnership network"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 21,
+    category: "Operations and Efficiency",
+    tagline: "Operational Efficiency",
     text: "How would you rate your company's operational efficiency?",
     options: ["Poor", "Average", "Good", "Excellent", "Best-in-class"],
     scores: [0, 1, 2, 3, 4],
   },
   {
-    id: 22,
-    text: "How effective is your company's risk management strategy?",
-    options: ["No formal strategy", "Basic risk awareness", "Comprehensive strategy", "Industry-leading risk management"],
+    id: 16,
+    category: "Operations and Efficiency",
+    tagline: "IP Management",
+    text: "How well does your company manage and protect its intellectual property?",
+    options: ["No formal IP management", "Basic IP protection", "Comprehensive IP strategy", "Industry-leading IP management"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 23,
+    id: 17,
+    category: "Operations and Efficiency",
+    tagline: "Delivery Model",
+    text: "How efficient is your company's delivery model?",
+    options: ["Inefficient", "Somewhat efficient", "Efficient", "Highly optimized"],
+    scores: [0, 1, 2, 3],
+  },
+  
+  // Management and Governance
+  {
+    id: 18,
+    category: "Management and Governance",
+    tagline: "Management Stability",
+    text: "How stable is your management team?",
+    options: ["High turnover", "Some key positions unstable", "Mostly stable", "Very stable with succession plans"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 19,
+    category: "Management and Governance",
+    tagline: "Corporate Governance",
     text: "How would you describe your company's corporate governance practices?",
     options: ["Minimal", "Basic compliance", "Well-developed", "Best practice governance"],
     scores: [0, 1, 2, 3],
   },
   {
-    id: 24,
-    text: "How strong is your company's competitive advantage?",
-    options: ["No clear advantage", "Some advantages", "Strong in niche", "Dominant market position"],
+    id: 20,
+    category: "Management and Governance",
+    tagline: "Risk Management",
+    text: "How effective is your company's risk management strategy?",
+    options: ["No formal strategy", "Basic risk awareness", "Comprehensive strategy", "Industry-leading risk management"],
     scores: [0, 1, 2, 3],
   },
   {
+    id: 21,
+    category: "Management and Governance",
+    tagline: "Talent Management",
+    text: "How would you rate your company's ability to attract and retain top talent?",
+    options: ["Struggling", "Average", "Above average", "Industry leader in talent acquisition"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 22,
+    category: "Management and Governance",
+    tagline: "Equity Participation",
+    text: "How widespread is equity participation among key employees?",
+    options: ["Limited to founders", "Some key employees", "Most key employees", "Broad-based equity participation"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 23,
+    category: "Management and Governance",
+    tagline: "Leadership Team Completeness",
+    text: "How complete is your leadership team in terms of key roles?",
+    options: ["Several key roles missing", "Some gaps", "Most roles filled", "Fully staffed with experienced leaders"],
+    scores: [0, 1, 2, 3],
+  },
+  
+  // Innovation and Growth
+  {
+    id: 24,
+    category: "Innovation and Growth",
+    tagline: "Product/Service Maturity",
+    text: "How mature is your product/service offering?",
+    options: ["In development", "Early stage", "Established", "Market-leading", "Disruptive"],
+    scores: [0, 1, 2, 3, 4],
+  },
+  {
     id: 25,
-    text: "How well-prepared is your company for economic downturns?",
-    options: ["Unprepared", "Some contingency plans", "Well-prepared", "Robust downturn strategy"],
+    category: "Innovation and Growth",
+    tagline: "Growth Rate",
+    text: "How would you describe your company's growth rate compared to the industry average?",
+    options: ["Below average", "Average", "Above average", "Far exceeds average"],
     scores: [0, 1, 2, 3],
   },
   {
     id: 26,
-    text: "How would you rate your company's cash flow management?",
-    options: ["Poor", "Adequate", "Good", "Excellent"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 27,
-    text: "How well-developed is your company's ESG (Environmental, Social, Governance) strategy?",
-    options: ["No strategy", "Basic considerations", "Developed strategy", "Industry-leading ESG practices"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 28,
-    text: "How prepared is your management team for due diligence?",
-    options: ["Unprepared", "Somewhat prepared", "Well-prepared", "Fully prepared with organized documentation"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 29,
+    category: "Innovation and Growth",
+    tagline: "Innovation Pipeline",
     text: "How would you rate your company's innovation pipeline?",
     options: ["No formal innovation process", "Some innovation efforts", "Strong innovation pipeline", "Disruptive innovator in the industry"],
     scores: [0, 1, 2, 3],
   },
   {
+    id: 27,
+    category: "Innovation and Growth",
+    tagline: "Scalability",
+    text: "How scalable is your business model?",
+    options: ["Not scalable", "Scalable with significant investment", "Moderately scalable", "Highly scalable"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 28,
+    category: "Innovation and Growth",
+    tagline: "Competitive Advantage",
+    text: "How strong is your company's competitive advantage?",
+    options: ["No clear advantage", "Some advantages", "Strong in niche", "Dominant market position"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 29,
+    category: "Innovation and Growth",
+    tagline: "Market Expansion",
+    text: "How actively is your company pursuing market expansion?",
+    options: ["No expansion plans", "Considering expansion", "Active expansion in progress", "Successfully expanded to multiple markets"],
+    scores: [0, 1, 2, 3],
+  },
+  
+  // Exit Preparedness
+  {
     id: 30,
-    text: "How aligned are your shareholders with the company's exit strategy?",
-    options: ["Not aligned", "Somewhat aligned", "Mostly aligned", "Fully aligned"],
+    category: "Exit Preparedness",
+    tagline: "Long-term Planning",
+    text: "How well-defined is your company's long-term development plan?",
+    options: ["No plan", "Basic plan", "Detailed plan", "Comprehensive plan with regular updates"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 31,
+    category: "Exit Preparedness",
+    tagline: "M&A Process Readiness",
+    text: "How well-prepared is your company to handle potential disruptions during the M&A process?",
+    options: ["Not prepared", "Somewhat prepared", "Well-prepared", "Fully prepared with contingency plans"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 32,
+    category: "Exit Preparedness",
+    tagline: "Shareholder Alignment",
+    text: "How aligned are your shareholders on the exit strategy and timeline?",
+    options: ["Not aligned", "Partially aligned", "Mostly aligned", "Fully aligned"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 33,
+    category: "Exit Preparedness",
+    tagline: "Due Diligence Readiness",
+    text: "How prepared is your management team for due diligence?",
+    options: ["Unprepared", "Somewhat prepared", "Well-prepared", "Fully prepared with organized documentation"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 34,
+    category: "Exit Preparedness",
+    tagline: "Exit Strategy",
+    text: "How well-developed is your company's exit strategy?",
+    options: ["No strategy", "Basic considerations", "Developed strategy", "Comprehensive strategy with multiple scenarios"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 35,
+    category: "Exit Preparedness",
+    tagline: "Value Creation Plan",
+    text: "How well-developed is your company's value creation plan?",
+    options: ["No plan", "Basic plan", "Detailed plan", "Comprehensive plan with regular updates"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 36,
+    category: "Exit Preparedness",
+    tagline: "Buyer Landscape Understanding",
+    text: "How well do you understand the potential buyer landscape for your company?",
+    options: ["Limited understanding", "Some knowledge", "Good understanding", "Comprehensive knowledge of potential buyers"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 37,
+    category: "Exit Preparedness",
+    tagline: "Equity Story",
+    text: "How well-developed is your company's equity story for potential investors?",
+    options: ["Not developed", "Basic story", "Well-developed story", "Compelling, data-driven equity story"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 38,
+    category: "Exit Preparedness",
+    tagline: "Transaction Experience",
+    text: "How much M&A or capital raising experience does your management team have?",
+    options: ["No experience", "Limited experience", "Some experience", "Extensive experience"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 39,
+    category: "Exit Preparedness",
+    tagline: "Exit Timing",
+    text: "How well-timed is your potential exit considering market conditions and company performance?",
+    options: ["Poor timing", "Neutral timing", "Good timing", "Optimal timing"],
+    scores: [0, 1, 2, 3],
+  },
+  {
+    id: 40,
+    category: "Exit Preparedness",
+    tagline: "Post-Exit Planning",
+    text: "How well-defined are your plans for the business and key employees post-exit?",
+    options: ["No plans", "Basic considerations", "Detailed plans", "Comprehensive transition and retention strategy"],
     scores: [0, 1, 2, 3],
   },
 ];
 
 const detailedRecommendations = {
-  "Focus on improving core financial metrics": {
-    title: "Improving Core Financial Metrics",
+  "Optimize financial performance": {
+    title: "Optimizing Financial Performance",
     steps: [
-      "Analyze your revenue streams and identify opportunities to increase recurring revenue",
-      "Implement cost optimization strategies to improve EBITDA margin",
-      "Develop KPIs for each department that align with overall financial goals",
-      "Establish a regular financial review process with key stakeholders",
+      "Focus on increasing recurring revenue streams",
+      "Implement strategies to improve EBITDA margins",
+      "Develop a plan to consistently meet or exceed the Rule of 40",
+      "Establish robust financial forecasting and reporting processes",
       "Consider implementing a robust financial forecasting model"
     ]
   },
-  "Develop strategies to diversify your client base": {
-    title: "Client Base Diversification Strategy",
+  "Strengthen market position": {
+    title: "Strengthening Market Position",
     steps: [
-      "Conduct a market segmentation analysis to identify new potential client groups",
-      "Develop targeted marketing campaigns for each identified segment",
-      "Explore partnerships or alliances to access new client pools",
-      "Invest in developing new service offerings that appeal to a broader client base",
-      "Implement a key account management program to reduce dependency on major clients"
+      "Develop strategies to diversify your client base",
+      "Invest in marketing to increase brand recognition",
+      "Identify opportunities to increase market share",
+      "Develop and communicate a clear, compelling value proposition",
+      "Consider strategic partnerships or acquisitions to expand market presence"
     ]
   },
-  "Implement robust processes and governance structures": {
-    title: "Enhancing Processes and Governance",
+  "Enhance operational efficiency": {
+    title: "Enhancing Operational Efficiency",
     steps: [
-      "Conduct a comprehensive audit of current processes and identify gaps",
-      "Develop and document standard operating procedures for key business functions",
-      "Establish a formal board of directors or advisory board",
-      "Implement regular governance reviews and updates",
-      "Invest in process automation tools to increase efficiency and consistency"
+      "Document and standardize key business processes",
+      "Invest in upgrading technology infrastructure",
+      "Implement robust financial controls and reporting systems",
+      "Develop KPIs to measure and improve operational efficiency",
+      "Consider adopting lean or agile methodologies to streamline operations"
     ]
   },
-  "Invest in technology infrastructure and operational efficiency": {
-    title: "Technology and Operational Efficiency Roadmap",
+  "Improve management and governance": {
+    title: "Improving Management and Governance",
     steps: [
-      "Perform a technology stack assessment and identify areas for improvement",
-      "Develop a phased technology upgrade plan aligned with business goals",
-      "Implement productivity tracking tools to measure and improve operational efficiency",
-      "Consider adopting AI and machine learning solutions for relevant business processes",
-      "Establish a continuous improvement program for operational processes"
+      "Develop succession plans for key management positions",
+      "Implement best practice corporate governance structures",
+      "Establish a comprehensive risk management framework",
+      "Invest in talent acquisition and retention strategies",
+      "Consider bringing in experienced board members or advisors"
     ]
   },
-  "Work on increasing market share and brand recognition": {
-    title: "Market Share and Brand Recognition Strategy",
-    steps: [
-      "Conduct a comprehensive competitive analysis",
-      "Develop a unique value proposition that differentiates your brand",
-      "Invest in targeted digital marketing campaigns",
-      "Pursue speaking engagements and thought leadership opportunities in your industry",
-      "Consider strategic partnerships or acquisitions to rapidly expand market presence"
-    ]
-  },
-  "Enhance your product/service offering": {
-    title: "Product/Service Enhancement Plan",
-    steps: [
-      "Gather and analyze customer feedback on current offerings",
-      "Conduct market research to identify emerging trends and unmet needs",
-      "Develop a product/service roadmap aligned with market demands",
-      "Invest in R&D to develop innovative features or entirely new offerings",
-      "Implement a continuous improvement process for existing products/services"
-    ]
-  },
-  "Strengthen your management team": {
-    title: "Management Team Development Strategy",
-    steps: [
-      "Assess current management team skills and identify gaps",
-      "Develop individualized professional development plans for key team members",
-      "Implement a formal succession planning process",
-      "Consider bringing in experienced executives or board members to provide additional expertise",
-      "Establish a mentorship program to nurture emerging leaders within the organization"
-    ]
-  },
-  "Improve financial reporting and controls": {
-    title: "Financial Reporting and Control Enhancement",
-    steps: [
-      "Implement a robust ERP system if not already in place",
-      "Establish a formal internal audit function",
-      "Develop comprehensive financial policies and procedures",
-      "Implement regular financial health checks and stress tests",
-      "Consider engaging external auditors to provide additional credibility to financial reports"
-    ]
-  },
-  "Refine your exit strategy": {
-    title: "Exit Strategy Refinement Framework",
-    steps: [
-      "Clearly define your personal and business objectives for the exit",
-      "Analyze different exit options (e.g., strategic sale, management buyout, IPO) and their implications",
-      "Conduct a comprehensive company valuation",
-      "Identify and prioritize potential acquirers or investors",
-      "Develop a detailed timeline for exit preparation and execution"
-    ]
-  },
-  "Prepare comprehensive documentation": {
-    title: "Due Diligence Documentation Preparation",
-    steps: [
-      "Compile and organize all legal documents (contracts, licenses, patents)",
-      "Prepare detailed financial statements and projections",
-      "Document all business processes and operational procedures",
-      "Gather and organize human resources documentation",
-      "Prepare a comprehensive information memorandum highlighting the company's value proposition"
-    ]
-  },
-  "Continue to innovate": {
-    title: "Innovation Maintenance Strategy",
+  "Accelerate innovation and growth": {
+    title: "Accelerating Innovation and Growth",
     steps: [
       "Establish a formal innovation program or R&D department",
-      "Allocate a specific budget for innovation and new product/service development",
-      "Implement an idea management system to capture and evaluate employee and customer ideas",
-      "Foster a culture of innovation through rewards and recognition",
-      "Consider partnerships with universities or research institutions for cutting-edge developments"
+      "Develop strategies to outpace industry growth rates",
+      "Invest in product/service development to maintain market leadership",
+      "Identify opportunities to increase business model scalability",
+      "Consider partnerships or acquisitions to access new technologies or markets"
     ]
   },
-  "Maintain your strong market position": {
-    title: "Market Position Reinforcement Plan",
+  "Prepare for exit": {
+    title: "Preparing for Exit",
     steps: [
-      "Regularly conduct market and competitor analysis",
-      "Invest in customer retention programs to maintain loyalty",
-      "Continue to evolve your unique value proposition",
-      "Pursue strategic partnerships or acquisitions to strengthen market position",
-      "Invest in brand building activities to maintain top-of-mind awareness"
+      "Develop a comprehensive long-term strategic plan",
+      "Prepare for potential disruptions during the M&A process",
+      "Align shareholders on exit strategy and expectations",
+      "Prepare comprehensive documentation for due diligence",
+      "Develop multiple exit scenarios and strategies"
     ]
-  }
+  },
 };
 
 const ProgressBar = ({ current, total }) => (
@@ -325,7 +416,7 @@ const ProgressBar = ({ current, total }) => (
 
 const Question = ({ question, onAnswer }) => (
   <div className="mb-4">
-    <p className="font-semibold text-gray-900">{question.text}</p>
+    <p className="font-semibold text-gray-900">{question.tagline}: {question.text}</p>
     <div className="flex flex-col space-y-2 mt-2">
       {question.options.map((option, index) => (
         <button
@@ -382,36 +473,30 @@ const ExitReadinessAssessment = () => {
     }
   };
 
-  const { score } = useMemo(() => {
-    const totalScore = Object.values(answers).reduce((a, b) => a + b, 0);
-    const maxScore = questions.reduce(
-      (total, question) => total + Math.max(...question.scores),
-      0
-    );
-    return {
-      score: (totalScore / maxScore) * 100,
-    };
+  const { overallScore, categoryScores } = useMemo(() => {
+    const categories = [...new Set(questions.map(q => q.category))];
+    const categoryScores = categories.reduce((acc, category) => {
+      const categoryQuestions = questions.filter(q => q.category === category);
+      const totalScore = categoryQuestions.reduce((sum, q) => sum + (answers[q.id] || 0), 0);
+      const maxScore = categoryQuestions.reduce((sum, q) => sum + Math.max(...q.scores), 0);
+      acc[category] = (totalScore / maxScore) * 100;
+      return acc;
+    }, {});
+
+    const overallScore = Object.values(categoryScores).reduce((sum, score) => sum + score, 0) / categories.length;
+
+    return { overallScore, categoryScores };
   }, [answers]);
 
   const getRecommendations = () => {
-    if (score <= 40) return [
-      "Focus on improving core financial metrics",
-      "Develop strategies to diversify your client base",
-      "Implement robust processes and governance structures",
-      "Invest in technology infrastructure and operational efficiency"
-    ];
-    if (score <= 70) return [
-      "Work on increasing market share and brand recognition",
-      "Enhance your product/service offering",
-      "Strengthen your management team",
-      "Improve financial reporting and controls"
-    ];
-    return [
-      "Refine your exit strategy",
-      "Prepare comprehensive documentation",
-      "Continue to innovate",
-      "Maintain your strong market position"
-    ];
+    const recommendations = [];
+    if (categoryScores['Financial Performance'] <= 70) recommendations.push("Optimize financial performance");
+    if (categoryScores['Market Position'] <= 70) recommendations.push("Strengthen market position");
+    if (categoryScores['Operations and Efficiency'] <= 70) recommendations.push("Enhance operational efficiency");
+    if (categoryScores['Management and Governance'] <= 70) recommendations.push("Improve management and governance");
+    if (categoryScores['Innovation and Growth'] <= 70) recommendations.push("Accelerate innovation and growth");
+    if (categoryScores['Exit Preparedness'] <= 70) recommendations.push("Prepare for exit");
+    return recommendations;
   };
 
   const handleRetake = () => {
@@ -439,23 +524,45 @@ const ExitReadinessAssessment = () => {
       ) : (
         <div>
           <h2 className="text-xl font-semibold mb-2">
-            Your Exit Readiness Score: {score.toFixed(1)} / 100
+            Your Overall Exit Readiness Score: {overallScore.toFixed(1)} / 100
           </h2>
           <p className="mb-4">
-            {score <= 40 ? (
+            {overallScore <= 50 ? (
               <><AlertCircle className="inline mr-2 text-red-600" /> You have significant work to do to prepare for an exit.</>
-            ) : score <= 70 ? (
-              <><Info className="inline mr-2 text-blue-600" /> You're on the right track, but there's room for improvement.</>
+            ) : overallScore <= 70 ? (
+              <><Info className="inline mr-2 text-yellow-600" /> You're on the right track, but there's room for improvement.</>
+            ) : overallScore <= 85 ? (
+              <><Info className="inline mr-2 text-blue-600" /> You're well-prepared, with some areas for fine-tuning.</>
             ) : (
-              <><CheckCircle className="inline mr-2 text-green-600" /> You're well-prepared for a potential exit!</>
+              <><CheckCircle className="inline mr-2 text-green-600" /> You're exceptionally well-prepared for a potential exit!</>
             )}
           </p>
+          
+          <div className="mt-4 mb-6">
+            <h3 className="text-lg font-semibold mb-2">Category Breakdown:</h3>
+            {Object.entries(categoryScores).map(([category, score]) => (
+              <div key={category} className="mb-2">
+                <div className="flex justify-between items-center mb-1">
+                  <h4 className="font-medium">{category}</h4>
+                  <span>{score.toFixed(1)} / 100</span>
+                </div>
+                <div className="bg-gray-200 h-4 rounded-full">
+                  <div
+                    className="bg-blue-600 h-4 rounded-full"
+                    style={{ width: `${score}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          
           <h3 className="text-lg font-semibold mb-2">Recommendations:</h3>
           <div className="space-y-2">
             {getRecommendations().map((rec, index) => (
               <RecommendationDetail key={index} recommendation={rec} />
             ))}
           </div>
+          
           <div className="mt-4 space-x-4">
             <button
               onClick={handleRetake}
@@ -463,7 +570,7 @@ const ExitReadinessAssessment = () => {
             >
               Retake Assessment
             </button>
-            {score > 70 && (
+            {overallScore > 80 && (
               <button
                 onClick={handleEquiteqAdvice}
                 className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
@@ -472,6 +579,7 @@ const ExitReadinessAssessment = () => {
               </button>
             )}
           </div>
+          
           {showEquiteqAdvice && (
             <div className="mt-4 p-4 bg-green-100 rounded">
               <h3 className="text-lg font-semibold mb-2">Equiteq's Specialized Advice:</h3>
@@ -489,9 +597,6 @@ const ExitReadinessAssessment = () => {
                 <li>Gain valuable insights from our detailed market assessments and research reports</li>
               </ul>
               <p className="mt-2">
-                Our track record of successful deals in the knowledge-based software and services sector speaks for itself. Whether you're considering a full exit, partial sale, or seeking growth capital, Equiteq's specialized M&A and strategic advisory services can help you achieve optimal outcomes.
-              </p>
-              <p className="mt-2 font-semibold">
                 Contact Equiteq today to discuss how we can maximize the value of your knowledge-based business and guide you through a successful transaction in the dynamic Knowledge Economy landscape.
               </p>
             </div>
