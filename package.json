@@ -43,5 +43,8 @@
     "gh-pages": "^6.1.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13"
-  }
+  },
+  "engines": {
+  "node": "14"
+}
 }
