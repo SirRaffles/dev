@@ -1,7 +1,7 @@
 [build]
   command = "npm run build"
   publish = "build"
-  node_version = "14"  # Specify the Node.js version, in this case, 14
+  node_version = "16"  # Specify the Node.js version, in this case, 14 or 16
 
 [build.environment]
   NODE_ENV = "production"
