@@ -1,7 +1,8 @@
 [build]
-  command = "npm run build"
+  [build]
+  command = "NODE_OPTIONS=--openssl-legacy-provider npm run build"
   publish = "build"
-  node_version = "16"  # Specify the Node.js version, in this case, 14 or 16
+  node_version = "16"  # Ensure Node.js 16.x is used
 
 [build.environment]
   NODE_ENV = "production"
