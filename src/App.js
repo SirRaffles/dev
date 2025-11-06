@@ -166,7 +166,7 @@ const SECAccountPlanning = () => {
                   <ChevronRight size={20} />
                   <span className="text-sm font-semibold text-green-300">TO: Predictive, condition-based</span>
                 </div>
-                <p className="text-xs text-white/80">KPI: 30-50% reduction in unplanned outages, >90% equipment effectiveness</p>
+                <p className="text-xs text-white/80">KPI: 30-50% reduction in unplanned outages, &gt;90% equipment effectiveness</p>
               </div>
 
               <div className="bg-gradient-to-r from-red-600/20 to-green-600/20 backdrop-blur rounded-lg p-4 border border-white/20">
@@ -184,7 +184,7 @@ const SECAccountPlanning = () => {
                   <ChevronRight size={20} />
                   <span className="text-sm font-semibold text-green-300">TO: Customer-centric services</span>
                 </div>
-                <p className="text-xs text-white/80">KPI: Customer satisfaction 81% → >90%, First-contact resolution >85%</p>
+                <p className="text-xs text-white/80">KPI: Customer satisfaction 81% → &gt;90%, First-contact resolution &gt;85%</p>
               </div>
 
               <div className="bg-gradient-to-r from-red-600/20 to-green-600/20 backdrop-blur rounded-lg p-4 border border-white/20">
@@ -193,7 +193,7 @@ const SECAccountPlanning = () => {
                   <ChevronRight size={20} />
                   <span className="text-sm font-semibold text-green-300">TO: Commercially sustainable</span>
                 </div>
-                <p className="text-xs text-white/80">KPI: EBITDA margin ~30%, Gov subsidy <2%, Investment-grade credit maintained</p>
+                <p className="text-xs text-white/80">KPI: EBITDA margin ~30%, Gov subsidy &lt;2%, Investment-grade credit maintained</p>
               </div>
             </div>
           )
@@ -264,7 +264,7 @@ const SECAccountPlanning = () => {
                   <Users className="mr-2 text-green-300" size={20} />
                   EVP Distribution & Customer Services
                 </h4>
-                <p className="text-sm text-white/80"><strong>Challenge:</strong> Faster outage restoration, customer satisfaction >90%, efficient new connections</p>
+                <p className="text-sm text-white/80"><strong>Challenge:</strong> Faster outage restoration, customer satisfaction &gt;90%, efficient new connections</p>
                 <p className="text-xs text-white/60 mt-1">IFS Value: FSM optimization, mobile workforce, proactive customer communications</p>
               </div>
 
@@ -336,7 +336,7 @@ const SECAccountPlanning = () => {
               <div className="bg-gradient-to-br from-teal-600/20 to-cyan-600/20 backdrop-blur rounded-lg p-4 border border-white/20">
                 <h4 className="font-semibold mb-2">😊 Customer Experience Enhancement</h4>
                 <p className="text-xs text-white/80 mb-2">Omnichannel communication, proactive outage alerts</p>
-                <div className="text-xs text-green-300 font-semibold">ROI: 6-12 months | CSAT 81% → >90%, 20% call reduction</div>
+                <div className="text-xs text-green-300 font-semibold">ROI: 6-12 months | CSAT 81% → &gt;90%, 20% call reduction</div>
               </div>
             </div>
           )
