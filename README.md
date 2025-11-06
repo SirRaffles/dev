@@ -1,70 +1,147 @@
-# Getting Started with Create React App
+# IFS SEC Account Planning
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A state-of-the-art HTML presentation showcasing IFS.ai's strategic account plan for Saudi Electricity Company (SEC).
 
-## Available Scripts
+## Overview
 
-In the project directory, you can run:
+This interactive presentation transforms comprehensive account planning data into a visually stunning, professional presentation using IFS.ai marketing layout, design, and branding.
 
-### `npm start`
+## Features
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- **7 Major Sections**: Executive Summary, Strategic Imperatives, Stakeholder Landscape, IFS Solution Portfolio, Business Case, Proof Points & SWOT, Next Steps
+- **Multiple Slides per Section**: Each section contains detailed slides covering different aspects
+- **Modern UI/UX**:
+  - Beautiful gradient backgrounds with IFS brand colors
+  - Smooth transitions and animations
+  - Responsive design
+  - Backdrop blur effects for glassmorphism
+- **Interactive Navigation**:
+  - Tab-based section navigation
+  - Slide indicators and controls
+  - Keyboard-friendly Previous/Next buttons
+- **Professional Content Organization**:
+  - Market context and industry mega-trends
+  - Strategic imperatives and change management
+  - Stakeholder mapping and personas
+  - Comprehensive use cases with ROI timelines
+  - Competitive advantages
+  - Financial impact and implementation roadmap
+  - SWOT analysis and ESG alignment
+  - Proof points and success stories
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Technology Stack
 
-### `npm test`
+- React 18
+- Tailwind CSS for styling
+- Lucide React for icons
+- Modern JavaScript (ES6+)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Key Sections
 
-### `npm run build`
+### 1. Executive Summary
+- SEC overview with key metrics (11.2M customers, 70.7 GW peak load, $133B assets)
+- Market context and Vision 2030 alignment
+- Saudi Arabia power market dynamics
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### 2. Strategic Imperatives
+- Industry mega-trends (decarbonization, digital grid, DER, EVs, etc.)
+- Strategic change imperatives with FROM→TO transformations
+- KPIs and success metrics
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 3. Stakeholder Landscape
+- Executive leadership profiles (CEO, CFO, COO, CIO)
+- Operational leaders (EVP Generation, Transmission, Distribution)
+- Pain points and IFS value propositions
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### 4. IFS Solution Portfolio
+- 8 comprehensive use cases with ROI horizons
+- Competitive advantages vs SAP, Oracle, and others
+- Proof points (414% ROI, best-in-class scheduling, etc.)
 
-### `npm run eject`
+### 5. Business Case
+- Financial impact breakdown (SAR 2B O&M savings, SAR 2B capex optimization)
+- 5-year ROI summary (4:1+ return)
+- 24-month phased implementation roadmap
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+### 6. Proof Points & SWOT
+- Real customer success stories
+- Comprehensive SWOT analysis
+- ESG alignment (Environmental, Social, Governance)
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### 7. Next Steps
+- Engagement strategy with immediate actions
+- Why now? Why IFS? positioning
+- Call to action
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Getting Started
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### Prerequisites
 
-## Learn More
+- Node.js 14+
+- npm or yarn
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Installation
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+```bash
+npm install
+```
 
-### Code Splitting
+### Running the Application
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+```bash
+npm start
+```
 
-### Analyzing the Bundle Size
+The app will open at [http://localhost:3000](http://localhost:3000)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+### Building for Production
 
-### Making a Progressive Web App
+```bash
+npm run build
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+## Design Principles
 
-### Advanced Configuration
+- **IFS.ai Branding**: Blue and purple gradient color schemes throughout
+- **Professional Tech Aesthetic**: Modern, clean, corporate presentation style
+- **Data Visualization**: Clear metrics, statistics, and visual hierarchies
+- **Content Density**: Balanced information density with readability
+- **Accessibility**: High contrast, clear typography, intuitive navigation
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+## Content Organization
 
-### Deployment
+The presentation is organized into a logical flow:
+1. Set context (market, SEC overview)
+2. Establish challenges (strategic imperatives, stakeholder needs)
+3. Present solution (IFS portfolio and competitive advantages)
+4. Prove value (business case, ROI, proof points)
+5. Enable decision (SWOT, ESG alignment)
+6. Call to action (next steps)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## Customization
 
-### `npm run build` fails to minify
+The presentation content is defined in the `sections` array within `App.js`. Each section contains:
+- Title
+- Icon (from Lucide React)
+- Color scheme (Tailwind gradient classes)
+- Slides array with title, subtitle, and content
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+To modify content, edit the relevant section/slide in the `sections` array.
+
+## Deployment
+
+This project is configured for Netlify deployment:
+
+```bash
+npm run build
+# Deploy the build folder to your hosting service
+```
+
+## License
+
+Confidential & Proprietary - © 2024 IFS.ai
+
+## Contact
+
+Account Executive: Mark Marawy
+Local Partner: Saudi Business Machines (SBM)
