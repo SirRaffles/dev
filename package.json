@@ -38,13 +38,8 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.20",
-    "electron": "^32.1.2",
-    "electron-builder": "^25.0.5",
     "gh-pages": "^6.1.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13"
-  },
-  "engines": {
-    "node": "14"
   }
 }
