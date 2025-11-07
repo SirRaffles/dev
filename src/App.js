@@ -1,5 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import ErrorBoundary from './components/errors/ErrorBoundary';
+import AppErrorFallback from './components/errors/AppErrorFallback';
 
 const questions = [
   // Financial Performance
@@ -464,14 +466,17 @@ const ExitReadinessAssessment = () => {
   const [showResults, setShowResults] = useState(false);
   const [showEquiteqAdvice, setShowEquiteqAdvice] = useState(false);
 
-  const handleAnswer = (questionId, score) => {
-    setAnswers({ ...answers, [questionId]: score });
-    if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
-    } else {
-      setShowResults(true);
-    }
-  };
+  const handleAnswer = useCallback((questionId, score) => {
+    setAnswers(prevAnswers => ({ ...prevAnswers, [questionId]: score }));
+    setCurrentQuestion(prevQuestion => {
+      if (prevQuestion < questions.length - 1) {
+        return prevQuestion + 1;
+      } else {
+        setShowResults(true);
+        return prevQuestion;
+      }
+    });
+  }, []); // Empty deps array since we use functional updates
 
   const { overallScore, categoryScores } = useMemo(() => {
     const categories = [...new Set(questions.map(q => q.category))];
@@ -488,7 +493,7 @@ const ExitReadinessAssessment = () => {
     return { overallScore, categoryScores };
   }, [answers]);
 
-  const getRecommendations = () => {
+  const getRecommendations = useCallback(() => {
     const recommendations = [];
     if (categoryScores['Financial Performance'] <= 70) recommendations.push("Optimize financial performance");
     if (categoryScores['Market Position'] <= 70) recommendations.push("Strengthen market position");
@@ -497,35 +502,53 @@ const ExitReadinessAssessment = () => {
     if (categoryScores['Innovation and Growth'] <= 70) recommendations.push("Accelerate innovation and growth");
     if (categoryScores['Exit Preparedness'] <= 70) recommendations.push("Prepare for exit");
     return recommendations;
-  };
+  }, [categoryScores]);
 
-  const handleRetake = () => {
+  const handleRetake = useCallback(() => {
     setAnswers({});
     setCurrentQuestion(0);
     setShowResults(false);
     setShowEquiteqAdvice(false);
-  };
+  }, []);
 
-  const handleEquiteqAdvice = () => {
+  const handleEquiteqAdvice = useCallback(() => {
     setShowEquiteqAdvice(true);
-  };
+  }, []);
 
   return (
-    <div className="max-w-2xl mx-auto p-4 bg-gray-100 text-gray-900">
-      <h1 className="text-2xl font-bold mb-4">Exit Readiness Assessment</h1>
-      {!showResults ? (
-        <>
-          <ProgressBar current={currentQuestion} total={questions.length} />
-          <Question
-            question={questions[currentQuestion]}
-            onAnswer={handleAnswer}
-          />
-        </>
-      ) : (
-        <div>
-          <h2 className="text-xl font-semibold mb-2">
-            Your Overall Exit Readiness Score: {overallScore.toFixed(1)} / 100
-          </h2>
+    <ErrorBoundary
+      fallback={(props) => <AppErrorFallback {...props} errorContext="the assessment" />}
+      onError={(error, errorInfo) => {
+        // Log to console in development
+        console.error('Assessment Error:', error, errorInfo);
+        // In production, you would send this to an error tracking service
+        // Example: logErrorToService(error, errorInfo);
+      }}
+    >
+      <div className="max-w-2xl mx-auto p-4 bg-gray-100 text-gray-900">
+        <h1 className="text-2xl font-bold mb-4">Exit Readiness Assessment</h1>
+        {!showResults ? (
+          <ErrorBoundary
+            fallback={(props) => (
+              <AppErrorFallback {...props} errorContext="the current question" />
+            )}
+          >
+            <ProgressBar current={currentQuestion} total={questions.length} />
+            <Question
+              question={questions[currentQuestion]}
+              onAnswer={handleAnswer}
+            />
+          </ErrorBoundary>
+        ) : (
+        <ErrorBoundary
+          fallback={(props) => (
+            <AppErrorFallback {...props} errorContext="the results" />
+          )}
+        >
+          <div>
+            <h2 className="text-xl font-semibold mb-2">
+              Your Overall Exit Readiness Score: {overallScore.toFixed(1)} / 100
+            </h2>
           <p className="mb-4">
             {overallScore <= 50 ? (
               <><AlertCircle className="inline mr-2 text-red-600" /> You have significant work to do to prepare for an exit.</>
@@ -601,9 +624,11 @@ const ExitReadinessAssessment = () => {
               </p>
             </div>
           )}
-        </div>
+          </div>
+        </ErrorBoundary>
       )}
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 };
 
