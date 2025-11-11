@@ -13,12 +13,18 @@ import {
   Globe,
   Shield,
   Sun,
-  Moon
+  Moon,
+  Menu,
+  X,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 const SECAccountPlanning = () => {
   const [currentSection, setCurrentSection] = useState(0);
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [expandedSections, setExpandedSections] = useState([0]); // Start with first section expanded
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Initialize from localStorage or system preference
     const saved = localStorage.getItem('theme');
@@ -35,6 +41,24 @@ const SECAccountPlanning = () => {
       document.documentElement.classList.remove('dark');
     }
   }, [isDarkMode]);
+
+  // Toggle section expansion in sidebar
+  const toggleSectionExpansion = (sectionIndex) => {
+    if (expandedSections.includes(sectionIndex)) {
+      setExpandedSections(expandedSections.filter(idx => idx !== sectionIndex));
+    } else {
+      setExpandedSections([...expandedSections, sectionIndex]);
+    }
+  };
+
+  // Navigate to section/slide and ensure section is expanded
+  const navigateToSlide = (sectionIndex, slideIndex) => {
+    setCurrentSection(sectionIndex);
+    setCurrentSlide(slideIndex);
+    if (!expandedSections.includes(sectionIndex)) {
+      setExpandedSections([...expandedSections, sectionIndex]);
+    }
+  };
 
   // Logo Components
   const IFSLogo = () => (
@@ -855,44 +879,152 @@ const SECAccountPlanning = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-8 py-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center space-x-6">
-              <IFSLogo />
-              <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
-              <SECLogo />
-              <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
-              <div>
-                <div className="text-lg font-bold text-gray-900 dark:text-white">Strategic Account Plan</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-0.5">Saudi Electricity Company</div>
-              </div>
-            </div>
-            <div className="flex items-center space-x-6">
-              <div className="text-right">
-                <div className="text-sm font-semibold text-purple-700 dark:text-purple-400">
-                  Section {currentSection + 1} of {sections.length}
-                </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  {currentSectionData.title}
-                </div>
-              </div>
-              {/* Theme Toggle */}
-              <button
-                onClick={() => setIsDarkMode(!isDarkMode)}
-                className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
-                aria-label="Toggle theme"
-              >
-                {isDarkMode ? (
-                  <Sun size={20} className="text-yellow-500" />
-                ) : (
-                  <Moon size={20} className="text-gray-700" />
-                )}
-              </button>
-            </div>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors flex">
+      {/* Sidebar Navigation */}
+      <div className={`fixed left-0 top-0 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-lg transition-all duration-300 z-50 overflow-y-auto ${
+        isSidebarOpen ? 'w-80' : 'w-0'
+      }`}>
+        <div className={`${isSidebarOpen ? 'p-6' : 'hidden'}`}>
+          {/* Sidebar Header */}
+          <div className="flex items-center justify-between mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white">Navigation</h2>
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              aria-label="Close sidebar"
+            >
+              <X size={20} className="text-gray-600 dark:text-gray-400" />
+            </button>
           </div>
+
+          {/* Sections and Slides */}
+          <div className="space-y-2">
+            {sections.map((section, sectionIdx) => {
+              const Icon = section.icon;
+              const isExpanded = expandedSections.includes(sectionIdx);
+              const isCurrentSection = sectionIdx === currentSection;
+
+              return (
+                <div key={sectionIdx} className="rounded-lg overflow-hidden">
+                  {/* Section Header */}
+                  <button
+                    onClick={() => toggleSectionExpansion(sectionIdx)}
+                    className={`w-full flex items-center justify-between p-3 rounded-lg transition-all ${
+                      isCurrentSection
+                        ? 'bg-purple-50 dark:bg-purple-900/20 border-l-4'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 border-l-4 border-transparent'
+                    }`}
+                    style={isCurrentSection ? { borderLeftColor: section.color } : {}}
+                  >
+                    <div className="flex items-center space-x-3 flex-1 text-left">
+                      <Icon
+                        size={18}
+                        className={isCurrentSection ? 'text-purple-700 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}
+                        style={isCurrentSection ? { color: section.color } : {}}
+                      />
+                      <div className="flex-1">
+                        <div className={`text-sm font-semibold ${
+                          isCurrentSection
+                            ? 'text-purple-700 dark:text-purple-400'
+                            : 'text-gray-900 dark:text-white'
+                        }`}>
+                          {section.title}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          {section.slides.length} slides
+                        </div>
+                      </div>
+                    </div>
+                    {isExpanded ? (
+                      <ChevronUp size={16} className="text-gray-500 dark:text-gray-400" />
+                    ) : (
+                      <ChevronDown size={16} className="text-gray-500 dark:text-gray-400" />
+                    )}
+                  </button>
+
+                  {/* Slides List */}
+                  {isExpanded && (
+                    <div className="mt-1 ml-4 space-y-1">
+                      {section.slides.map((slide, slideIdx) => {
+                        const isCurrentSlide = isCurrentSection && slideIdx === currentSlide;
+                        return (
+                          <button
+                            key={slideIdx}
+                            onClick={() => navigateToSlide(sectionIdx, slideIdx)}
+                            className={`w-full flex items-center space-x-3 p-2.5 rounded-lg text-left transition-all ${
+                              isCurrentSlide
+                                ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 font-medium'
+                                : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300'
+                            }`}
+                          >
+                            <div className={`w-1.5 h-1.5 rounded-full ${
+                              isCurrentSlide ? 'bg-purple-700 dark:bg-purple-400' : 'bg-gray-300 dark:bg-gray-600'
+                            }`}
+                            style={isCurrentSlide ? { backgroundColor: section.color } : {}}
+                            />
+                            <span className="text-sm flex-1">{slide.title}</span>
+                            <span className="text-xs text-gray-400 dark:text-gray-500">{slideIdx + 1}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-80' : 'ml-0'}`}>
+        {/* Header */}
+        <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky top-0 z-40">
+          <div className="max-w-7xl mx-auto px-8 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-6">
+                {/* Sidebar Toggle */}
+                {!isSidebarOpen && (
+                  <button
+                    onClick={() => setIsSidebarOpen(true)}
+                    className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                    aria-label="Open sidebar"
+                  >
+                    <Menu size={20} className="text-gray-700 dark:text-gray-300" />
+                  </button>
+                )}
+                <IFSLogo />
+                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
+                <SECLogo />
+                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
+                <div>
+                  <div className="text-lg font-bold text-gray-900 dark:text-white">Strategic Account Plan</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-0.5">Saudi Electricity Company</div>
+                </div>
+              </div>
+              <div className="flex items-center space-x-6">
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-purple-700 dark:text-purple-400">
+                    Section {currentSection + 1} of {sections.length}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {currentSectionData.title}
+                  </div>
+                </div>
+                {/* Theme Toggle */}
+                <button
+                  onClick={() => setIsDarkMode(!isDarkMode)}
+                  className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                  aria-label="Toggle theme"
+                >
+                  {isDarkMode ? (
+                    <Sun size={20} className="text-yellow-500" />
+                  ) : (
+                    <Moon size={20} className="text-gray-700" />
+                  )}
+                </button>
+              </div>
+            </div>
 
           {/* Section Progress Bar */}
           <div className="flex items-center space-x-2">
@@ -938,35 +1070,9 @@ const SECAccountPlanning = () => {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky z-40" style={{ top: '140px' }}>
-        <div className="max-w-7xl mx-auto px-8">
-          <div className="flex space-x-2 overflow-x-auto">
-            {sections.map((section, idx) => {
-              const Icon = section.icon;
-              return (
-                <button
-                  key={idx}
-                  onClick={() => goToSection(idx)}
-                  className={`flex items-center space-x-2 px-6 py-3 transition-all whitespace-nowrap border-b-4 ${
-                    currentSection === idx
-                      ? 'border-purple-700 text-purple-700 dark:text-purple-400 font-semibold bg-purple-50 dark:bg-purple-900/20'
-                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-                  }`}
-                  style={currentSection === idx ? { borderBottomColor: section.color } : {}}
-                >
-                  <Icon size={18} />
-                  <span className="text-sm font-medium">{section.title}</span>
-                </button>
-              );
-            })}
-          </div>
         </div>
-      </div>
 
-      {/* Main Content */}
+        {/* Main Content */}
       <div className="max-w-7xl mx-auto px-8 py-12">
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-colors">
           <div className="p-12">
@@ -1028,11 +1134,12 @@ const SECAccountPlanning = () => {
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="max-w-7xl mx-auto px-8 pb-10">
-        <div className="text-center text-gray-500 dark:text-gray-400 text-sm">
-          <p className="font-medium">© 2024 IFS - Confidential &amp; Proprietary</p>
-          <p className="mt-2">Saudi Electricity Company Strategic Account Plan</p>
+        {/* Footer */}
+        <div className="max-w-7xl mx-auto px-8 pb-10">
+          <div className="text-center text-gray-500 dark:text-gray-400 text-sm">
+            <p className="font-medium">© 2024 IFS - Confidential &amp; Proprietary</p>
+            <p className="mt-2">Saudi Electricity Company Strategic Account Plan</p>
+          </div>
         </div>
       </div>
     </div>
