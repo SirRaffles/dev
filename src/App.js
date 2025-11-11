@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ChevronRight,
   ChevronLeft,
@@ -11,21 +11,55 @@ import {
   Zap,
   Award,
   Globe,
-  Shield
+  Shield,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 const SECAccountPlanning = () => {
   const [currentSection, setCurrentSection] = useState(0);
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    // Initialize from localStorage or system preference
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
 
-  // IFS Logo Component
+  // Theme persistence
+  useEffect(() => {
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  // Logo Components
   const IFSLogo = () => (
-    <div className="flex items-center space-x-2">
-      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="20" cy="20" r="18" fill="#6f2c91"/>
-        <path d="M15 12 L20 20 L15 28 M20 12 L25 20 L20 28" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+    <div className="flex items-center space-x-3">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="24" cy="24" r="22" fill="#6f2c91"/>
+        <path d="M16 14 L24 24 L16 34 M24 14 L32 24 L24 34" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
       <span className="text-2xl font-bold text-gray-900">IFS</span>
+    </div>
+  );
+
+  const SECLogo = () => (
+    <div className="flex items-center space-x-3">
+      <img
+        src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Logo_Saudi_Electric_Company.svg/320px-Logo_Saudi_Electric_Company.svg.png"
+        alt="Saudi Electricity Company"
+        className="h-12 w-auto object-contain"
+        onError={(e) => {
+          // Fallback to text if image fails to load
+          e.target.style.display = 'none';
+          e.target.nextSibling.style.display = 'block';
+        }}
+      />
+      <span className="text-xl font-bold text-gray-900 hidden">SEC</span>
     </div>
   );
 
@@ -821,25 +855,93 @@ const SECAccountPlanning = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-8 py-5">
-          <div className="flex items-center justify-between">
+      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-8 py-4">
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center space-x-6">
               <IFSLogo />
-              <div className="h-8 w-px bg-gray-300"></div>
-              <div className="text-lg font-semibold text-gray-700">SEC Account Planning</div>
+              <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
+              <SECLogo />
+              <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
+              <div>
+                <div className="text-lg font-bold text-gray-900 dark:text-white">Strategic Account Plan</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-0.5">Saudi Electricity Company</div>
+              </div>
             </div>
-            <div className="text-sm text-gray-500 font-medium">
-              Section {currentSection + 1} of {sections.length} • Slide {currentSlide + 1} of {currentSectionData.slides.length}
+            <div className="flex items-center space-x-6">
+              <div className="text-right">
+                <div className="text-sm font-semibold text-purple-700 dark:text-purple-400">
+                  Section {currentSection + 1} of {sections.length}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  {currentSectionData.title}
+                </div>
+              </div>
+              {/* Theme Toggle */}
+              <button
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                aria-label="Toggle theme"
+              >
+                {isDarkMode ? (
+                  <Sun size={20} className="text-yellow-500" />
+                ) : (
+                  <Moon size={20} className="text-gray-700" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Section Progress Bar */}
+          <div className="flex items-center space-x-2">
+            {sections.map((section, idx) => (
+              <button
+                key={idx}
+                onClick={() => goToSection(idx)}
+                className="flex-1 h-2 rounded-full transition-all relative group"
+                style={{
+                  backgroundColor: idx === currentSection ? section.color :
+                                  idx < currentSection ? '#d1d5db' : '#e5e7eb'
+                }}
+                title={section.title}
+              >
+                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                  {section.title}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Slide Progress Indicator */}
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Slide:</span>
+              {currentSectionData.slides.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setCurrentSlide(idx)}
+                  className={`h-2 rounded-full transition-all ${
+                    idx === currentSlide ? 'w-8' : 'w-2'
+                  }`}
+                  style={{
+                    backgroundColor: idx === currentSlide ? currentSectionData.color :
+                                    idx < currentSlide ? (isDarkMode ? '#4b5563' : '#d1d5db') : (isDarkMode ? '#374151' : '#e5e7eb')
+                  }}
+                  title={`Slide ${idx + 1}`}
+                />
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+              Slide {currentSlide + 1} of {currentSectionData.slides.length}
             </div>
           </div>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="bg-white border-b border-gray-200 shadow-sm sticky top-20 z-40">
+      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky z-40" style={{ top: '140px' }}>
         <div className="max-w-7xl mx-auto px-8">
           <div className="flex space-x-2 overflow-x-auto">
             {sections.map((section, idx) => {
@@ -848,15 +950,15 @@ const SECAccountPlanning = () => {
                 <button
                   key={idx}
                   onClick={() => goToSection(idx)}
-                  className={`flex items-center space-x-2 px-6 py-4 transition-all whitespace-nowrap border-b-4 ${
+                  className={`flex items-center space-x-2 px-6 py-3 transition-all whitespace-nowrap border-b-4 ${
                     currentSection === idx
-                      ? 'border-purple-700 text-purple-700 font-semibold bg-purple-50'
-                      : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      ? 'border-purple-700 text-purple-700 dark:text-purple-400 font-semibold bg-purple-50 dark:bg-purple-900/20'
+                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                   style={currentSection === idx ? { borderBottomColor: section.color } : {}}
                 >
-                  <Icon size={20} />
-                  <span>{section.title}</span>
+                  <Icon size={18} />
+                  <span className="text-sm font-medium">{section.title}</span>
                 </button>
               );
             })}
@@ -866,20 +968,20 @@ const SECAccountPlanning = () => {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-8 py-12">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-colors">
           <div className="p-12">
             {/* Slide Header */}
-            <div className="mb-10 pb-8 border-b-2 border-gray-200">
+            <div className="mb-10 pb-8 border-b-2 border-gray-200 dark:border-gray-700">
               <div className="flex items-center space-x-4 mb-4">
                 {React.createElement(currentSectionData.icon, {
                   size: 40,
-                  className: "text-purple-700",
+                  className: "text-purple-700 dark:text-purple-400",
                   style: { color: currentSectionData.color }
                 })}
-                <h1 className="text-4xl font-bold text-gray-900">{currentSlideData.title}</h1>
+                <h1 className="text-4xl font-bold text-gray-900 dark:text-white">{currentSlideData.title}</h1>
               </div>
               {currentSlideData.subtitle && (
-                <p className="text-xl text-gray-600 ml-14">{currentSlideData.subtitle}</p>
+                <p className="text-xl text-gray-600 dark:text-gray-300 ml-14">{currentSlideData.subtitle}</p>
               )}
             </div>
 
@@ -889,11 +991,11 @@ const SECAccountPlanning = () => {
             </div>
 
             {/* Slide Navigation */}
-            <div className="flex items-center justify-between mt-12 pt-8 border-t-2 border-gray-200">
+            <div className="flex items-center justify-between mt-12 pt-8 border-t-2 border-gray-200 dark:border-gray-700">
               <button
                 onClick={prevSlide}
                 disabled={currentSection === 0 && currentSlide === 0}
-                className="flex items-center space-x-2 px-6 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+                className="flex items-center space-x-2 px-6 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-all font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100 dark:disabled:hover:bg-gray-700"
               >
                 <ChevronLeft size={20} />
                 <span>Previous</span>
@@ -905,7 +1007,7 @@ const SECAccountPlanning = () => {
                     key={idx}
                     onClick={() => setCurrentSlide(idx)}
                     className={`h-2.5 rounded-full transition-all ${
-                      currentSlide === idx ? 'w-10 bg-purple-700' : 'w-2.5 bg-gray-300 hover:bg-gray-400'
+                      currentSlide === idx ? 'w-10 bg-purple-700' : 'w-2.5 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500'
                     }`}
                     style={currentSlide === idx ? { backgroundColor: currentSectionData.color } : {}}
                   />
@@ -928,7 +1030,7 @@ const SECAccountPlanning = () => {
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto px-8 pb-10">
-        <div className="text-center text-gray-500 text-sm">
+        <div className="text-center text-gray-500 dark:text-gray-400 text-sm">
           <p className="font-medium">© 2024 IFS - Confidential &amp; Proprietary</p>
           <p className="mt-2">Saudi Electricity Company Strategic Account Plan</p>
         </div>
