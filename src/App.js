@@ -572,7 +572,7 @@ const SECAccountPlanning = () => {
                       <td className="p-2 font-semibold text-gray-900 dark:text-white">Asset failures exceed target (88% vs 95%)</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">SAR 2.1B annual losses</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Predictive Maintenance with AI/ML</td>
-                      <td className="p-2 text-purple-700 dark:text-purple-400 font-mono">IC12922</td>
+                      <td className="p-2 text-purple-700 dark:text-purple-400 font-mono">IC19000</td>
                       <td className="p-2"><span className="px-2 py-1 bg-red-500 text-white rounded text-xs font-bold">P0</span></td>
                     </tr>
                     <tr className="border-b border-gray-300 dark:border-gray-700">
@@ -600,7 +600,7 @@ const SECAccountPlanning = () => {
                       <td className="p-2 font-semibold text-gray-900 dark:text-white">Disconnected asset data (15+ databases)</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Decision delays, errors</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Asset O&M Core Platform</td>
-                      <td className="p-2 text-purple-700 dark:text-purple-400 font-mono">IC12920</td>
+                      <td className="p-2 text-purple-700 dark:text-purple-400 font-mono">IC12408</td>
                       <td className="p-2"><span className="px-2 py-1 bg-red-500 text-white rounded text-xs font-bold">P0</span></td>
                     </tr>
                   </tbody>
@@ -688,7 +688,7 @@ const SECAccountPlanning = () => {
                   <tbody className="bg-white dark:bg-gray-800">
                     <tr className="border-b border-gray-300">
                       <td className="p-2 font-semibold text-gray-900 dark:text-white">Asset O&M Core</td>
-                      <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC12920</td>
+                      <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC12408</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Named User</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">200 users</td>
                       <td className="p-2 text-gray-600 dark:text-gray-400">None</td>
@@ -700,7 +700,7 @@ const SECAccountPlanning = () => {
                       <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC12406</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Named User</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">150 users</td>
-                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12920</td>
+                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12408</td>
                       <td className="p-2 font-semibold">Y1</td>
                       <td className="p-2 text-right font-semibold text-gray-900 dark:text-white">1,200,000</td>
                     </tr>
@@ -709,16 +709,16 @@ const SECAccountPlanning = () => {
                       <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC11200</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Fixed Instance</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">1 instance</td>
-                      <td className="p-2 text-gray-600 dark:text-gray-400">SCH6000</td>
+                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12917</td>
                       <td className="p-2 font-semibold">Y2</td>
                       <td className="p-2 text-right font-semibold text-gray-900 dark:text-white">1,800,000</td>
                     </tr>
                     <tr className="border-b border-gray-300">
                       <td className="p-2 font-semibold text-gray-900 dark:text-white">Predictive Maintenance</td>
-                      <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC12922</td>
+                      <td className="p-2 font-mono text-purple-700 dark:text-purple-400">IC19000</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Asset-based</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">5,000 assets</td>
-                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12920</td>
+                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12408</td>
                       <td className="p-2 font-semibold">Y2</td>
                       <td className="p-2 text-right font-semibold text-gray-900 dark:text-white">3,600,000</td>
                     </tr>
@@ -727,7 +727,7 @@ const SECAccountPlanning = () => {
                       <td className="p-2 font-mono text-purple-700 dark:text-purple-400">COPPERLEAF</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Enterprise</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">1 enterprise</td>
-                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12920</td>
+                      <td className="p-2 text-gray-600 dark:text-gray-400">IC12408</td>
                       <td className="p-2 font-semibold">Y3</td>
                       <td className="p-2 text-right font-semibold text-gray-900 dark:text-white">2,200,000</td>
                     </tr>
