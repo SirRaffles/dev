@@ -19,3 +19,12 @@ body {
 html {
   background-color: #ffffff;
 }
+
+/* Dark mode base styles */
+html.dark {
+  background-color: #111827;
+}
+
+html.dark body {
+  background-color: #111827;
+}

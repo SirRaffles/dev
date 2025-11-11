@@ -25,6 +25,7 @@ const SECAccountPlanning = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [expandedSections, setExpandedSections] = useState([0]); // Start with first section expanded
+  const [secLogoError, setSecLogoError] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Initialize from localStorage or system preference
     const saved = localStorage.getItem('theme');
@@ -67,23 +68,22 @@ const SECAccountPlanning = () => {
         <circle cx="24" cy="24" r="22" fill="#6f2c91"/>
         <path d="M16 14 L24 24 L16 34 M24 14 L32 24 L24 34" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
-      <span className="text-2xl font-bold text-gray-900">IFS</span>
+      <span className="text-2xl font-bold text-gray-900 dark:text-white">IFS</span>
     </div>
   );
 
   const SECLogo = () => (
     <div className="flex items-center space-x-3">
-      <img
-        src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Logo_Saudi_Electric_Company.svg/320px-Logo_Saudi_Electric_Company.svg.png"
-        alt="Saudi Electricity Company"
-        className="h-12 w-auto object-contain"
-        onError={(e) => {
-          // Fallback to text if image fails to load
-          e.target.style.display = 'none';
-          e.target.nextSibling.style.display = 'block';
-        }}
-      />
-      <span className="text-xl font-bold text-gray-900 hidden">SEC</span>
+      {!secLogoError ? (
+        <img
+          src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Logo_Saudi_Electric_Company.svg/320px-Logo_Saudi_Electric_Company.svg.png"
+          alt="Saudi Electricity Company"
+          className="h-12 w-auto object-contain"
+          onError={() => setSecLogoError(true)}
+        />
+      ) : (
+        <span className="text-xl font-bold text-gray-900 dark:text-white">SEC</span>
+      )}
     </div>
   );
 
@@ -880,6 +880,15 @@ const SECAccountPlanning = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors flex">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 md:hidden z-40"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar Navigation */}
       <div className={`fixed left-0 top-0 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-lg transition-all duration-300 z-50 overflow-y-auto ${
         isSidebarOpen ? 'w-80' : 'w-0'
@@ -977,12 +986,12 @@ const SECAccountPlanning = () => {
       </div>
 
       {/* Main Content Area */}
-      <div className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-80' : 'ml-0'}`}>
+      <div className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-80' : 'ml-0'}`}>
         {/* Header */}
         <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm sticky top-0 z-40">
           <div className="max-w-7xl mx-auto px-8 py-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-6">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+              <div className="flex items-center space-x-3 md:space-x-6 flex-wrap">
                 {/* Sidebar Toggle */}
                 {!isSidebarOpen && (
                   <button
@@ -994,16 +1003,16 @@ const SECAccountPlanning = () => {
                   </button>
                 )}
                 <IFSLogo />
-                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
+                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600 hidden sm:block"></div>
                 <SECLogo />
-                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600"></div>
-                <div>
+                <div className="h-10 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
+                <div className="hidden md:block">
                   <div className="text-lg font-bold text-gray-900 dark:text-white">Strategic Account Plan</div>
                   <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-0.5">Saudi Electricity Company</div>
                 </div>
               </div>
-              <div className="flex items-center space-x-6">
-                <div className="text-right">
+              <div className="flex items-center space-x-3 md:space-x-6">
+                <div className="text-right hidden sm:block">
                   <div className="text-sm font-semibold text-purple-700 dark:text-purple-400">
                     Section {currentSection + 1} of {sections.length}
                   </div>
@@ -1035,7 +1044,7 @@ const SECAccountPlanning = () => {
                 className="flex-1 h-2 rounded-full transition-all relative group"
                 style={{
                   backgroundColor: idx === currentSection ? section.color :
-                                  idx < currentSection ? '#d1d5db' : '#e5e7eb'
+                                  idx < currentSection ? (isDarkMode ? '#4b5563' : '#d1d5db') : (isDarkMode ? '#374151' : '#e5e7eb')
                 }}
                 title={section.title}
               >

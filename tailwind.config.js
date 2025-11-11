@@ -4,7 +4,15 @@ module.exports = {
   ],
   darkMode: 'class',
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        'ifs': {
+          purple: '#6f2c91',
+          'purple-light': '#8a3db8',
+          'purple-dark': '#5a2375',
+        },
+      },
+    },
   },
   plugins: [],
 }
