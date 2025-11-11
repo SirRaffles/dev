@@ -472,31 +472,45 @@ const SECAccountPlanning = () => {
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800">
                     <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <td className="p-3 font-semibold text-gray-900 dark:text-white">CEO Khaled Al-Gnoon</td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Final Approver</td>
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Eng. Khalid AlGhamdi</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">CEO (New Oct 2025)</td>
                       <td className="p-3"><span className="px-2 py-1 bg-gray-200 dark:bg-gray-700 rounded text-xs">Cold</span></td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Via Board contacts</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Via Board / EVP Ops</td>
                       <td className="p-3"><span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-xs font-bold">P0</span></td>
                     </tr>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <td className="p-3 font-semibold text-gray-900 dark:text-white">EVP Operations</td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Business Champion</td>
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Manish Manchandya</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">EVP Strategy & CIO</td>
                       <td className="p-3"><span className="px-2 py-1 bg-yellow-200 dark:bg-yellow-900/30 rounded text-xs">Warm</span></td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Direct via ABM</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Direct via AIP initiative</td>
                       <td className="p-3"><span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-xs font-bold">P0</span></td>
                     </tr>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <td className="p-3 font-semibold text-gray-900 dark:text-white">CIO</td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Tech Champion</td>
-                      <td className="p-3"><span className="px-2 py-1 bg-green-200 dark:bg-green-900/30 rounded text-xs">Good</span></td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Direct relationship</td>
-                      <td className="p-3"><span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-xs font-bold">P0</span></td>
-                    </tr>
-                    <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <td className="p-3 font-semibold text-gray-900 dark:text-white">CFO</td>
-                      <td className="p-3 text-gray-700 dark:text-gray-300">Financial Approver</td>
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Abdulaziz AlMuhaiza</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">EVP Finance & CFO</td>
                       <td className="p-3"><span className="px-2 py-1 bg-gray-200 dark:bg-gray-700 rounded text-xs">Cold</span></td>
                       <td className="p-3 text-gray-700 dark:text-gray-300">Via ROI workshop</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-xs font-bold">P0</span></td>
+                    </tr>
+                    <tr className="border-b border-gray-200 dark:border-gray-700">
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Ibrahim AlKhenizan</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">EVP Distribution & Customer</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-yellow-200 dark:bg-yellow-900/30 rounded text-xs">Warm</span></td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Direct via FSM initiative</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 rounded text-xs font-bold">P1</span></td>
+                    </tr>
+                    <tr className="border-b border-gray-200 dark:border-gray-700">
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Abdulrahman AlGhayhab</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Exec Dir Asset Management</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-green-200 dark:bg-green-900/30 rounded text-xs">Good</span></td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Direct - EAM champion</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-xs font-bold">P0</span></td>
+                    </tr>
+                    <tr className="border-b border-gray-200 dark:border-gray-700">
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white">Ahmed Alzahrani</td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">VP Operations & Control</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-yellow-200 dark:bg-yellow-900/30 rounded text-xs">Warm</span></td>
+                      <td className="p-3 text-gray-700 dark:text-gray-300">Via operations use cases</td>
                       <td className="p-3"><span className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300 rounded text-xs font-bold">P1</span></td>
                     </tr>
                   </tbody>
@@ -1049,35 +1063,51 @@ const SECAccountPlanning = () => {
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800">
                     <tr className="border-b">
-                      <td className="p-2 font-semibold text-gray-900 dark:text-white">CEO Khaled Al-Gnoon</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Final Approver</td>
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Eng. Khalid AlGhamdi</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">CEO - Final Approver</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Via Board member intro</td>
                       <td className="p-2 text-purple-700 dark:text-purple-400">Vision 2030 strategic briefing</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">RVP MEA</td>
                       <td className="p-2 font-semibold">Q1 2026</td>
                     </tr>
                     <tr className="border-b">
-                      <td className="p-2 font-semibold text-gray-900 dark:text-white">EVP Operations</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Business Champion</td>
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Ahmed Alzahrani</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">VP Ops - Business Champion</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Direct via ABM campaign</td>
                       <td className="p-2 text-purple-700 dark:text-purple-400">ROI workshop invitation</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Account Exec</td>
                       <td className="p-2 font-semibold">Q4 2025</td>
                     </tr>
                     <tr className="border-b">
-                      <td className="p-2 font-semibold text-gray-900 dark:text-white">CIO</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Technical Champion</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Direct relationship</td>
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Manish Manchandya</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">EVP Strategy & CIO</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">Direct via AIP initiative</td>
                       <td className="p-2 text-purple-700 dark:text-purple-400">Architecture validation session</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Solutions Architect</td>
                       <td className="p-2 font-semibold">Ongoing</td>
                     </tr>
                     <tr className="border-b">
-                      <td className="p-2 font-semibold text-gray-900 dark:text-white">CFO</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Financial Approver</td>
-                      <td className="p-2 text-gray-700 dark:text-gray-300">Via EVP Operations</td>
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Abdulaziz AlMuhaiza</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">EVP Finance & CFO</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">Via Ahmed Alzahrani</td>
                       <td className="p-2 text-purple-700 dark:text-purple-400">Business case presentation</td>
                       <td className="p-2 text-gray-700 dark:text-gray-300">Account Exec</td>
+                      <td className="p-2 font-semibold">Q1 2026</td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Abdulrahman AlGhayhab</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">Exec Dir Asset Mgmt</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">Direct - EAM champion</td>
+                      <td className="p-2 text-purple-700 dark:text-purple-400">Asset optimization workshop</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">EAM Specialist</td>
+                      <td className="p-2 font-semibold">Q4 2025</td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2 font-semibold text-gray-900 dark:text-white">Ibrahim AlKhenizan</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">EVP Distribution - FSM</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">Direct via FSM initiative</td>
+                      <td className="p-2 text-purple-700 dark:text-purple-400">Field service demo</td>
+                      <td className="p-2 text-gray-700 dark:text-gray-300">FSM Specialist</td>
                       <td className="p-2 font-semibold">Q1 2026</td>
                     </tr>
                   </tbody>
@@ -1122,7 +1152,7 @@ const SECAccountPlanning = () => {
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-bold mb-4 text-purple-800 dark:text-purple-300">CEO Engagement</h3>
+                  <h3 className="text-lg font-bold mb-4 text-purple-800 dark:text-purple-300">CEO Engagement (Khalid AlGhamdi)</h3>
                   <div className="space-y-3 text-sm">
                     <div className="pb-2 border-b border-gray-200 dark:border-gray-700">
                       <div className="font-semibold text-gray-900 dark:text-white">Frequency:</div>
@@ -1144,7 +1174,7 @@ const SECAccountPlanning = () => {
                 </div>
 
                 <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-bold mb-4 text-green-800 dark:text-green-300">EVP Operations Engagement</h3>
+                  <h3 className="text-lg font-bold mb-4 text-green-800 dark:text-green-300">VP Operations (Ahmed Alzahrani)</h3>
                   <div className="space-y-3 text-sm">
                     <div className="pb-2 border-b border-gray-200 dark:border-gray-700">
                       <div className="font-semibold text-gray-900 dark:text-white">Frequency:</div>
@@ -1166,7 +1196,7 @@ const SECAccountPlanning = () => {
                 </div>
 
                 <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
-                  <h3 className="text-lg font-bold mb-4 text-blue-800 dark:text-blue-300">CIO Engagement</h3>
+                  <h3 className="text-lg font-bold mb-4 text-blue-800 dark:text-blue-300">EVP Strategy & CIO (Manish Manchandya)</h3>
                   <div className="space-y-3 text-sm">
                     <div className="pb-2 border-b border-gray-200 dark:border-gray-700">
                       <div className="font-semibold text-gray-900 dark:text-white">Frequency:</div>
@@ -1196,7 +1226,7 @@ const SECAccountPlanning = () => {
                     </div>
                     <div className="pb-2 border-b border-gray-200 dark:border-gray-700">
                       <div className="font-semibold text-gray-900 dark:text-white">SEC Sponsor:</div>
-                      <div className="text-gray-700 dark:text-gray-300">EVP Operations (target)</div>
+                      <div className="text-gray-700 dark:text-gray-300">Ahmed Alzahrani (target)</div>
                     </div>
                     <div>
                       <div className="font-semibold text-gray-900 dark:text-white">Cadence:</div>
