@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Check, Download, X, Users, Languages, FileText, FileType } from 'lucide-react';
+import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Check, Download, X, Users, Languages, FileText, FileType, Play, Pause, SkipBack, SkipForward, Edit2, Save, Search, Replace, Volume2, VolumeX, Files, Edit3 } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -57,10 +57,39 @@ function App() {
   // Settings
   const [language, setLanguage] = useState('auto');
   const [enableDiarization, setEnableDiarization] = useState(true);
+  const [enableNoiseReduction, setEnableNoiseReduction] = useState(false);
+
+  // Batch upload
+  const [files, setFiles] = useState([]);
+  const [batchJobIds, setBatchJobIds] = useState([]);
+  const [batchProgress, setBatchProgress] = useState([]);
+
+  // Speaker renaming
+  const [speakerNames, setSpeakerNames] = useState({});
+  const [editingSpeaker, setEditingSpeaker] = useState(null);
+  const [tempSpeakerName, setTempSpeakerName] = useState('');
+
+  // Search & replace
+  const [showSearchPanel, setShowSearchPanel] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+
+  // Audio player state
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  // Editing state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedSegments, setEditedSegments] = useState({});
 
   const fileInputRef = useRef(null);
   const pollIntervalRef = useRef(null);
   const exportMenuRef = useRef(null);
+  const audioRef = useRef(null);
+  const segmentRefs = useRef({});
 
   // Close export menu when clicking outside
   useEffect(() => {
@@ -73,14 +102,61 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Cleanup polling on unmount
+  // Cleanup polling and audio URL on unmount
   useEffect(() => {
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
+      }
     };
-  }, []);
+  }, [audioUrl]);
+
+  // Audio time update handler
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+    };
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [audioRef.current]);
+
+  // Auto-scroll to current segment
+  useEffect(() => {
+    if (!result?.segments || !currentTime) return;
+
+    const currentSegment = result.segments.findIndex(
+      segment => currentTime >= segment.start && currentTime <= segment.end
+    );
+
+    if (currentSegment >= 0 && segmentRefs.current[currentSegment]) {
+      segmentRefs.current[currentSegment].scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }
+  }, [currentTime, result]);
 
   // Poll for job status
   const pollJobStatus = useCallback(async (id) => {
@@ -138,6 +214,9 @@ function App() {
     const droppedFile = e.dataTransfer.files[0];
     if (droppedFile) {
       setFile(droppedFile);
+      // Create audio URL for playback
+      const url = URL.createObjectURL(droppedFile);
+      setAudioUrl(url);
       setError(null);
       setResult(null);
     }
@@ -158,10 +237,56 @@ function App() {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       setFile(selectedFile);
+      // Create audio URL for playback
+      const url = URL.createObjectURL(selectedFile);
+      setAudioUrl(url);
       setError(null);
       setResult(null);
     }
   }, []);
+
+  // Audio player controls
+  const togglePlayPause = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const skipBackward = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  };
+
+  const skipForward = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.min(duration, audio.currentTime + 5);
+  };
+
+  const seekToTime = (time) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    if (!isPlaying) {
+      audio.play();
+      setIsPlaying(true);
+    }
+  };
+
+  // Get current playing segment
+  const getCurrentSegmentIndex = () => {
+    if (!result?.segments) return -1;
+    return result.segments.findIndex(
+      segment => currentTime >= segment.start && currentTime <= segment.end
+    );
+  };
 
   // Start transcription
   const startTranscription = async () => {
@@ -176,6 +301,7 @@ function App() {
       const params = new URLSearchParams({
         language,
         enable_diarization: enableDiarization,
+        enable_noise_reduction: enableNoiseReduction,
       });
 
       if (inputMode === InputMode.FILE && file) {
@@ -196,6 +322,7 @@ function App() {
             url: youtubeUrl,
             language,
             enable_diarization: enableDiarization,
+            enable_noise_reduction: enableNoiseReduction,
           }),
         });
       } else {
@@ -214,6 +341,173 @@ function App() {
       setError(err.message || 'Failed to start transcription');
       setIsTranscribing(false);
     }
+  };
+
+  // Handle editing
+  const handleEditSegment = (index, newText) => {
+    setEditedSegments(prev => ({
+      ...prev,
+      [index]: newText
+    }));
+  };
+
+  const saveEdits = async () => {
+    if (!jobId || Object.keys(editedSegments).length === 0) {
+      setIsEditing(false);
+      return;
+    }
+
+    try {
+      // Prepare segments with edits
+      const updatedSegments = result.segments.map((segment, index) => ({
+        ...segment,
+        text: editedSegments[index] !== undefined ? editedSegments[index] : segment.text
+      }));
+
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save edits');
+      }
+
+      // Update result with edited segments
+      setResult(prev => ({
+        ...prev,
+        segments: updatedSegments
+      }));
+
+      setIsEditing(false);
+      setEditedSegments({});
+    } catch (err) {
+      console.error('Save error:', err);
+      setError('Failed to save edits');
+    }
+  };
+
+  // Speaker renaming functions
+  const startEditingSpeaker = (speaker) => {
+    setEditingSpeaker(speaker);
+    setTempSpeakerName(speakerNames[speaker] || speaker);
+  };
+
+  const cancelEditingSpeaker = () => {
+    setEditingSpeaker(null);
+    setTempSpeakerName('');
+  };
+
+  const saveSpeakerName = async () => {
+    if (!editingSpeaker || !tempSpeakerName.trim() || !jobId) return;
+
+    try {
+      const mapping = { [editingSpeaker]: tempSpeakerName.trim() };
+      const response = await fetch(`${API_URL}/job/${jobId}/speakers`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speaker_mapping: mapping }),
+      });
+
+      if (!response.ok) throw new Error('Failed to rename speaker');
+
+      const data = await response.json();
+      setSpeakerNames(prev => ({ ...prev, [editingSpeaker]: tempSpeakerName.trim() }));
+      setResult(prev => ({ ...prev, segments: data.segments, speakers: data.speakers }));
+      cancelEditingSpeaker();
+    } catch (err) {
+      console.error('Rename error:', err);
+      setError('Failed to rename speaker');
+    }
+  };
+
+  // Search functions
+  const performSearch = () => {
+    if (!result?.segments || !searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const matches = [];
+    const query = searchQuery.toLowerCase();
+    result.segments.forEach((segment, index) => {
+      if (segment.text.toLowerCase().includes(query)) {
+        matches.push(index);
+      }
+    });
+    setSearchResults(matches);
+  };
+
+  const replaceInSegment = async (index) => {
+    if (!searchQuery || !result?.segments) return;
+
+    const segment = result.segments[index];
+    const newText = segment.text.replace(new RegExp(searchQuery, 'gi'), replaceText);
+
+    setEditedSegments(prev => ({ ...prev, [index]: newText }));
+
+    // Save immediately
+    const updatedSegments = result.segments.map((seg, i) => ({
+      ...seg,
+      text: i === index ? newText : (editedSegments[i] !== undefined ? editedSegments[i] : seg.text)
+    }));
+
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) throw new Error('Failed to save');
+
+      setResult(prev => ({ ...prev, segments: updatedSegments }));
+      performSearch(); // Refresh search results
+    } catch (err) {
+      console.error('Replace error:', err);
+    }
+  };
+
+  const replaceAll = async () => {
+    if (!searchQuery || !result?.segments) return;
+
+    const updatedSegments = result.segments.map((segment, index) => ({
+      ...segment,
+      text: segment.text.replace(new RegExp(searchQuery, 'gi'), replaceText)
+    }));
+
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) throw new Error('Failed to save');
+
+      setResult(prev => ({ ...prev, segments: updatedSegments }));
+      setSearchResults([]);
+      setSearchQuery('');
+      setReplaceText('');
+    } catch (err) {
+      console.error('Replace all error:', err);
+      setError('Failed to replace text');
+    }
+  };
+
+  // Highlight matching text
+  const highlightText = (text, index) => {
+    if (!searchQuery || !searchResults.includes(index)) return text;
+
+    const regex = new RegExp(`(${searchQuery})`, 'gi');
+    const parts = text.split(regex);
+
+    return parts.map((part, i) =>
+      regex.test(part) ? <mark key={i} className="bg-yellow-400 text-black px-0.5 rounded">{part}</mark> : part
+    );
   };
 
   // Copy result to clipboard
@@ -259,6 +553,7 @@ function App() {
   // Clear current selection and start fresh
   const clearSelection = () => {
     setFile(null);
+    setFiles([]);
     setYoutubeUrl('');
     setResult(null);
     setError(null);
@@ -266,6 +561,23 @@ function App() {
     setCopied(false);
     setProgress(0);
     setProgressMessage('');
+    setIsEditing(false);
+    setEditedSegments({});
+    setBatchJobIds([]);
+    setBatchProgress([]);
+    setSpeakerNames({});
+    setEditingSpeaker(null);
+    setTempSpeakerName('');
+    setShowSearchPanel(false);
+    setSearchQuery('');
+    setReplaceText('');
+    setSearchResults([]);
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    setIsPlaying(false);
+    setCurrentTime(0);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -276,6 +588,7 @@ function App() {
 
   // Get unique speakers from result
   const speakers = result?.speakers || [];
+  const currentSegmentIndex = getCurrentSegmentIndex();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
@@ -398,7 +711,7 @@ function App() {
           )}
 
           {/* Settings */}
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Language Selection */}
             <div>
               <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
@@ -434,6 +747,25 @@ function App() {
               >
                 <Users className="w-4 h-4" />
                 {enableDiarization ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+
+            {/* Noise Reduction Toggle */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                Noise Reduction
+              </label>
+              <button
+                onClick={() => setEnableNoiseReduction(!enableNoiseReduction)}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  enableNoiseReduction
+                    ? 'bg-green-500 text-white'
+                    : 'bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                {enableNoiseReduction ? 'Enabled' : 'Disabled'}
               </button>
             </div>
           </div>
@@ -492,6 +824,11 @@ function App() {
         {/* Results */}
         {result && (
           <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            {/* Hidden audio element */}
+            {audioUrl && (
+              <audio ref={audioRef} src={audioUrl} preload="metadata" />
+            )}
+
             {/* Results Header */}
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div className="flex items-center gap-3">
@@ -499,6 +836,23 @@ function App() {
                 <h2 className="text-xl font-semibold">Transcription Complete</h2>
               </div>
               <div className="flex items-center gap-2">
+                {isEditing ? (
+                  <button
+                    onClick={saveEdits}
+                    className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Edit
+                  </button>
+                )}
                 <button
                   onClick={copyToClipboard}
                   className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
@@ -538,6 +892,49 @@ function App() {
               </div>
             </div>
 
+            {/* Audio Player */}
+            {audioUrl && (
+              <div className="mb-6 bg-slate-700/50 rounded-xl p-4">
+                <div className="flex items-center gap-4 mb-3">
+                  <button
+                    onClick={skipBackward}
+                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                  >
+                    <SkipBack className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={togglePlayPause}
+                    className="p-3 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                  >
+                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
+                  </button>
+                  <button
+                    onClick={skipForward}
+                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                  >
+                    <SkipForward className="w-5 h-5" />
+                  </button>
+                  <div className="flex items-center gap-3 text-sm font-mono">
+                    <span>{formatTime(currentTime)}</span>
+                    <span className="text-slate-400">/</span>
+                    <span className="text-slate-400">{formatTime(duration)}</span>
+                  </div>
+                </div>
+                <div className="relative h-2 bg-slate-600 rounded-full overflow-hidden cursor-pointer"
+                     onClick={(e) => {
+                       const rect = e.currentTarget.getBoundingClientRect();
+                       const x = e.clientX - rect.left;
+                       const percentage = x / rect.width;
+                       seekToTime(percentage * duration);
+                     }}>
+                  <div
+                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all"
+                    style={{ width: `${(currentTime / duration) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Language & Speakers Info */}
             <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg">
               {result.language && (
@@ -557,6 +954,129 @@ function App() {
                   <Users className="w-4 h-4 text-purple-400" />
                   <span className="text-slate-300">Speakers:</span>
                   <span className="font-medium">{speakers.length}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Speaker Renaming */}
+            {speakers.length > 0 && (
+              <div className="mb-6 p-4 bg-slate-700/30 rounded-xl">
+                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Edit3 className="w-4 h-4" />
+                  Rename Speakers
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {speakers.map((speaker) => (
+                    <div key={speaker} className="flex items-center gap-1">
+                      {editingSpeaker === speaker ? (
+                        <div className="flex items-center gap-1 bg-slate-600 rounded-lg px-2 py-1">
+                          <input
+                            type="text"
+                            value={tempSpeakerName}
+                            onChange={(e) => setTempSpeakerName(e.target.value)}
+                            className="w-24 bg-slate-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            autoFocus
+                            onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
+                          />
+                          <button
+                            onClick={saveSpeakerName}
+                            className="p-1 text-green-400 hover:text-green-300"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={cancelEditingSpeaker}
+                            className="p-1 text-red-400 hover:text-red-300"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 bg-purple-500/20 text-purple-300 rounded-lg px-3 py-1">
+                          <span className="text-sm">{speakerNames[speaker] || speaker}</span>
+                          <button
+                            onClick={() => startEditingSpeaker(speaker)}
+                            className="p-0.5 hover:text-purple-200 transition-colors"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Search & Replace Panel */}
+            <div className="mb-4">
+              <button
+                onClick={() => setShowSearchPanel(!showSearchPanel)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  showSearchPanel ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <Search className="w-4 h-4" />
+                Search & Replace
+              </button>
+
+              {showSearchPanel && (
+                <div className="mt-3 p-4 bg-slate-700/30 rounded-xl">
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <div className="flex-1 min-w-[200px]">
+                      <label className="text-xs text-slate-400 mb-1 block">Search</label>
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && performSearch()}
+                        placeholder="Search text..."
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-[200px]">
+                      <label className="text-xs text-slate-400 mb-1 block">Replace with</label>
+                      <input
+                        type="text"
+                        value={replaceText}
+                        onChange={(e) => setReplaceText(e.target.value)}
+                        placeholder="Replacement text..."
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={performSearch}
+                      className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg text-white transition-colors"
+                    >
+                      <Search className="w-4 h-4" />
+                      Find
+                    </button>
+                    {searchResults.length > 0 && (
+                      <>
+                        <span className="text-sm text-slate-400">
+                          {searchResults.length} match{searchResults.length !== 1 ? 'es' : ''} found
+                        </span>
+                        <button
+                          onClick={replaceAll}
+                          className="flex items-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 rounded-lg text-white transition-colors"
+                        >
+                          <Replace className="w-4 h-4" />
+                          Replace All
+                        </button>
+                      </>
+                    )}
+                    {searchQuery && (
+                      <button
+                        onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); }}
+                        className="flex items-center gap-1 px-2 py-2 text-slate-400 hover:text-slate-300 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -589,21 +1109,54 @@ function App() {
             <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
               {(showTimestamps || showSpeakers) && result.segments ? (
                 <div className="space-y-3">
-                  {result.segments.map((segment, index) => (
-                    <div key={index} className="flex gap-3">
-                      {showTimestamps && (
-                        <span className="text-blue-400 font-mono text-sm whitespace-nowrap pt-1">
-                          [{formatTime(segment.start)}]
-                        </span>
-                      )}
-                      {showSpeakers && segment.speaker && (
-                        <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
-                          {segment.speaker}:
-                        </span>
-                      )}
-                      <p className="text-slate-200 leading-relaxed">{segment.text}</p>
-                    </div>
-                  ))}
+                  {result.segments.map((segment, index) => {
+                    const isCurrentSegment = index === currentSegmentIndex;
+                    const isEdited = editedSegments[index] !== undefined;
+
+                    return (
+                      <div
+                        key={index}
+                        ref={el => segmentRefs.current[index] = el}
+                        className={`flex gap-3 p-2 rounded transition-all ${
+                          isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
+                        } ${isEdited ? 'bg-yellow-500/10' : ''}`}
+                      >
+                        {showTimestamps && (
+                          <button
+                            onClick={() => seekToTime(segment.start)}
+                            className="text-blue-400 hover:text-blue-300 font-mono text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors"
+                          >
+                            [{formatTime(segment.start)}]
+                          </button>
+                        )}
+                        {showSpeakers && segment.speaker && (
+                          <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
+                            {segment.speaker}:
+                          </span>
+                        )}
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editedSegments[index] !== undefined ? editedSegments[index] : segment.text}
+                            onChange={(e) => handleEditSegment(index, e.target.value)}
+                            className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400"
+                          />
+                        ) : (
+                          <p className={`text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
+                            {highlightText(editedSegments[index] !== undefined ? editedSegments[index] : segment.text, index)}
+                            {searchResults.includes(index) && replaceText && (
+                              <button
+                                onClick={() => replaceInSegment(index)}
+                                className="ml-2 text-xs px-2 py-0.5 bg-orange-500 hover:bg-orange-600 rounded text-white transition-colors"
+                              >
+                                Replace
+                              </button>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-slate-200 leading-relaxed whitespace-pre-wrap">

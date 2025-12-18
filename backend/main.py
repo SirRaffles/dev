@@ -21,12 +21,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
+# Audio restoration
+import numpy as np
+import noisereduce as nr
+from scipy.io import wavfile
+
 # Global model instances (loaded at startup)
 whisper_model = None
 diarization_pipeline = None
 
 # In-memory job storage (for production, use Redis or database)
 jobs = {}
+batch_jobs = {}  # Storage for batch jobs
 
 # Supported languages
 SUPPORTED_LANGUAGES = {
@@ -50,10 +56,19 @@ class TranscriptionJob:
         self.speakers = []  # Speaker diarization results
 
 
+class BatchJob:
+    def __init__(self, batch_id: str, job_ids: List[str]):
+        self.batch_id = batch_id
+        self.job_ids = job_ids
+        self.created_at = datetime.now()
+        self.total = len(job_ids)
+
+
 class YouTubeRequest(BaseModel):
     url: str
     language: str = "auto"
     enable_diarization: bool = True
+    enable_noise_reduction: bool = False
 
 
 class TranscriptionSettings(BaseModel):
@@ -64,6 +79,15 @@ class TranscriptionSettings(BaseModel):
     word_timestamps: bool = True
     language: str = "auto"  # en, fr, or auto
     enable_diarization: bool = True
+    enable_noise_reduction: bool = False  # Apply noise reduction before transcription
+
+
+class SpeakerRenameRequest(BaseModel):
+    speaker_mapping: dict  # {"old_name": "new_name"}
+
+
+class SegmentUpdate(BaseModel):
+    segments: List[dict]  # [{start, end, text, speaker}]
 
 
 def get_device_config():
@@ -219,6 +243,32 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
     raise RuntimeError("No audio file found after download")
 
 
+def apply_noise_reduction(audio_path: str, output_path: str) -> str:
+    """Apply noise reduction to audio file using noisereduce library."""
+    try:
+        # Load the audio file
+        sample_rate, audio_data = wavfile.read(audio_path)
+
+        # Convert to float32 for processing
+        if audio_data.dtype == np.int16:
+            audio_data = audio_data.astype(np.float32) / 32768.0
+        elif audio_data.dtype == np.int32:
+            audio_data = audio_data.astype(np.float32) / 2147483648.0
+
+        # Apply noise reduction with prop_decrease=0.8 for strong reduction
+        reduced_noise = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.8)
+
+        # Convert back to int16 for saving
+        reduced_noise_int16 = (reduced_noise * 32768.0).astype(np.int16)
+
+        # Save the cleaned audio
+        wavfile.write(output_path, sample_rate, reduced_noise_int16)
+
+        return output_path
+    except Exception as e:
+        raise RuntimeError(f"Noise reduction failed: {e}")
+
+
 def run_diarization(audio_path: str) -> List[dict]:
     """Run speaker diarization on audio file."""
     global diarization_pipeline
@@ -280,6 +330,13 @@ async def transcribe_audio(job_id: str, audio_path: str, settings: Transcription
         job.status = "processing"
         job.progress = 5
         job.progress_message = "Starting transcription..."
+
+        # Apply noise reduction (if enabled)
+        if settings.enable_noise_reduction:
+            job.progress = 8
+            job.progress_message = "Applying noise reduction..."
+            cleaned_audio_path = audio_path.replace(".wav", "_cleaned.wav")
+            audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
 
         # Run speaker diarization first (if enabled)
         speakers = []
@@ -570,6 +627,7 @@ async def transcribe_file(
     file: UploadFile = File(...),
     language: str = Query("auto", description="Language code: en, fr, or auto"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
+    enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
     beam_size: int = Query(10, description="Beam search size (higher = better quality)"),
     patience: float = Query(1.5, description="Beam search patience"),
     best_of: int = Query(10, description="Number of candidates to consider"),
@@ -613,6 +671,7 @@ async def transcribe_file(
             word_timestamps=True,
             language=language,
             enable_diarization=enable_diarization,
+            enable_noise_reduction=enable_noise_reduction,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -662,6 +721,7 @@ async def transcribe_youtube(
             word_timestamps=True,
             language=request.language,
             enable_diarization=request.enable_diarization,
+            enable_noise_reduction=request.enable_noise_reduction,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -773,6 +833,271 @@ async def delete_job(job_id: str):
 
     del jobs[job_id]
     return {"status": "deleted"}
+
+
+@app.post("/transcribe/batch")
+async def transcribe_batch(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    language: str = Query("auto", description="Language code: en, fr, or auto"),
+    enable_diarization: bool = Query(True, description="Enable speaker identification"),
+    beam_size: int = Query(10, description="Beam search size"),
+    patience: float = Query(1.5, description="Beam search patience"),
+    best_of: int = Query(10, description="Number of candidates"),
+):
+    """Upload and transcribe multiple audio/video files in batch."""
+    if whisper_model is None:
+        raise HTTPException(status_code=503, detail="Whisper model not loaded")
+
+    if language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    batch_id = str(uuid.uuid4())
+    job_ids = []
+
+    # Create individual jobs for each file
+    for file in files:
+        job_id = str(uuid.uuid4())
+        job = TranscriptionJob(job_id)
+        jobs[job_id] = job
+        job_ids.append(job_id)
+
+        temp_dir = tempfile.mkdtemp()
+        file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
+        input_path = os.path.join(temp_dir, f"input{file_ext}")
+
+        try:
+            contents = await file.read()
+            with open(input_path, "wb") as f:
+                f.write(contents)
+
+            audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
+
+            if file_ext in audio_extensions:
+                converted_path = os.path.join(temp_dir, "audio.wav")
+                extract_audio(input_path, converted_path)
+                audio_path = converted_path
+            else:
+                audio_path = os.path.join(temp_dir, "audio.wav")
+                extract_audio(input_path, audio_path)
+                os.remove(input_path)
+
+            settings = TranscriptionSettings(
+                beam_size=beam_size,
+                patience=patience,
+                best_of=best_of,
+                vad_filter=True,
+                word_timestamps=True,
+                language=language,
+                enable_diarization=enable_diarization,
+            )
+
+            background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
+
+        except Exception as e:
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            job.status = "failed"
+            job.error = str(e)
+
+    # Create batch job to track all individual jobs
+    batch = BatchJob(batch_id, job_ids)
+    batch_jobs[batch_id] = batch
+
+    return {
+        "batch_id": batch_id,
+        "job_ids": job_ids,
+        "total": len(job_ids)
+    }
+
+
+@app.get("/batch/{batch_id}")
+async def get_batch_status(batch_id: str):
+    """Get the status of a batch transcription job."""
+    batch = batch_jobs.get(batch_id)
+
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    # Gather status of all jobs in the batch
+    job_statuses = []
+    completed_count = 0
+    failed_count = 0
+    processing_count = 0
+    pending_count = 0
+
+    for job_id in batch.job_ids:
+        job = jobs.get(job_id)
+        if job:
+            job_status = {
+                "job_id": job.job_id,
+                "status": job.status,
+                "progress": job.progress,
+            }
+
+            if job.status == "completed":
+                completed_count += 1
+            elif job.status == "failed":
+                failed_count += 1
+                job_status["error"] = job.error
+            elif job.status == "processing":
+                processing_count += 1
+            else:
+                pending_count += 1
+
+            job_statuses.append(job_status)
+
+    # Calculate overall progress
+    total_progress = sum(jobs.get(jid).progress for jid in batch.job_ids if jobs.get(jid))
+    overall_progress = int(total_progress / batch.total) if batch.total > 0 else 0
+
+    # Determine overall status
+    if completed_count == batch.total:
+        overall_status = "completed"
+    elif failed_count == batch.total:
+        overall_status = "failed"
+    elif failed_count > 0 or processing_count > 0:
+        overall_status = "processing"
+    else:
+        overall_status = "pending"
+
+    return {
+        "batch_id": batch.batch_id,
+        "total": batch.total,
+        "overall_status": overall_status,
+        "overall_progress": overall_progress,
+        "completed": completed_count,
+        "failed": failed_count,
+        "processing": processing_count,
+        "pending": pending_count,
+        "jobs": job_statuses,
+    }
+
+
+@app.put("/job/{job_id}/speakers")
+async def rename_speakers(job_id: str, request: SpeakerRenameRequest):
+    """Update speaker names in a transcription job."""
+    job = jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed before renaming speakers")
+
+    if not request.speaker_mapping:
+        raise HTTPException(status_code=400, detail="Speaker mapping cannot be empty")
+
+    # Update speaker names in all segments
+    for segment in job.segments:
+        if segment.get("speaker") and segment["speaker"] in request.speaker_mapping:
+            segment["speaker"] = request.speaker_mapping[segment["speaker"]]
+
+    # Update speaker diarization results if available
+    for speaker_turn in job.speakers:
+        if speaker_turn.get("speaker") and speaker_turn["speaker"] in request.speaker_mapping:
+            speaker_turn["speaker"] = request.speaker_mapping[speaker_turn["speaker"]]
+
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "result": job.result,
+        "segments": job.segments,
+        "speakers": list(set(s.get("speaker") for s in job.segments if s.get("speaker"))),
+        "language": job.language,
+        "language_probability": job.language_probability,
+    }
+
+
+@app.put("/job/{job_id}/segments")
+async def update_segments(job_id: str, request: SegmentUpdate):
+    """Update transcript segments with inline edits."""
+    job = jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed before updating segments")
+
+    if not request.segments:
+        raise HTTPException(status_code=400, detail="Segments cannot be empty")
+
+    # Validate segment structure
+    required_fields = {"start", "end", "text"}
+    for i, segment in enumerate(request.segments):
+        if not all(field in segment for field in required_fields):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Segment {i} missing required fields. Required: {required_fields}"
+            )
+
+    # Update job segments
+    job.segments = request.segments
+
+    # Rebuild full transcript text from updated segments
+    full_text_parts = [seg["text"].strip() for seg in job.segments if seg.get("text")]
+    job.result = " ".join(full_text_parts)
+
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "result": job.result,
+        "segments": job.segments,
+        "speakers": list(set(s.get("speaker") for s in job.segments if s.get("speaker"))),
+        "language": job.language,
+        "language_probability": job.language_probability,
+    }
+
+
+@app.get("/job/{job_id}/search")
+async def search_transcript(
+    job_id: str,
+    q: str = Query(..., description="Search query"),
+    case_sensitive: bool = Query(False, description="Case sensitive search"),
+):
+    """Search for text within a transcript."""
+    job = jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed before searching")
+
+    if not q:
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+    # Search through segments
+    matches = []
+    search_query = q if case_sensitive else q.lower()
+
+    for index, segment in enumerate(job.segments):
+        segment_text = segment.get("text", "")
+        search_text = segment_text if case_sensitive else segment_text.lower()
+
+        if search_query in search_text:
+            matches.append({
+                "index": index,
+                "start": segment.get("start"),
+                "end": segment.get("end"),
+                "text": segment_text,
+                "speaker": segment.get("speaker"),
+            })
+
+    return {
+        "job_id": job_id,
+        "query": q,
+        "case_sensitive": case_sensitive,
+        "total_matches": len(matches),
+        "matches": matches,
+    }
 
 
 if __name__ == "__main__":
