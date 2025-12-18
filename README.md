@@ -1,36 +1,40 @@
 # Whisper Transcription App
 
-High-quality audio and video transcription powered by OpenAI Whisper Large-V3 via faster-whisper.
+High-quality audio and video transcription powered by OpenAI Whisper Large-V3 via faster-whisper, with speaker diarization and multiple export formats.
 
 ## Features
 
 - **File Upload**: Drag & drop or browse to upload audio/video files
 - **YouTube Support**: Paste a YouTube URL to transcribe video content
-- **High Accuracy**: Uses Whisper Large-V3 model for state-of-the-art transcription
+- **High Accuracy**: Uses Whisper Large-V3 model with quality-focused settings
+- **Speaker Recognition**: Automatic speaker diarization using pyannote-audio
+- **Language Support**: English, French, or auto-detection
+- **Multiple Export Formats**: TXT, Markdown, SRT, PDF, DOCX
 - **Timestamps**: View transcription with precise timestamps
-- **Export**: Copy to clipboard or download as SRT subtitle file
-- **Language Detection**: Automatic language detection with confidence score
-- **Multiple Formats**: Supports MP3, WAV, MP4, MKV, AVI, WebM, M4A, FLAC, OGG, and more
+- **Apple Silicon Optimized**: Configured for best performance on M1/M2/M3 Macs
 
 ## Architecture
 
 - **Frontend**: React 18 with Tailwind CSS
 - **Backend**: FastAPI (Python) with faster-whisper
-- **Transcription Engine**: OpenAI Whisper Large-V3 via CTranslate2
+- **Transcription**: OpenAI Whisper Large-V3 via CTranslate2
+- **Speaker Diarization**: pyannote-audio 3.1
 
 ## Quick Start
 
-### Using Docker Compose (Recommended)
+### Prerequisites
 
-```bash
-docker-compose up --build
-```
+1. **ffmpeg** (required for audio extraction)
+   ```bash
+   # macOS
+   brew install ffmpeg
+   ```
 
-This will start:
-- Backend API at http://localhost:8000
-- Frontend at http://localhost:3000
+2. **HuggingFace Token** (required for speaker diarization)
+   - Get your token at: https://huggingface.co/settings/tokens
+   - Accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
 
-### Manual Setup
+### Setup
 
 #### Backend
 
@@ -39,15 +43,13 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install ffmpeg (required for audio extraction)
-# macOS: brew install ffmpeg
-# Ubuntu: sudo apt install ffmpeg
-# Windows: Download from https://ffmpeg.org/download.html
+# Set your HuggingFace token for speaker diarization
+export HF_TOKEN="your_huggingface_token"
 
 # Run the server
 uvicorn main:app --host 0.0.0.0 --port 8000
@@ -63,15 +65,30 @@ npm install
 npm start
 ```
 
+### Using Docker Compose
+
+```bash
+# Set your HuggingFace token
+export HF_TOKEN="your_huggingface_token"
+
+# Start both services
+docker-compose up --build
+```
+
+Access at:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+
 ## Configuration
 
 ### Backend Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WHISPER_DEVICE` | `cpu` | Device to run model on (`cpu` or `cuda`) |
-| `WHISPER_COMPUTE_TYPE` | `int8` | Compute precision (`int8`, `float16`, `float32`) |
+| `HF_TOKEN` | - | HuggingFace token for speaker diarization (required) |
 | `WHISPER_MODEL_SIZE` | `large-v3` | Model size (`tiny`, `base`, `small`, `medium`, `large-v3`) |
+
+The backend automatically detects Apple Silicon and configures optimal settings.
 
 ### Frontend Environment Variables
 
@@ -84,20 +101,9 @@ npm start
 ### `POST /transcribe/file`
 Upload and transcribe an audio/video file.
 
-**Parameters:**
-- `file`: The audio/video file (multipart form data)
-- `beam_size`: Beam search size (default: 5)
-- `patience`: Beam search patience (default: 1.0)
-- `vad_filter`: Enable voice activity detection (default: true)
-- `word_timestamps`: Include word-level timestamps (default: true)
-
-**Response:**
-```json
-{
-  "job_id": "uuid",
-  "status": "processing"
-}
-```
+**Query Parameters:**
+- `language`: Language code (`en`, `fr`, or `auto`)
+- `enable_diarization`: Enable speaker identification (default: true)
 
 ### `POST /transcribe/youtube`
 Download and transcribe audio from a YouTube URL.
@@ -105,38 +111,40 @@ Download and transcribe audio from a YouTube URL.
 **Body:**
 ```json
 {
-  "url": "https://www.youtube.com/watch?v=..."
+  "url": "https://www.youtube.com/watch?v=...",
+  "language": "auto",
+  "enable_diarization": true
 }
 ```
 
 ### `GET /job/{job_id}`
-Get the status and result of a transcription job.
+Get transcription status and results.
 
-**Response (completed):**
-```json
-{
-  "job_id": "uuid",
-  "status": "completed",
-  "progress": 100,
-  "result": "Full transcription text...",
-  "segments": [
-    {
-      "start": 0.0,
-      "end": 2.5,
-      "text": "Hello world"
-    }
-  ],
-  "language": "en",
-  "language_probability": 0.99
-}
-```
+### `GET /job/{job_id}/export?format=txt`
+Export transcript in specified format: `txt`, `md`, `srt`, `pdf`, `docx`
 
-## Performance Notes
+## Export Formats
 
-- **CPU**: Using INT8 quantization for reasonable performance
-- **GPU**: For faster transcription, set `WHISPER_DEVICE=cuda` and `WHISPER_COMPUTE_TYPE=float16`
-- **Model Loading**: First run downloads the model (~3GB for large-v3)
-- **Processing Time**: Expect ~1x real-time on modern CPU, ~4x faster on GPU
+| Format | Description |
+|--------|-------------|
+| TXT | Plain text with timestamps and speakers |
+| Markdown | Formatted markdown with headers per speaker |
+| SRT | Subtitle format for video players |
+| PDF | Formatted PDF document |
+| DOCX | Microsoft Word document |
+
+## Performance on Apple Silicon
+
+On MacBook Air M3 with 24GB RAM:
+- **Whisper**: Runs on CPU with float32 for best quality
+- **Diarization**: Runs on MPS (Metal) for GPU acceleration
+- **Processing**: Expect ~0.5-1x real-time for transcription
+
+## Supported Languages
+
+- English (`en`)
+- French (`fr`)
+- Auto-detect (`auto`)
 
 ## License
 

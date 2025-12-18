@@ -8,11 +8,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - WHISPER_DEVICE=cpu
-      - WHISPER_COMPUTE_TYPE=int8
       - WHISPER_MODEL_SIZE=large-v3
+      - HF_TOKEN=${HF_TOKEN}
     volumes:
       - whisper-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
     restart: unless-stopped
 
   frontend:
@@ -29,3 +29,4 @@ services:
 
 volumes:
   whisper-cache:
+  torch-cache:

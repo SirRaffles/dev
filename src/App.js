@@ -1,7 +1,23 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Download, X } from 'lucide-react';
+import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Download, X, Users, Languages, FileText, FileType } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+// Supported languages
+const LANGUAGES = {
+  auto: 'Auto-detect',
+  en: 'English',
+  fr: 'French',
+};
+
+// Export formats
+const EXPORT_FORMATS = {
+  txt: { label: 'Plain Text', ext: '.txt', icon: FileText },
+  md: { label: 'Markdown', ext: '.md', icon: FileType },
+  srt: { label: 'SRT Subtitles', ext: '.srt', icon: FileText },
+  pdf: { label: 'PDF Document', ext: '.pdf', icon: FileType },
+  docx: { label: 'Word Document', ext: '.docx', icon: FileType },
+};
 
 // Format timestamp for display
 const formatTime = (seconds) => {
@@ -30,11 +46,32 @@ function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [showTimestamps, setShowTimestamps] = useState(true);
+  const [showSpeakers, setShowSpeakers] = useState(true);
+  const [exportFormat, setExportFormat] = useState('txt');
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  // Settings
+  const [language, setLanguage] = useState('auto');
+  const [enableDiarization, setEnableDiarization] = useState(true);
+
   const fileInputRef = useRef(null);
   const pollIntervalRef = useRef(null);
+  const exportMenuRef = useRef(null);
+
+  // Close export menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -52,11 +89,11 @@ function App() {
       const data = await response.json();
 
       setProgress(data.progress || 0);
+      setProgressMessage(data.progress_message || '');
 
       if (data.status === 'completed') {
         setResult(data);
         setIsTranscribing(false);
-        setJobId(null);
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
@@ -132,25 +169,34 @@ function App() {
     setResult(null);
     setIsTranscribing(true);
     setProgress(0);
+    setProgressMessage('Starting...');
 
     try {
       let response;
+      const params = new URLSearchParams({
+        language,
+        enable_diarization: enableDiarization,
+      });
 
       if (inputMode === InputMode.FILE && file) {
         const formData = new FormData();
         formData.append('file', file);
 
-        response = await fetch(`${API_URL}/transcribe/file`, {
+        response = await fetch(`${API_URL}/transcribe/file?${params}`, {
           method: 'POST',
           body: formData,
         });
       } else if (inputMode === InputMode.YOUTUBE && youtubeUrl) {
-        response = await fetch(`${API_URL}/transcribe/youtube`, {
+        response = await fetch(`${API_URL}/transcribe/youtube?${params}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ url: youtubeUrl }),
+          body: JSON.stringify({
+            url: youtubeUrl,
+            language,
+            enable_diarization: enableDiarization,
+          }),
         });
       } else {
         throw new Error('Please select a file or enter a YouTube URL');
@@ -181,35 +227,31 @@ function App() {
     }
   };
 
-  // Download as SRT
-  const downloadSRT = () => {
-    if (!result?.segments) return;
+  // Download transcript in selected format
+  const downloadTranscript = async (format) => {
+    if (!jobId) return;
 
-    let srtContent = '';
-    result.segments.forEach((segment, index) => {
-      const startTime = formatSRTTime(segment.start);
-      const endTime = formatSRTTime(segment.end);
-      srtContent += `${index + 1}\n${startTime} --> ${endTime}\n${segment.text}\n\n`;
-    });
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/export?format=${format}`);
 
-    const blob = new Blob([srtContent], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'transcription.srt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
 
-  // Format time for SRT format
-  const formatSRTTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transcript${EXPORT_FORMATS[format].ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setShowExportMenu(false);
+    } catch (err) {
+      console.error('Export error:', err);
+      setError('Failed to export transcript');
+    }
   };
 
   // Clear current selection
@@ -218,6 +260,7 @@ function App() {
     setYoutubeUrl('');
     setResult(null);
     setError(null);
+    setJobId(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -225,6 +268,9 @@ function App() {
 
   const canStart = (inputMode === InputMode.FILE && file) ||
                    (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
+
+  // Get unique speakers from result
+  const speakers = result?.speakers || [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
@@ -238,7 +284,7 @@ function App() {
             </h1>
           </div>
           <p className="text-slate-400 text-lg">
-            High-quality audio & video transcription powered by Whisper Large-V3
+            High-quality transcription with speaker recognition
           </p>
         </header>
 
@@ -346,6 +392,47 @@ function App() {
             </div>
           )}
 
+          {/* Settings */}
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Language Selection */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <Languages className="w-4 h-4" />
+                Language
+              </label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-400"
+              >
+                {Object.entries(LANGUAGES).map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Speaker Diarization Toggle */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <Users className="w-4 h-4" />
+                Speaker Recognition
+              </label>
+              <button
+                onClick={() => setEnableDiarization(!enableDiarization)}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  enableDiarization
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                {enableDiarization ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+          </div>
+
           {/* Transcribe Button */}
           <button
             onClick={startTranscription}
@@ -372,7 +459,7 @@ function App() {
           <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
             <div className="flex items-center gap-3 mb-4">
               <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-              <span className="font-medium">Processing your audio...</span>
+              <span className="font-medium">{progressMessage || 'Processing your audio...'}</span>
             </div>
             <div className="w-full bg-slate-700 rounded-full h-3">
               <div
@@ -381,7 +468,7 @@ function App() {
               />
             </div>
             <p className="text-sm text-slate-400 mt-2">
-              This may take a few minutes depending on the audio length
+              Quality-focused transcription may take a few minutes
             </p>
           </div>
         )}
@@ -401,7 +488,7 @@ function App() {
         {result && (
           <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
             {/* Results Header */}
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div className="flex items-center gap-3">
                 <CheckCircle className="w-6 h-6 text-green-400" />
                 <h2 className="text-xl font-semibold">Transcription Complete</h2>
@@ -414,34 +501,61 @@ function App() {
                   <Copy className="w-4 h-4" />
                   Copy
                 </button>
-                <button
-                  onClick={downloadSRT}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  SRT
-                </button>
+
+                {/* Export Dropdown */}
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    onClick={() => setShowExportMenu(!showExportMenu)}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Export
+                  </button>
+
+                  {showExportMenu && (
+                    <div className="absolute right-0 mt-2 w-48 bg-slate-700 rounded-lg shadow-xl border border-slate-600 py-2 z-10">
+                      {Object.entries(EXPORT_FORMATS).map(([format, { label, ext, icon: Icon }]) => (
+                        <button
+                          key={format}
+                          onClick={() => downloadTranscript(format)}
+                          className="w-full px-4 py-2 text-left hover:bg-slate-600 flex items-center gap-3 transition-colors"
+                        >
+                          <Icon className="w-4 h-4 text-slate-400" />
+                          <span>{label}</span>
+                          <span className="text-slate-500 text-sm ml-auto">{ext}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Language Info */}
-            {result.language && (
-              <div className="flex items-center gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg">
+            {/* Language & Speakers Info */}
+            <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg">
+              {result.language && (
                 <div className="flex items-center gap-2">
                   <Globe className="w-4 h-4 text-blue-400" />
                   <span className="text-slate-300">Language:</span>
-                  <span className="font-medium">{result.language.toUpperCase()}</span>
+                  <span className="font-medium">{LANGUAGES[result.language] || result.language.toUpperCase()}</span>
+                  {result.language_probability && (
+                    <span className="text-slate-400 text-sm">
+                      ({(result.language_probability * 100).toFixed(1)}%)
+                    </span>
+                  )}
                 </div>
-                {result.language_probability && (
-                  <span className="text-slate-400 text-sm">
-                    ({(result.language_probability * 100).toFixed(1)}% confidence)
-                  </span>
-                )}
-              </div>
-            )}
+              )}
+              {speakers.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  <span className="text-slate-300">Speakers:</span>
+                  <span className="font-medium">{speakers.length}</span>
+                </div>
+              )}
+            </div>
 
-            {/* Timestamps Toggle */}
-            <div className="flex items-center gap-2 mb-4">
+            {/* View Toggles */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
               <button
                 onClick={() => setShowTimestamps(!showTimestamps)}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
@@ -451,17 +565,35 @@ function App() {
                 <Clock className="w-4 h-4" />
                 Timestamps
               </button>
+              {speakers.length > 0 && (
+                <button
+                  onClick={() => setShowSpeakers(!showSpeakers)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                    showSpeakers ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  <Users className="w-4 h-4" />
+                  Speakers
+                </button>
+              )}
             </div>
 
             {/* Transcription Text */}
-            <div className="bg-slate-900/50 rounded-xl p-4 max-h-96 overflow-y-auto">
-              {showTimestamps && result.segments ? (
+            <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+              {(showTimestamps || showSpeakers) && result.segments ? (
                 <div className="space-y-3">
                   {result.segments.map((segment, index) => (
                     <div key={index} className="flex gap-3">
-                      <span className="text-blue-400 font-mono text-sm whitespace-nowrap pt-1">
-                        [{formatTime(segment.start)}]
-                      </span>
+                      {showTimestamps && (
+                        <span className="text-blue-400 font-mono text-sm whitespace-nowrap pt-1">
+                          [{formatTime(segment.start)}]
+                        </span>
+                      )}
+                      {showSpeakers && segment.speaker && (
+                        <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
+                          {segment.speaker}:
+                        </span>
+                      )}
                       <p className="text-slate-200 leading-relaxed">{segment.text}</p>
                     </div>
                   ))}
@@ -477,7 +609,8 @@ function App() {
 
         {/* Footer */}
         <footer className="text-center mt-12 text-slate-500 text-sm">
-          <p>Powered by OpenAI Whisper Large-V3 via faster-whisper</p>
+          <p>Powered by OpenAI Whisper Large-V3 with speaker diarization</p>
+          <p className="mt-1">Optimized for Apple Silicon</p>
         </footer>
       </div>
     </div>
