@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Download, X, Users, Languages, FileText, FileType } from 'lucide-react';
+import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Check, Download, X, Users, Languages, FileText, FileType } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -51,8 +51,8 @@ function App() {
   const [error, setError] = useState(null);
   const [showTimestamps, setShowTimestamps] = useState(true);
   const [showSpeakers, setShowSpeakers] = useState(true);
-  const [exportFormat, setExportFormat] = useState('txt');
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Settings
   const [language, setLanguage] = useState('auto');
@@ -222,6 +222,8 @@ function App() {
 
     try {
       await navigator.clipboard.writeText(result.result);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
     }
@@ -254,13 +256,16 @@ function App() {
     }
   };
 
-  // Clear current selection
+  // Clear current selection and start fresh
   const clearSelection = () => {
     setFile(null);
     setYoutubeUrl('');
     setResult(null);
     setError(null);
     setJobId(null);
+    setCopied(false);
+    setProgress(0);
+    setProgressMessage('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -496,10 +501,12 @@ function App() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={copyToClipboard}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                    copied ? 'bg-green-600 text-white' : 'bg-slate-700 hover:bg-slate-600'
+                  }`}
                 >
-                  <Copy className="w-4 h-4" />
-                  Copy
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copied ? 'Copied!' : 'Copy'}
                 </button>
 
                 {/* Export Dropdown */}
@@ -604,6 +611,14 @@ function App() {
                 </p>
               )}
             </div>
+
+            {/* New Transcription Button */}
+            <button
+              onClick={clearSelection}
+              className="w-full mt-6 py-3 rounded-lg font-medium bg-slate-700 hover:bg-slate-600 transition-colors"
+            >
+              Start New Transcription
+            </button>
           </div>
         )}
 

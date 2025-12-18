@@ -456,7 +456,6 @@ def generate_pdf(job: TranscriptionJob) -> bytes:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.enums import TA_LEFT
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75*inch, bottomMargin=0.75*inch)
@@ -501,13 +500,10 @@ def generate_pdf(job: TranscriptionJob) -> bytes:
 def generate_docx(job: TranscriptionJob) -> bytes:
     """Generate DOCX transcript."""
     from docx import Document
-    from docx.shared import Inches, Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt, RGBColor
 
     doc = Document()
-
-    # Title
-    title = doc.add_heading("Transcript", level=1)
+    doc.add_heading("Transcript", level=1)
 
     # Metadata
     lang_name = SUPPORTED_LANGUAGES.get(job.language, job.language)
