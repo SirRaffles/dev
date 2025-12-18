@@ -1,70 +1,143 @@
-# Getting Started with Create React App
+# Whisper Transcription App
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+High-quality audio and video transcription powered by OpenAI Whisper Large-V3 via faster-whisper.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- **File Upload**: Drag & drop or browse to upload audio/video files
+- **YouTube Support**: Paste a YouTube URL to transcribe video content
+- **High Accuracy**: Uses Whisper Large-V3 model for state-of-the-art transcription
+- **Timestamps**: View transcription with precise timestamps
+- **Export**: Copy to clipboard or download as SRT subtitle file
+- **Language Detection**: Automatic language detection with confidence score
+- **Multiple Formats**: Supports MP3, WAV, MP4, MKV, AVI, WebM, M4A, FLAC, OGG, and more
 
-### `npm start`
+## Architecture
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- **Frontend**: React 18 with Tailwind CSS
+- **Backend**: FastAPI (Python) with faster-whisper
+- **Transcription Engine**: OpenAI Whisper Large-V3 via CTranslate2
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Quick Start
 
-### `npm test`
+### Using Docker Compose (Recommended)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```bash
+docker-compose up --build
+```
 
-### `npm run build`
+This will start:
+- Backend API at http://localhost:8000
+- Frontend at http://localhost:3000
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Manual Setup
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+#### Backend
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+```bash
+cd backend
 
-### `npm run eject`
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+# Install dependencies
+pip install -r requirements.txt
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+# Install ffmpeg (required for audio extraction)
+# macOS: brew install ffmpeg
+# Ubuntu: sudo apt install ffmpeg
+# Windows: Download from https://ffmpeg.org/download.html
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+# Run the server
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+#### Frontend
 
-## Learn More
+```bash
+# Install dependencies
+npm install
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+# Start development server
+npm start
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+## Configuration
 
-### Code Splitting
+### Backend Environment Variables
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WHISPER_DEVICE` | `cpu` | Device to run model on (`cpu` or `cuda`) |
+| `WHISPER_COMPUTE_TYPE` | `int8` | Compute precision (`int8`, `float16`, `float32`) |
+| `WHISPER_MODEL_SIZE` | `large-v3` | Model size (`tiny`, `base`, `small`, `medium`, `large-v3`) |
 
-### Analyzing the Bundle Size
+### Frontend Environment Variables
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REACT_APP_API_URL` | `http://localhost:8000` | Backend API URL |
 
-### Making a Progressive Web App
+## API Endpoints
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+### `POST /transcribe/file`
+Upload and transcribe an audio/video file.
 
-### Advanced Configuration
+**Parameters:**
+- `file`: The audio/video file (multipart form data)
+- `beam_size`: Beam search size (default: 5)
+- `patience`: Beam search patience (default: 1.0)
+- `vad_filter`: Enable voice activity detection (default: true)
+- `word_timestamps`: Include word-level timestamps (default: true)
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+**Response:**
+```json
+{
+  "job_id": "uuid",
+  "status": "processing"
+}
+```
 
-### Deployment
+### `POST /transcribe/youtube`
+Download and transcribe audio from a YouTube URL.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+**Body:**
+```json
+{
+  "url": "https://www.youtube.com/watch?v=..."
+}
+```
 
-### `npm run build` fails to minify
+### `GET /job/{job_id}`
+Get the status and result of a transcription job.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+**Response (completed):**
+```json
+{
+  "job_id": "uuid",
+  "status": "completed",
+  "progress": 100,
+  "result": "Full transcription text...",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 2.5,
+      "text": "Hello world"
+    }
+  ],
+  "language": "en",
+  "language_probability": 0.99
+}
+```
+
+## Performance Notes
+
+- **CPU**: Using INT8 quantization for reasonable performance
+- **GPU**: For faster transcription, set `WHISPER_DEVICE=cuda` and `WHISPER_COMPUTE_TYPE=float16`
+- **Model Loading**: First run downloads the model (~3GB for large-v3)
+- **Processing Time**: Expect ~1x real-time on modern CPU, ~4x faster on GPU
+
+## License
+
+MIT
