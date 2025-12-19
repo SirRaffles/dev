@@ -13,6 +13,16 @@ High-quality audio and video transcription powered by OpenAI Whisper Large-V3 vi
 - **Timestamps**: View transcription with precise timestamps
 - **Apple Silicon Optimized**: Configured for best performance on M1/M2/M3 Macs
 
+### Advanced Features
+
+- **Audio Restoration**: Built-in noise reduction using noisereduce library for cleaner transcriptions
+- **Batch Upload**: Process multiple files simultaneously with batch progress tracking
+- **Inline Editor**: Edit transcripts directly with synchronized audio playback
+- **Click-to-Seek**: Click timestamps to jump to that position in the audio
+- **Speaker Renaming**: Rename detected speakers (e.g., SPEAKER_00 → "John")
+- **Search & Replace**: Find and replace text across the entire transcript
+- **Auto-Scroll**: Automatically scrolls to follow currently playing audio
+
 ## Architecture
 
 - **Frontend**: React 18 with Tailwind CSS
@@ -98,14 +108,17 @@ The backend automatically detects Apple Silicon and configures optimal settings.
 
 ## API Endpoints
 
-### `POST /transcribe/file`
+### Transcription
+
+#### `POST /transcribe/file`
 Upload and transcribe an audio/video file.
 
 **Query Parameters:**
 - `language`: Language code (`en`, `fr`, or `auto`)
 - `enable_diarization`: Enable speaker identification (default: true)
+- `enable_noise_reduction`: Apply noise reduction before transcription (default: false)
 
-### `POST /transcribe/youtube`
+#### `POST /transcribe/youtube`
 Download and transcribe audio from a YouTube URL.
 
 **Body:**
@@ -113,15 +126,71 @@ Download and transcribe audio from a YouTube URL.
 {
   "url": "https://www.youtube.com/watch?v=...",
   "language": "auto",
-  "enable_diarization": true
+  "enable_diarization": true,
+  "enable_noise_reduction": false
 }
 ```
 
-### `GET /job/{job_id}`
+#### `POST /transcribe/batch`
+Upload and transcribe multiple files simultaneously.
+
+**Query Parameters:**
+- `language`: Language code (`en`, `fr`, or `auto`)
+- `enable_diarization`: Enable speaker identification (default: true)
+
+**Response:**
+```json
+{
+  "batch_id": "uuid",
+  "job_ids": ["uuid1", "uuid2", ...],
+  "total": 3
+}
+```
+
+### Job Management
+
+#### `GET /job/{job_id}`
 Get transcription status and results.
 
-### `GET /job/{job_id}/export?format=txt`
+#### `GET /batch/{batch_id}`
+Get batch transcription status with individual job progress.
+
+#### `GET /job/{job_id}/export?format=txt`
 Export transcript in specified format: `txt`, `md`, `srt`, `pdf`, `docx`
+
+### Editing
+
+#### `PUT /job/{job_id}/segments`
+Update transcript segments with edited text.
+
+**Body:**
+```json
+{
+  "segments": [
+    {"start": 0.0, "end": 2.5, "text": "Hello world", "speaker": "John"}
+  ]
+}
+```
+
+#### `PUT /job/{job_id}/speakers`
+Rename speaker labels in a completed transcription.
+
+**Body:**
+```json
+{
+  "speaker_mapping": {
+    "SPEAKER_00": "John",
+    "SPEAKER_01": "Jane"
+  }
+}
+```
+
+#### `GET /job/{job_id}/search?q=text`
+Search for text within a transcript.
+
+**Query Parameters:**
+- `q`: Search query (required)
+- `case_sensitive`: Case-sensitive search (default: false)
 
 ## Export Formats
 
