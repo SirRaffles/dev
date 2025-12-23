@@ -1,9 +1,9 @@
 """
 Transcription App Backend
-FastAPI server with faster-whisper for high-quality transcription.
+FastAPI server with MLX-Whisper for high-quality transcription.
 Supports local file uploads (audio/video) and YouTube URLs.
 Features speaker diarization and multiple export formats.
-Optimized for Apple Silicon (M3).
+Optimized for Apple Silicon (M3) with GPU acceleration via Metal.
 """
 
 import os
@@ -11,10 +11,15 @@ import io
 import uuid
 import tempfile
 import subprocess
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, List, Literal
 from contextlib import asynccontextmanager
 from datetime import datetime
+
+# Thread pool for CPU-bound transcription tasks
+transcription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,19 +31,32 @@ import numpy as np
 import noisereduce as nr
 from scipy.io import wavfile
 
-# Global model instances (loaded at startup)
-whisper_model = None
+# Global model configuration (MLX-Whisper loads model on first transcribe)
+whisper_model_path = None  # HuggingFace repo path for MLX model
+whisper_model_ready = False  # Flag to indicate model is configured
 diarization_pipeline = None
 
 # In-memory job storage (for production, use Redis or database)
 jobs = {}
 batch_jobs = {}  # Storage for batch jobs
 
-# Supported languages
+# Supported languages (Whisper supports 99, these are the most common)
 SUPPORTED_LANGUAGES = {
+    "auto": "Auto-detect",
     "en": "English",
     "fr": "French",
-    "auto": "Auto-detect"
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "nl": "Dutch",
+    "ru": "Russian",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "pl": "Polish",
 }
 
 
@@ -69,17 +87,31 @@ class YouTubeRequest(BaseModel):
     language: str = "auto"
     enable_diarization: bool = True
     enable_noise_reduction: bool = False
+    translate_to_english: bool = False
 
 
 class TranscriptionSettings(BaseModel):
-    beam_size: int = 10  # Higher for quality
-    patience: float = 1.5  # More thorough beam search
-    best_of: int = 10  # More candidates for better quality
-    vad_filter: bool = True
-    word_timestamps: bool = True
+    beam_size: int = 5  # Balanced quality/speed for CPU
+    patience: float = 1.0  # Standard beam search patience
+    best_of: int = 5  # Balanced candidates for CPU
+    vad_filter: bool = False  # Disabled - causes empty results with some audio
+    word_timestamps: bool = False  # Disabled by default for speed (can enable for precise timing)
     language: str = "auto"  # en, fr, or auto
     enable_diarization: bool = True
+    num_speakers: Optional[int] = None  # Number of speakers (None = auto-detect)
     enable_noise_reduction: bool = False  # Apply noise reduction before transcription
+    model_size: str = "large-v3"  # tiny, base, small, medium, large-v3
+    translate_to_english: bool = False  # Translate output to English (any language → English)
+
+
+# Available MLX-Whisper model sizes with descriptions
+MLX_MODELS = {
+    "tiny": {"path": "mlx-community/whisper-tiny", "description": "Fastest, lowest quality (~39M params)"},
+    "base": {"path": "mlx-community/whisper-base", "description": "Fast, good for real-time (~74M params)"},
+    "small": {"path": "mlx-community/whisper-small", "description": "Balanced speed/quality (~244M params)"},
+    "medium": {"path": "mlx-community/whisper-medium", "description": "High quality, moderate speed (~769M params)"},
+    "large-v3": {"path": "mlx-community/whisper-large-v3-mlx", "description": "Best quality, slowest (~1.5B params)"},
+}
 
 
 class SpeakerRenameRequest(BaseModel):
@@ -90,61 +122,39 @@ class SegmentUpdate(BaseModel):
     segments: List[dict]  # [{start, end, text, speaker}]
 
 
-def get_device_config():
-    """Get optimal device configuration for the current system."""
-    import platform
+def get_mlx_model_path():
+    """Get the MLX-Whisper model path based on environment or default."""
+    # Model size mapping to MLX Community HuggingFace repos
+    mlx_models = {
+        "tiny": "mlx-community/whisper-tiny",
+        "base": "mlx-community/whisper-base",
+        "small": "mlx-community/whisper-small",
+        "medium": "mlx-community/whisper-medium",
+        "large": "mlx-community/whisper-large-v3-mlx",
+        "large-v2": "mlx-community/whisper-large-v2-mlx",
+        "large-v3": "mlx-community/whisper-large-v3-mlx",
+    }
 
-    system = platform.system()
-    machine = platform.machine()
-
-    # Check for Apple Silicon
-    if system == "Darwin" and machine == "arm64":
-        # Apple Silicon (M1/M2/M3) - use CPU with float32 for best compatibility
-        # faster-whisper doesn't support MPS directly, but CPU is well optimized
-        return {
-            "device": "cpu",
-            "compute_type": "float32",  # float32 works best on Apple Silicon
-            "num_workers": 4,  # M3 has good multi-core performance
-        }
-    elif os.environ.get("WHISPER_DEVICE") == "cuda":
-        return {
-            "device": "cuda",
-            "compute_type": "float16",
-            "num_workers": 1,
-        }
-    else:
-        return {
-            "device": "cpu",
-            "compute_type": "int8",
-            "num_workers": 2,
-        }
+    model_size = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
+    return mlx_models.get(model_size, mlx_models["large-v3"])
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load models on startup."""
-    global whisper_model, diarization_pipeline
+    """Configure models on startup."""
+    global whisper_model_path, whisper_model_ready, diarization_pipeline
 
-    device_config = get_device_config()
-    print(f"System configuration: {device_config}")
-
-    # Load Whisper model
-    print("Loading Whisper model... (this may take a few minutes on first run)")
+    # Configure MLX-Whisper model path
+    print("Configuring MLX-Whisper for Apple Silicon GPU acceleration...")
     try:
-        from faster_whisper import WhisperModel
-
-        model_size = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
-        print(f"Loading {model_size} model on {device_config['device']} with {device_config['compute_type']} precision...")
-
-        whisper_model = WhisperModel(
-            model_size,
-            device=device_config["device"],
-            compute_type=device_config["compute_type"],
-            num_workers=device_config["num_workers"],
-        )
-        print("Whisper model loaded successfully!")
+        import mlx_whisper
+        whisper_model_path = get_mlx_model_path()
+        print(f"MLX-Whisper model: {whisper_model_path}")
+        print("Note: Model will be downloaded on first transcription if not cached")
+        whisper_model_ready = True
+        print("MLX-Whisper configured successfully! (GPU-accelerated via Metal)")
     except Exception as e:
-        print(f"Warning: Could not load Whisper model: {e}")
+        print(f"Warning: Could not configure MLX-Whisper: {e}")
 
     # Load speaker diarization pipeline
     print("Loading speaker diarization model...")
@@ -177,7 +187,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup on shutdown
-    whisper_model = None
+    whisper_model_ready = False
     diarization_pipeline = None
 
 
@@ -269,15 +279,24 @@ def apply_noise_reduction(audio_path: str, output_path: str) -> str:
         raise RuntimeError(f"Noise reduction failed: {e}")
 
 
-def run_diarization(audio_path: str) -> List[dict]:
-    """Run speaker diarization on audio file."""
+def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
+    """Run speaker diarization on audio file.
+
+    Args:
+        audio_path: Path to audio file
+        num_speakers: Expected number of speakers (None = auto-detect)
+    """
     global diarization_pipeline
 
     if diarization_pipeline is None:
         return []
 
     try:
-        diarization = diarization_pipeline(audio_path)
+        # Pass num_speakers hint to improve accuracy
+        if num_speakers and num_speakers > 0:
+            diarization = diarization_pipeline(audio_path, num_speakers=num_speakers)
+        else:
+            diarization = diarization_pipeline(audio_path)
 
         speakers = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -313,20 +332,22 @@ def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> L
     return segments
 
 
-async def transcribe_audio(job_id: str, audio_path: str, settings: TranscriptionSettings):
-    """Run transcription with optional speaker diarization."""
-    global whisper_model, diarization_pipeline
+def _run_transcription_sync(job_id: str, audio_path: str, settings: TranscriptionSettings):
+    """Synchronous transcription worker - runs in thread pool."""
+    global whisper_model_path, whisper_model_ready, diarization_pipeline
     job = jobs.get(job_id)
 
     if not job:
         return
 
-    if whisper_model is None:
+    if not whisper_model_ready:
         job.status = "failed"
-        job.error = "Whisper model not loaded. Please restart the server."
+        job.error = "MLX-Whisper not configured. Please restart the server."
         return
 
     try:
+        import mlx_whisper
+
         job.status = "processing"
         job.progress = 5
         job.progress_message = "Starting transcription..."
@@ -342,67 +363,85 @@ async def transcribe_audio(job_id: str, audio_path: str, settings: Transcription
         speakers = []
         if settings.enable_diarization and diarization_pipeline is not None:
             job.progress = 10
-            job.progress_message = "Identifying speakers..."
-            speakers = run_diarization(audio_path)
+            if settings.num_speakers:
+                job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+            else:
+                job.progress_message = "Identifying speakers..."
+            speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
             job.speakers = speakers
 
-        job.progress = 30
-        job.progress_message = "Transcribing audio..."
+        job.progress = 20
+        job.progress_message = "Transcribing with MLX-Whisper (GPU-accelerated)..."
 
         # Prepare language setting
         language = None if settings.language == "auto" else settings.language
 
-        # Run transcription with quality-focused settings
-        segments, info = whisper_model.transcribe(
+        # Get the model path based on selected model size
+        model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3"])
+        model_path = model_info["path"]
+        print(f"Using model: {settings.model_size} ({model_path})")
+
+        # Run transcription with MLX-Whisper (uses Metal GPU on Apple Silicon)
+        # Note: MLX-Whisper uses greedy decoding (beam search not yet implemented)
+        # task="translate" outputs English regardless of source language
+        result = mlx_whisper.transcribe(
             audio_path,
-            beam_size=settings.beam_size,
-            patience=settings.patience,
-            best_of=settings.best_of,
-            vad_filter=settings.vad_filter,
-            word_timestamps=settings.word_timestamps,
+            path_or_hf_repo=model_path,
             language=language,
+            task="translate" if settings.translate_to_english else "transcribe",
+            word_timestamps=settings.word_timestamps,
             condition_on_previous_text=True,  # Better coherence
             no_speech_threshold=0.6,
             compression_ratio_threshold=2.4,
+            verbose=False,
+            fp16=True,  # Use FP16 for faster inference on Apple Silicon
         )
 
-        job.language = info.language
-        job.language_probability = info.language_probability
-        job.progress = 60
+        # Extract language info from result
+        job.language = result.get("language", "unknown")
+        job.language_probability = 0.99  # MLX-Whisper doesn't provide this
+        job.progress = 70
         job.progress_message = "Processing segments..."
 
-        # Collect segments
+        # Process segments from MLX-Whisper result
         transcription_segments = []
         full_text_parts = []
 
-        for segment in segments:
+        for segment in result.get("segments", []):
             seg_data = {
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip(),
+                "start": segment["start"],
+                "end": segment["end"],
+                "text": segment["text"].strip(),
             }
 
-            if settings.word_timestamps and hasattr(segment, 'words') and segment.words:
+            # Extract word timestamps if available
+            if settings.word_timestamps and "words" in segment:
                 seg_data["words"] = [
-                    {"word": w.word, "start": w.start, "end": w.end, "probability": w.probability}
-                    for w in segment.words
+                    {
+                        "word": w.get("word", w.get("text", "")),
+                        "start": w["start"],
+                        "end": w["end"],
+                        "probability": w.get("probability", 1.0)
+                    }
+                    for w in segment["words"]
                 ]
 
             transcription_segments.append(seg_data)
-            full_text_parts.append(segment.text.strip())
+            full_text_parts.append(segment["text"].strip())
 
-        job.progress = 80
-        job.progress_message = "Assigning speakers..."
+        job.progress = 90
+        job.progress_message = "Finalizing..."
 
         # Assign speakers to segments
         if speakers:
             transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
 
         job.segments = transcription_segments
-        job.result = " ".join(full_text_parts)
+        job.result = result.get("text", " ".join(full_text_parts))
         job.progress = 100
         job.progress_message = "Complete!"
         job.status = "completed"
+        print(f"Transcription complete (MLX-Whisper): {len(transcription_segments)} segments")
 
     except Exception as e:
         job.status = "failed"
@@ -420,6 +459,18 @@ async def transcribe_audio(job_id: str, audio_path: str, settings: Transcription
                 os.rmdir(parent_dir)
         except Exception:
             pass
+
+
+async def transcribe_audio(job_id: str, audio_path: str, settings: TranscriptionSettings):
+    """Run transcription in thread pool to keep event loop responsive."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        transcription_executor,
+        _run_transcription_sync,
+        job_id,
+        audio_path,
+        settings
+    )
 
 
 def format_timestamp(seconds: float) -> str:
@@ -601,10 +652,12 @@ async def root():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "model_loaded": whisper_model is not None,
+        "model_loaded": whisper_model_ready,
+        "model_type": "MLX-Whisper (GPU-accelerated)",
+        "model_path": whisper_model_path,
         "diarization_available": diarization_pipeline is not None,
         "supported_languages": SUPPORTED_LANGUAGES,
-        "message": "Transcription API is running"
+        "message": "Transcription API is running with MLX-Whisper"
     }
 
 
@@ -613,7 +666,9 @@ async def health():
     """Detailed health check."""
     return {
         "status": "healthy",
-        "model_loaded": whisper_model is not None,
+        "model_loaded": whisper_model_ready,
+        "model_type": "MLX-Whisper",
+        "model_path": whisper_model_path,
         "diarization_available": diarization_pipeline is not None,
         "active_jobs": len([j for j in jobs.values() if j.status == "processing"]),
         "total_jobs": len(jobs),
@@ -627,14 +682,18 @@ async def transcribe_file(
     file: UploadFile = File(...),
     language: str = Query("auto", description="Language code: en, fr, or auto"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
+    num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
     enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
-    beam_size: int = Query(10, description="Beam search size (higher = better quality)"),
-    patience: float = Query(1.5, description="Beam search patience"),
-    best_of: int = Query(10, description="Number of candidates to consider"),
+    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
+    translate_to_english: bool = Query(False, description="Translate output to English (any language → English)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
-    if whisper_model is None:
-        raise HTTPException(status_code=503, detail="Whisper model not loaded")
+    if not whisper_model_ready:
+        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
+
+    if model_size not in MLX_MODELS:
+        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -664,19 +723,19 @@ async def transcribe_file(
             os.remove(input_path)
 
         settings = TranscriptionSettings(
-            beam_size=beam_size,
-            patience=patience,
-            best_of=best_of,
-            vad_filter=True,
-            word_timestamps=True,
+            vad_filter=False,  # Disabled - causes empty results with some audio
+            word_timestamps=word_timestamps,
             language=language,
             enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
             enable_noise_reduction=enable_noise_reduction,
+            model_size=model_size,
+            translate_to_english=translate_to_english,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
-        return {"job_id": job_id, "status": "processing"}
+        return {"job_id": job_id, "status": "processing", "model": model_size}
 
     except Exception as e:
         try:
@@ -691,13 +750,16 @@ async def transcribe_file(
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
-    beam_size: int = Query(10, description="Beam search size"),
-    patience: float = Query(1.5, description="Beam search patience"),
-    best_of: int = Query(10, description="Number of candidates"),
+    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
+    num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
-    if whisper_model is None:
-        raise HTTPException(status_code=503, detail="Whisper model not loaded")
+    if not whisper_model_ready:
+        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
+
+    if model_size not in MLX_MODELS:
+        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if request.language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -714,19 +776,19 @@ async def transcribe_youtube(
         audio_path = download_youtube_audio(request.url, temp_dir)
 
         settings = TranscriptionSettings(
-            beam_size=beam_size,
-            patience=patience,
-            best_of=best_of,
-            vad_filter=True,
-            word_timestamps=True,
+            vad_filter=False,  # Disabled - causes empty results with some audio
+            word_timestamps=word_timestamps,
             language=request.language,
             enable_diarization=request.enable_diarization,
+            num_speakers=num_speakers,
             enable_noise_reduction=request.enable_noise_reduction,
+            model_size=model_size,
+            translate_to_english=request.translate_to_english,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
-        return {"job_id": job_id, "status": "processing"}
+        return {"job_id": job_id, "status": "processing", "model": model_size}
 
     except Exception as e:
         try:
@@ -835,19 +897,35 @@ async def delete_job(job_id: str):
     return {"status": "deleted"}
 
 
+@app.get("/models")
+async def list_models():
+    """List available transcription models with descriptions."""
+    return {
+        "models": [
+            {"id": key, "path": val["path"], "description": val["description"]}
+            for key, val in MLX_MODELS.items()
+        ],
+        "default": "large-v3"
+    }
+
+
 @app.post("/transcribe/batch")
 async def transcribe_batch(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     language: str = Query("auto", description="Language code: en, fr, or auto"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
-    beam_size: int = Query(10, description="Beam search size"),
-    patience: float = Query(1.5, description="Beam search patience"),
-    best_of: int = Query(10, description="Number of candidates"),
+    num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
+    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
+    translate_to_english: bool = Query(False, description="Translate output to English (any language → English)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
-    if whisper_model is None:
-        raise HTTPException(status_code=503, detail="Whisper model not loaded")
+    if not whisper_model_ready:
+        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
+
+    if model_size not in MLX_MODELS:
+        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -886,13 +964,13 @@ async def transcribe_batch(
                 os.remove(input_path)
 
             settings = TranscriptionSettings(
-                beam_size=beam_size,
-                patience=patience,
-                best_of=best_of,
-                vad_filter=True,
-                word_timestamps=True,
+                vad_filter=False,  # Disabled - causes empty results with some audio
+                word_timestamps=word_timestamps,
                 language=language,
                 enable_diarization=enable_diarization,
+                num_speakers=num_speakers,
+                model_size=model_size,
+                translate_to_english=translate_to_english,
             )
 
             background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)

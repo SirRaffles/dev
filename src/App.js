@@ -1,13 +1,37 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Check, Download, X, Users, Languages, FileText, FileType, Play, Pause, SkipBack, SkipForward, Edit2, Save, Search, Replace, Volume2, VolumeX, Files, Edit3 } from 'lucide-react';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// Use relative URLs when accessed via domain (nginx proxies to backend)
+// Use localhost:8000 for local development
+const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const API_URL = process.env.REACT_APP_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
 
 // Supported languages
 const LANGUAGES = {
   auto: 'Auto-detect',
   en: 'English',
-  fr: 'French',
+  fr: 'French (Français)',
+  de: 'German (Deutsch)',
+  es: 'Spanish (Español)',
+  it: 'Italian (Italiano)',
+  pt: 'Portuguese (Português)',
+  nl: 'Dutch (Nederlands)',
+  ru: 'Russian (Русский)',
+  zh: 'Chinese (中文)',
+  ja: 'Japanese (日本語)',
+  ko: 'Korean (한국어)',
+  ar: 'Arabic (العربية)',
+  hi: 'Hindi (हिन्दी)',
+  pl: 'Polish (Polski)',
+};
+
+// Available model sizes (matching backend MLX_MODELS)
+const MODEL_SIZES = {
+  'tiny': { label: 'Tiny', description: 'Fastest (~1min audio in ~10s)' },
+  'base': { label: 'Base', description: 'Fast, good for real-time' },
+  'small': { label: 'Small', description: 'Balanced speed/quality' },
+  'medium': { label: 'Medium', description: 'High quality, moderate speed' },
+  'large-v3': { label: 'Large V3', description: 'Best quality, slowest' },
 };
 
 // Export formats
@@ -57,7 +81,11 @@ function App() {
   // Settings
   const [language, setLanguage] = useState('auto');
   const [enableDiarization, setEnableDiarization] = useState(true);
+  const [numSpeakers, setNumSpeakers] = useState('');  // Empty = auto-detect
   const [enableNoiseReduction, setEnableNoiseReduction] = useState(false);
+  const [modelSize, setModelSize] = useState('large-v3');
+  const [wordTimestamps, setWordTimestamps] = useState(false);
+  const [translateToEnglish, setTranslateToEnglish] = useState(false);
 
   // Batch upload
   const [files, setFiles] = useState([]);
@@ -206,17 +234,25 @@ function App() {
     };
   }, [jobId, isTranscribing, pollJobStatus]);
 
-  // Handle file drop
+  // Handle file drop (supports multiple files)
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     setIsDragging(false);
 
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile) {
-      setFile(droppedFile);
-      // Create audio URL for playback
-      const url = URL.createObjectURL(droppedFile);
-      setAudioUrl(url);
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length > 0) {
+      if (droppedFiles.length === 1) {
+        // Single file mode
+        setFile(droppedFiles[0]);
+        setFiles([]);
+        const url = URL.createObjectURL(droppedFiles[0]);
+        setAudioUrl(url);
+      } else {
+        // Multi-file mode
+        setFiles(droppedFiles);
+        setFile(null);
+        setAudioUrl(null);
+      }
       setError(null);
       setResult(null);
     }
@@ -232,14 +268,22 @@ function App() {
     setIsDragging(false);
   }, []);
 
-  // Handle file selection
+  // Handle file selection (supports multiple files)
   const handleFileSelect = useCallback((e) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      // Create audio URL for playback
-      const url = URL.createObjectURL(selectedFile);
-      setAudioUrl(url);
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length > 0) {
+      if (selectedFiles.length === 1) {
+        // Single file mode
+        setFile(selectedFiles[0]);
+        setFiles([]);
+        const url = URL.createObjectURL(selectedFiles[0]);
+        setAudioUrl(url);
+      } else {
+        // Multi-file mode
+        setFiles(selectedFiles);
+        setFile(null);
+        setAudioUrl(null);
+      }
       setError(null);
       setResult(null);
     }
@@ -288,8 +332,105 @@ function App() {
     );
   };
 
+  // Poll batch job status
+  const pollBatchStatus = useCallback(async (batchId) => {
+    try {
+      const response = await fetch(`${API_URL}/batch/${batchId}`);
+      const data = await response.json();
+
+      setBatchProgress(data.jobs.map(job => ({
+        job_id: job.job_id,
+        status: job.status,
+        progress: job.progress,
+        error: job.error
+      })));
+
+      setProgress(data.overall_progress);
+      setProgressMessage(`${data.completed}/${data.total} files completed`);
+
+      if (data.overall_status === 'completed') {
+        setIsTranscribing(false);
+        // Fetch first completed job result to display
+        if (data.jobs.length > 0) {
+          const firstJobId = data.jobs[0].job_id;
+          const resultResponse = await fetch(`${API_URL}/job/${firstJobId}`);
+          const resultData = await resultResponse.json();
+          setResult(resultData);
+          setJobId(firstJobId);
+        }
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      } else if (data.overall_status === 'failed' && data.completed === 0) {
+        setError('All files failed to transcribe');
+        setIsTranscribing(false);
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      }
+    } catch (err) {
+      console.error('Error polling batch status:', err);
+    }
+  }, []);
+
+  // Start batch transcription for multiple files
+  const startBatchTranscription = async () => {
+    setError(null);
+    setResult(null);
+    setIsTranscribing(true);
+    setProgress(0);
+    setProgressMessage('Uploading files...');
+
+    try {
+      const formData = new FormData();
+      files.forEach(f => formData.append('files', f));
+
+      const params = new URLSearchParams({
+        language,
+        enable_diarization: enableDiarization,
+        model_size: modelSize,
+        word_timestamps: wordTimestamps,
+        translate_to_english: translateToEnglish,
+      });
+      if (numSpeakers) params.append('num_speakers', numSpeakers);
+
+      const response = await fetch(`${API_URL}/transcribe/batch?${params}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Batch transcription request failed');
+      }
+
+      const data = await response.json();
+      setBatchJobIds(data.job_ids);
+
+      // Initialize progress tracking
+      setBatchProgress(data.job_ids.map(id => ({ job_id: id, progress: 0, status: 'pending' })));
+
+      // Start polling batch status
+      const batchId = data.batch_id;
+      pollIntervalRef.current = setInterval(() => {
+        pollBatchStatus(batchId);
+      }, 2000);
+      pollBatchStatus(batchId);
+
+    } catch (err) {
+      setError(err.message || 'Failed to start batch transcription');
+      setIsTranscribing(false);
+    }
+  };
+
   // Start transcription
   const startTranscription = async () => {
+    // Use batch transcription for multiple files
+    if (files.length > 1) {
+      return startBatchTranscription();
+    }
     setError(null);
     setResult(null);
     setIsTranscribing(true);
@@ -302,7 +443,11 @@ function App() {
         language,
         enable_diarization: enableDiarization,
         enable_noise_reduction: enableNoiseReduction,
+        model_size: modelSize,
+        word_timestamps: wordTimestamps,
+        translate_to_english: translateToEnglish,
       });
+      if (numSpeakers) params.append('num_speakers', numSpeakers);
 
       if (inputMode === InputMode.FILE && file) {
         const formData = new FormData();
@@ -323,6 +468,7 @@ function App() {
             language,
             enable_diarization: enableDiarization,
             enable_noise_reduction: enableNoiseReduction,
+            translate_to_english: translateToEnglish,
           }),
         });
       } else {
@@ -572,6 +718,8 @@ function App() {
     setSearchQuery('');
     setReplaceText('');
     setSearchResults([]);
+    setNumSpeakers('');
+    setTranslateToEnglish(false);
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
       setAudioUrl(null);
@@ -583,7 +731,7 @@ function App() {
     }
   };
 
-  const canStart = (inputMode === InputMode.FILE && file) ||
+  const canStart = (inputMode === InputMode.FILE && (file || files.length > 0)) ||
                    (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
 
   // Get unique speakers from result
@@ -601,9 +749,6 @@ function App() {
               Whisper Transcription
             </h1>
           </div>
-          <p className="text-slate-400 text-lg">
-            High-quality transcription with speaker recognition
-          </p>
         </header>
 
         {/* Input Section */}
@@ -654,6 +799,7 @@ function App() {
                 type="file"
                 accept="audio/*,video/*,.mp3,.wav,.mp4,.mkv,.avi,.webm,.m4a,.flac,.ogg"
                 onChange={handleFileSelect}
+                multiple
                 className="hidden"
               />
 
@@ -670,6 +816,45 @@ function App() {
                   >
                     <X className="w-4 h-4" />
                   </button>
+                </div>
+              ) : files.length > 0 ? (
+                <div className="text-left" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Files className="w-5 h-5 text-green-400" />
+                      <span className="font-medium">{files.length} files selected</span>
+                    </div>
+                    <button
+                      onClick={clearSelection}
+                      className="p-1 rounded-full hover:bg-slate-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-2">
+                    {files.map((f, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-slate-700 rounded p-2">
+                        <span className="text-sm truncate flex-1">{f.name}</span>
+                        <button
+                          onClick={() => {
+                            const newFiles = files.filter((_, i) => i !== idx);
+                            if (newFiles.length === 1) {
+                              setFile(newFiles[0]);
+                              setFiles([]);
+                              setAudioUrl(URL.createObjectURL(newFiles[0]));
+                            } else if (newFiles.length === 0) {
+                              clearSelection();
+                            } else {
+                              setFiles(newFiles);
+                            }
+                          }}
+                          className="ml-2 p-1 rounded hover:bg-slate-600"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <>
@@ -711,7 +896,26 @@ function App() {
           )}
 
           {/* Settings */}
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Model Size Selection */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <FileAudio className="w-4 h-4" />
+                Model Size
+              </label>
+              <select
+                value={modelSize}
+                onChange={(e) => setModelSize(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-400"
+              >
+                {Object.entries(MODEL_SIZES).map(([id, { label, description }]) => (
+                  <option key={id} value={id}>
+                    {label} - {description}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Language Selection */}
             <div>
               <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
@@ -720,7 +924,13 @@ function App() {
               </label>
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => {
+                  setLanguage(e.target.value);
+                  // Reset translation toggle when switching to English
+                  if (e.target.value === 'en') {
+                    setTranslateToEnglish(false);
+                  }
+                }}
                 className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-400"
               >
                 {Object.entries(LANGUAGES).map(([code, name]) => (
@@ -730,6 +940,27 @@ function App() {
                 ))}
               </select>
             </div>
+
+            {/* Translate to English Toggle (only shown when source is not English) */}
+            {language !== 'en' && (
+              <div>
+                <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                  <Globe className="w-4 h-4" />
+                  Translate to English
+                </label>
+                <button
+                  onClick={() => setTranslateToEnglish(!translateToEnglish)}
+                  className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                    translateToEnglish
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-slate-700 text-slate-300 border border-slate-600'
+                  }`}
+                >
+                  <Globe className="w-4 h-4" />
+                  {translateToEnglish ? 'Yes - Output in English' : 'No - Keep Original'}
+                </button>
+              </div>
+            )}
 
             {/* Speaker Diarization Toggle */}
             <div>
@@ -747,6 +978,48 @@ function App() {
               >
                 <Users className="w-4 h-4" />
                 {enableDiarization ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+
+            {/* Number of Speakers (shown when diarization enabled) */}
+            {enableDiarization && (
+              <div>
+                <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                  <Users className="w-4 h-4" />
+                  Number of Speakers
+                </label>
+                <select
+                  value={numSpeakers}
+                  onChange={(e) => setNumSpeakers(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-400"
+                >
+                  <option value="">Auto-detect</option>
+                  <option value="1">1 speaker</option>
+                  <option value="2">2 speakers</option>
+                  <option value="3">3 speakers</option>
+                  <option value="4">4 speakers</option>
+                  <option value="5">5 speakers</option>
+                  <option value="6">6+ speakers</option>
+                </select>
+              </div>
+            )}
+
+            {/* Word Timestamps Toggle */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <Clock className="w-4 h-4" />
+                Word Timestamps
+              </label>
+              <button
+                onClick={() => setWordTimestamps(!wordTimestamps)}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  wordTimestamps
+                    ? 'bg-purple-500 text-white'
+                    : 'bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                {wordTimestamps ? 'Enabled (slower)' : 'Disabled (faster)'}
               </button>
             </div>
 
@@ -807,6 +1080,28 @@ function App() {
             <p className="text-sm text-slate-400 mt-2">
               Quality-focused transcription may take a few minutes
             </p>
+            {/* Batch file progress */}
+            {batchProgress.length > 1 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs text-slate-500 uppercase tracking-wider">Individual files:</p>
+                {batchProgress.map((job, idx) => (
+                  <div key={job.job_id} className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 w-6">{idx + 1}.</span>
+                    <div className="flex-1 bg-slate-600 rounded-full h-2">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                          job.status === 'completed' ? 'bg-green-500' :
+                          job.status === 'failed' ? 'bg-red-500' :
+                          'bg-blue-500'
+                        }`}
+                        style={{ width: `${job.progress}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400 w-12">{job.progress}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1177,8 +1472,8 @@ function App() {
 
         {/* Footer */}
         <footer className="text-center mt-12 text-slate-500 text-sm">
-          <p>Powered by OpenAI Whisper Large-V3 with speaker diarization</p>
-          <p className="mt-1">Optimized for Apple Silicon</p>
+          <p>Powered by MLX-Whisper with GPU acceleration</p>
+          <p className="mt-1">Optimized for Apple Silicon (M1/M2/M3)</p>
         </footer>
       </div>
     </div>

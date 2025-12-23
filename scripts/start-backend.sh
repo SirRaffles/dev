@@ -43,10 +43,24 @@ if [ -z "$HF_TOKEN" ]; then
     fi
 fi
 
+# Use Python 3.11 for best compatibility with ML packages
+PYTHON_CMD=""
+for py in python3.11 python3.12 python3; do
+    if command -v $py &> /dev/null; then
+        PYTHON_CMD=$py
+        break
+    fi
+done
+
+if [ -z "$PYTHON_CMD" ]; then
+    echo -e "${RED}Error: Python 3.11+ is required${NC}"
+    exit 1
+fi
+
 # Check for Python virtual environment
 if [ ! -d "$VENV_DIR" ]; then
-    echo -e "${YELLOW}Creating Python virtual environment...${NC}"
-    python3 -m venv "$VENV_DIR"
+    echo -e "${YELLOW}Creating Python virtual environment with $PYTHON_CMD...${NC}"
+    $PYTHON_CMD -m venv "$VENV_DIR"
 fi
 
 # Activate virtual environment
