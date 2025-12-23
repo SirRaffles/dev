@@ -1,27 +1,20 @@
 {
-  "name": "exit-readiness-assessment",
-  "version": "0.1.0",
+  "name": "whisper-transcription-app",
+  "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
     "lucide-react": "^0.446.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-scripts": "^3.0.1",
-    "web-vitals": "^2.1.4"
+    "react-scripts": "^5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "build": "react-scripts build"
   },
   "eslintConfig": {
     "extends": [
-      "react-app",
-      "react-app/jest"
+      "react-app"
     ]
   },
   "browserslist": {
@@ -38,13 +31,7 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.20",
-    "electron": "^32.1.2",
-    "electron-builder": "^25.0.5",
-    "gh-pages": "^6.1.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13"
-  },
-  "engines": {
-    "node": "14"
   }
 }

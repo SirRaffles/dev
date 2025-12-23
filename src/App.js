@@ -1,610 +1,1188 @@
-import React, { useState, useMemo } from 'react';
-import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { Upload, Link, FileAudio, Clock, Globe, Loader2, CheckCircle, AlertCircle, Copy, Check, Download, X, Users, Languages, FileText, FileType, Play, Pause, SkipBack, SkipForward, Edit2, Save, Search, Replace, Volume2, VolumeX, Files, Edit3 } from 'lucide-react';
 
-const questions = [
-  // Financial Performance
-  {
-    id: 1,
-    category: "Financial Performance",
-    tagline: "Consistent Growth",
-    text: "How many years of consistent revenue growth does your company have?",
-    options: ["0-1 year", "2-3 years", "4-5 years", "6+ years"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 2,
-    category: "Financial Performance",
-    tagline: "Recurring Revenue",
-    text: "What percentage of your revenue is recurring?",
-    options: ["0-20%", "21-40%", "41-60%", "61-80%", "81-90%", ">90%"],
-    scores: [0, 1, 2, 3, 4, 5],
-  },
-  {
-    id: 3,
-    category: "Financial Performance",
-    tagline: "Revenue Scale",
-    text: "What's your company's annual revenue?",
-    options: ["<$5 million", "$5-20 million", "$20-50 million", "$50-100 million", ">$100 million"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 4,
-    category: "Financial Performance",
-    tagline: "Profitability",
-    text: "What's your company's EBITDA margin?",
-    options: ["<5%", "5-10%", "11-20%", "21-30%", ">30%"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 5,
-    category: "Financial Performance",
-    tagline: "Rule of 40",
-    text: "How well does your company meet the 'Rule of 40' (sum of revenue growth % and EBITDA margin %)?",
-    options: ["<20%", "20-30%", "31-40%", ">40%"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 6,
-    category: "Financial Performance",
-    tagline: "Cash Flow Management",
-    text: "How would you rate your company's cash flow management?",
-    options: ["Poor", "Adequate", "Good", "Excellent"],
-    scores: [0, 1, 2, 3],
-  },
-  
-  // Market Position
-  {
-    id: 7,
-    category: "Market Position",
-    tagline: "Client Diversification",
-    text: "How diversified is your client base?",
-    options: ["Single client", "2-5 major clients", "6-10 major clients", "Well diversified"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 8,
-    category: "Market Position",
-    tagline: "Market Share",
-    text: "What's your company's market share in its primary market?",
-    options: ["<5%", "5-10%", "11-20%", "21-30%", ">30%"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 9,
-    category: "Market Position",
-    tagline: "Brand Recognition",
-    text: "How would you rate your company's brand recognition?",
-    options: ["Unknown", "Some recognition", "Well-known in niche", "Industry leader"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 10,
-    category: "Market Position",
-    tagline: "Barriers to Entry",
-    text: "How strong are the barriers to entry in your market segment?",
-    options: ["Low", "Moderate", "High", "Very High"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 11,
-    category: "Market Position",
-    tagline: "Client Retention",
-    text: "What is your client retention rate?",
-    options: ["<70%", "70-80%", "81-90%", ">90%"],
-    scores: [0, 1, 2, 3],
-  },
-  
-  // Operations and Efficiency
-  {
-    id: 12,
-    category: "Operations and Efficiency",
-    tagline: "Process Documentation",
-    text: "How well-documented are your company's processes and procedures?",
-    options: ["Not documented", "Partially documented", "Mostly documented", "Fully documented and regularly updated"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 13,
-    category: "Operations and Efficiency",
-    tagline: "Technology Infrastructure",
-    text: "How would you rate your company's technology infrastructure?",
-    options: ["Outdated", "Functional but needs upgrading", "Modern and adequate", "Cutting-edge"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 14,
-    category: "Operations and Efficiency",
-    tagline: "Financial Reporting",
-    text: "How effective is your company's financial reporting and controls?",
-    options: ["Basic bookkeeping", "Regular unaudited financials", "Annual audited financials", "Quarterly audited financials with strong controls"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 15,
-    category: "Operations and Efficiency",
-    tagline: "Operational Efficiency",
-    text: "How would you rate your company's operational efficiency?",
-    options: ["Poor", "Average", "Good", "Excellent", "Best-in-class"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 16,
-    category: "Operations and Efficiency",
-    tagline: "IP Management",
-    text: "How well does your company manage and protect its intellectual property?",
-    options: ["No formal IP management", "Basic IP protection", "Comprehensive IP strategy", "Industry-leading IP management"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 17,
-    category: "Operations and Efficiency",
-    tagline: "Delivery Model",
-    text: "How efficient is your company's delivery model?",
-    options: ["Inefficient", "Somewhat efficient", "Efficient", "Highly optimized"],
-    scores: [0, 1, 2, 3],
-  },
-  
-  // Management and Governance
-  {
-    id: 18,
-    category: "Management and Governance",
-    tagline: "Management Stability",
-    text: "How stable is your management team?",
-    options: ["High turnover", "Some key positions unstable", "Mostly stable", "Very stable with succession plans"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 19,
-    category: "Management and Governance",
-    tagline: "Corporate Governance",
-    text: "How would you describe your company's corporate governance practices?",
-    options: ["Minimal", "Basic compliance", "Well-developed", "Best practice governance"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 20,
-    category: "Management and Governance",
-    tagline: "Risk Management",
-    text: "How effective is your company's risk management strategy?",
-    options: ["No formal strategy", "Basic risk awareness", "Comprehensive strategy", "Industry-leading risk management"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 21,
-    category: "Management and Governance",
-    tagline: "Talent Management",
-    text: "How would you rate your company's ability to attract and retain top talent?",
-    options: ["Struggling", "Average", "Above average", "Industry leader in talent acquisition"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 22,
-    category: "Management and Governance",
-    tagline: "Equity Participation",
-    text: "How widespread is equity participation among key employees?",
-    options: ["Limited to founders", "Some key employees", "Most key employees", "Broad-based equity participation"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 23,
-    category: "Management and Governance",
-    tagline: "Leadership Team Completeness",
-    text: "How complete is your leadership team in terms of key roles?",
-    options: ["Several key roles missing", "Some gaps", "Most roles filled", "Fully staffed with experienced leaders"],
-    scores: [0, 1, 2, 3],
-  },
-  
-  // Innovation and Growth
-  {
-    id: 24,
-    category: "Innovation and Growth",
-    tagline: "Product/Service Maturity",
-    text: "How mature is your product/service offering?",
-    options: ["In development", "Early stage", "Established", "Market-leading", "Disruptive"],
-    scores: [0, 1, 2, 3, 4],
-  },
-  {
-    id: 25,
-    category: "Innovation and Growth",
-    tagline: "Growth Rate",
-    text: "How would you describe your company's growth rate compared to the industry average?",
-    options: ["Below average", "Average", "Above average", "Far exceeds average"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 26,
-    category: "Innovation and Growth",
-    tagline: "Innovation Pipeline",
-    text: "How would you rate your company's innovation pipeline?",
-    options: ["No formal innovation process", "Some innovation efforts", "Strong innovation pipeline", "Disruptive innovator in the industry"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 27,
-    category: "Innovation and Growth",
-    tagline: "Scalability",
-    text: "How scalable is your business model?",
-    options: ["Not scalable", "Scalable with significant investment", "Moderately scalable", "Highly scalable"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 28,
-    category: "Innovation and Growth",
-    tagline: "Competitive Advantage",
-    text: "How strong is your company's competitive advantage?",
-    options: ["No clear advantage", "Some advantages", "Strong in niche", "Dominant market position"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 29,
-    category: "Innovation and Growth",
-    tagline: "Market Expansion",
-    text: "How actively is your company pursuing market expansion?",
-    options: ["No expansion plans", "Considering expansion", "Active expansion in progress", "Successfully expanded to multiple markets"],
-    scores: [0, 1, 2, 3],
-  },
-  
-  // Exit Preparedness
-  {
-    id: 30,
-    category: "Exit Preparedness",
-    tagline: "Long-term Planning",
-    text: "How well-defined is your company's long-term development plan?",
-    options: ["No plan", "Basic plan", "Detailed plan", "Comprehensive plan with regular updates"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 31,
-    category: "Exit Preparedness",
-    tagline: "M&A Process Readiness",
-    text: "How well-prepared is your company to handle potential disruptions during the M&A process?",
-    options: ["Not prepared", "Somewhat prepared", "Well-prepared", "Fully prepared with contingency plans"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 32,
-    category: "Exit Preparedness",
-    tagline: "Shareholder Alignment",
-    text: "How aligned are your shareholders on the exit strategy and timeline?",
-    options: ["Not aligned", "Partially aligned", "Mostly aligned", "Fully aligned"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 33,
-    category: "Exit Preparedness",
-    tagline: "Due Diligence Readiness",
-    text: "How prepared is your management team for due diligence?",
-    options: ["Unprepared", "Somewhat prepared", "Well-prepared", "Fully prepared with organized documentation"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 34,
-    category: "Exit Preparedness",
-    tagline: "Exit Strategy",
-    text: "How well-developed is your company's exit strategy?",
-    options: ["No strategy", "Basic considerations", "Developed strategy", "Comprehensive strategy with multiple scenarios"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 35,
-    category: "Exit Preparedness",
-    tagline: "Value Creation Plan",
-    text: "How well-developed is your company's value creation plan?",
-    options: ["No plan", "Basic plan", "Detailed plan", "Comprehensive plan with regular updates"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 36,
-    category: "Exit Preparedness",
-    tagline: "Buyer Landscape Understanding",
-    text: "How well do you understand the potential buyer landscape for your company?",
-    options: ["Limited understanding", "Some knowledge", "Good understanding", "Comprehensive knowledge of potential buyers"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 37,
-    category: "Exit Preparedness",
-    tagline: "Equity Story",
-    text: "How well-developed is your company's equity story for potential investors?",
-    options: ["Not developed", "Basic story", "Well-developed story", "Compelling, data-driven equity story"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 38,
-    category: "Exit Preparedness",
-    tagline: "Transaction Experience",
-    text: "How much M&A or capital raising experience does your management team have?",
-    options: ["No experience", "Limited experience", "Some experience", "Extensive experience"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 39,
-    category: "Exit Preparedness",
-    tagline: "Exit Timing",
-    text: "How well-timed is your potential exit considering market conditions and company performance?",
-    options: ["Poor timing", "Neutral timing", "Good timing", "Optimal timing"],
-    scores: [0, 1, 2, 3],
-  },
-  {
-    id: 40,
-    category: "Exit Preparedness",
-    tagline: "Post-Exit Planning",
-    text: "How well-defined are your plans for the business and key employees post-exit?",
-    options: ["No plans", "Basic considerations", "Detailed plans", "Comprehensive transition and retention strategy"],
-    scores: [0, 1, 2, 3],
-  },
-];
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-const detailedRecommendations = {
-  "Optimize financial performance": {
-    title: "Optimizing Financial Performance",
-    steps: [
-      "Focus on increasing recurring revenue streams",
-      "Implement strategies to improve EBITDA margins",
-      "Develop a plan to consistently meet or exceed the Rule of 40",
-      "Establish robust financial forecasting and reporting processes",
-      "Consider implementing a robust financial forecasting model"
-    ]
-  },
-  "Strengthen market position": {
-    title: "Strengthening Market Position",
-    steps: [
-      "Develop strategies to diversify your client base",
-      "Invest in marketing to increase brand recognition",
-      "Identify opportunities to increase market share",
-      "Develop and communicate a clear, compelling value proposition",
-      "Consider strategic partnerships or acquisitions to expand market presence"
-    ]
-  },
-  "Enhance operational efficiency": {
-    title: "Enhancing Operational Efficiency",
-    steps: [
-      "Document and standardize key business processes",
-      "Invest in upgrading technology infrastructure",
-      "Implement robust financial controls and reporting systems",
-      "Develop KPIs to measure and improve operational efficiency",
-      "Consider adopting lean or agile methodologies to streamline operations"
-    ]
-  },
-  "Improve management and governance": {
-    title: "Improving Management and Governance",
-    steps: [
-      "Develop succession plans for key management positions",
-      "Implement best practice corporate governance structures",
-      "Establish a comprehensive risk management framework",
-      "Invest in talent acquisition and retention strategies",
-      "Consider bringing in experienced board members or advisors"
-    ]
-  },
-  "Accelerate innovation and growth": {
-    title: "Accelerating Innovation and Growth",
-    steps: [
-      "Establish a formal innovation program or R&D department",
-      "Develop strategies to outpace industry growth rates",
-      "Invest in product/service development to maintain market leadership",
-      "Identify opportunities to increase business model scalability",
-      "Consider partnerships or acquisitions to access new technologies or markets"
-    ]
-  },
-  "Prepare for exit": {
-    title: "Preparing for Exit",
-    steps: [
-      "Develop a comprehensive long-term strategic plan",
-      "Prepare for potential disruptions during the M&A process",
-      "Align shareholders on exit strategy and expectations",
-      "Prepare comprehensive documentation for due diligence",
-      "Develop multiple exit scenarios and strategies"
-    ]
-  },
+// Supported languages
+const LANGUAGES = {
+  auto: 'Auto-detect',
+  en: 'English',
+  fr: 'French',
 };
 
-const ProgressBar = ({ current, total }) => (
-  <div className="mb-4 bg-blue-100 rounded p-2">
-    <div className="flex items-center">
-      <div className="flex-grow bg-blue-200 rounded-full h-2">
-        <div
-          className="bg-blue-600 rounded-full h-2"
-          style={{ width: `${((current + 1) / total) * 100}%` }}
-        ></div>
-      </div>
-      <span className="ml-2 text-sm text-blue-800">
-        {current + 1} / {total}
-      </span>
-    </div>
-  </div>
-);
-
-const Question = ({ question, onAnswer }) => (
-  <div className="mb-4">
-    <p className="font-semibold text-gray-900">{question.tagline}: {question.text}</p>
-    <div className="flex flex-col space-y-2 mt-2">
-      {question.options.map((option, index) => (
-        <button
-          key={index}
-          onClick={() => onAnswer(question.id, question.scores[index])}
-          className="px-3 py-2 rounded bg-gray-300 text-gray-800 hover:bg-blue-600 hover:text-white transition-colors"
-        >
-          {option}
-        </button>
-      ))}
-    </div>
-  </div>
-);
-
-const RecommendationDetail = ({ recommendation }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const detail = detailedRecommendations[recommendation];
-
-  return (
-    <div className="mt-2">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between w-full px-4 py-2 text-left text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
-      >
-        <span>{recommendation}</span>
-        {isOpen ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-      </button>
-      {isOpen && detail && (
-        <div className="p-4 mt-2 bg-white rounded shadow">
-          <h4 className="font-semibold mb-2">{detail.title}</h4>
-          <ul className="list-disc pl-5">
-            {detail.steps.map((step, index) => (
-              <li key={index} className="mb-1">{step}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
+// Export formats
+const EXPORT_FORMATS = {
+  txt: { label: 'Plain Text', ext: '.txt', icon: FileText },
+  md: { label: 'Markdown', ext: '.md', icon: FileType },
+  srt: { label: 'SRT Subtitles', ext: '.srt', icon: FileText },
+  pdf: { label: 'PDF Document', ext: '.pdf', icon: FileType },
+  docx: { label: 'Word Document', ext: '.docx', icon: FileType },
 };
 
-const ExitReadinessAssessment = () => {
-  const [answers, setAnswers] = useState({});
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [showResults, setShowResults] = useState(false);
-  const [showEquiteqAdvice, setShowEquiteqAdvice] = useState(false);
+// Format timestamp for display
+const formatTime = (seconds) => {
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 100);
 
-  const handleAnswer = (questionId, score) => {
-    setAnswers({ ...answers, [questionId]: score });
-    if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+};
+
+// Input mode tabs
+const InputMode = {
+  FILE: 'file',
+  YOUTUBE: 'youtube',
+};
+
+function App() {
+  const [inputMode, setInputMode] = useState(InputMode.FILE);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [file, setFile] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [jobId, setJobId] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [showTimestamps, setShowTimestamps] = useState(true);
+  const [showSpeakers, setShowSpeakers] = useState(true);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Settings
+  const [language, setLanguage] = useState('auto');
+  const [enableDiarization, setEnableDiarization] = useState(true);
+  const [enableNoiseReduction, setEnableNoiseReduction] = useState(false);
+
+  // Batch upload
+  const [files, setFiles] = useState([]);
+  const [batchJobIds, setBatchJobIds] = useState([]);
+  const [batchProgress, setBatchProgress] = useState([]);
+
+  // Speaker renaming
+  const [speakerNames, setSpeakerNames] = useState({});
+  const [editingSpeaker, setEditingSpeaker] = useState(null);
+  const [tempSpeakerName, setTempSpeakerName] = useState('');
+
+  // Search & replace
+  const [showSearchPanel, setShowSearchPanel] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+
+  // Audio player state
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  // Editing state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedSegments, setEditedSegments] = useState({});
+
+  const fileInputRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+  const exportMenuRef = useRef(null);
+  const audioRef = useRef(null);
+  const segmentRefs = useRef({});
+
+  // Close export menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Cleanup polling and audio URL on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
+      }
+    };
+  }, [audioUrl]);
+
+  // Audio time update handler
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+    };
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [audioRef.current]);
+
+  // Auto-scroll to current segment
+  useEffect(() => {
+    if (!result?.segments || !currentTime) return;
+
+    const currentSegment = result.segments.findIndex(
+      segment => currentTime >= segment.start && currentTime <= segment.end
+    );
+
+    if (currentSegment >= 0 && segmentRefs.current[currentSegment]) {
+      segmentRefs.current[currentSegment].scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }
+  }, [currentTime, result]);
+
+  // Poll for job status
+  const pollJobStatus = useCallback(async (id) => {
+    try {
+      const response = await fetch(`${API_URL}/job/${id}`);
+      const data = await response.json();
+
+      setProgress(data.progress || 0);
+      setProgressMessage(data.progress_message || '');
+
+      if (data.status === 'completed') {
+        setResult(data);
+        setIsTranscribing(false);
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      } else if (data.status === 'failed') {
+        setError(data.error || 'Transcription failed');
+        setIsTranscribing(false);
+        setJobId(null);
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      }
+    } catch (err) {
+      console.error('Error polling job status:', err);
+    }
+  }, []);
+
+  // Start polling when job is created
+  useEffect(() => {
+    if (jobId && isTranscribing) {
+      pollIntervalRef.current = setInterval(() => {
+        pollJobStatus(jobId);
+      }, 1000);
+
+      // Initial poll
+      pollJobStatus(jobId);
+    }
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [jobId, isTranscribing, pollJobStatus]);
+
+  // Handle file drop
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const droppedFile = e.dataTransfer.files[0];
+    if (droppedFile) {
+      setFile(droppedFile);
+      // Create audio URL for playback
+      const url = URL.createObjectURL(droppedFile);
+      setAudioUrl(url);
+      setError(null);
+      setResult(null);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  // Handle file selection
+  const handleFileSelect = useCallback((e) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      // Create audio URL for playback
+      const url = URL.createObjectURL(selectedFile);
+      setAudioUrl(url);
+      setError(null);
+      setResult(null);
+    }
+  }, []);
+
+  // Audio player controls
+  const togglePlayPause = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
     } else {
-      setShowResults(true);
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const skipBackward = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  };
+
+  const skipForward = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.min(duration, audio.currentTime + 5);
+  };
+
+  const seekToTime = (time) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    if (!isPlaying) {
+      audio.play();
+      setIsPlaying(true);
     }
   };
 
-  const { overallScore, categoryScores } = useMemo(() => {
-    const categories = [...new Set(questions.map(q => q.category))];
-    const categoryScores = categories.reduce((acc, category) => {
-      const categoryQuestions = questions.filter(q => q.category === category);
-      const totalScore = categoryQuestions.reduce((sum, q) => sum + (answers[q.id] || 0), 0);
-      const maxScore = categoryQuestions.reduce((sum, q) => sum + Math.max(...q.scores), 0);
-      acc[category] = (totalScore / maxScore) * 100;
-      return acc;
-    }, {});
-
-    const overallScore = Object.values(categoryScores).reduce((sum, score) => sum + score, 0) / categories.length;
-
-    return { overallScore, categoryScores };
-  }, [answers]);
-
-  const getRecommendations = () => {
-    const recommendations = [];
-    if (categoryScores['Financial Performance'] <= 70) recommendations.push("Optimize financial performance");
-    if (categoryScores['Market Position'] <= 70) recommendations.push("Strengthen market position");
-    if (categoryScores['Operations and Efficiency'] <= 70) recommendations.push("Enhance operational efficiency");
-    if (categoryScores['Management and Governance'] <= 70) recommendations.push("Improve management and governance");
-    if (categoryScores['Innovation and Growth'] <= 70) recommendations.push("Accelerate innovation and growth");
-    if (categoryScores['Exit Preparedness'] <= 70) recommendations.push("Prepare for exit");
-    return recommendations;
+  // Get current playing segment
+  const getCurrentSegmentIndex = () => {
+    if (!result?.segments) return -1;
+    return result.segments.findIndex(
+      segment => currentTime >= segment.start && currentTime <= segment.end
+    );
   };
 
-  const handleRetake = () => {
-    setAnswers({});
-    setCurrentQuestion(0);
-    setShowResults(false);
-    setShowEquiteqAdvice(false);
+  // Start transcription
+  const startTranscription = async () => {
+    setError(null);
+    setResult(null);
+    setIsTranscribing(true);
+    setProgress(0);
+    setProgressMessage('Starting...');
+
+    try {
+      let response;
+      const params = new URLSearchParams({
+        language,
+        enable_diarization: enableDiarization,
+        enable_noise_reduction: enableNoiseReduction,
+      });
+
+      if (inputMode === InputMode.FILE && file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        response = await fetch(`${API_URL}/transcribe/file?${params}`, {
+          method: 'POST',
+          body: formData,
+        });
+      } else if (inputMode === InputMode.YOUTUBE && youtubeUrl) {
+        response = await fetch(`${API_URL}/transcribe/youtube?${params}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            url: youtubeUrl,
+            language,
+            enable_diarization: enableDiarization,
+            enable_noise_reduction: enableNoiseReduction,
+          }),
+        });
+      } else {
+        throw new Error('Please select a file or enter a YouTube URL');
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Transcription request failed');
+      }
+
+      const data = await response.json();
+      setJobId(data.job_id);
+
+    } catch (err) {
+      setError(err.message || 'Failed to start transcription');
+      setIsTranscribing(false);
+    }
   };
 
-  const handleEquiteqAdvice = () => {
-    setShowEquiteqAdvice(true);
+  // Handle editing
+  const handleEditSegment = (index, newText) => {
+    setEditedSegments(prev => ({
+      ...prev,
+      [index]: newText
+    }));
   };
+
+  const saveEdits = async () => {
+    if (!jobId || Object.keys(editedSegments).length === 0) {
+      setIsEditing(false);
+      return;
+    }
+
+    try {
+      // Prepare segments with edits
+      const updatedSegments = result.segments.map((segment, index) => ({
+        ...segment,
+        text: editedSegments[index] !== undefined ? editedSegments[index] : segment.text
+      }));
+
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save edits');
+      }
+
+      // Update result with edited segments
+      setResult(prev => ({
+        ...prev,
+        segments: updatedSegments
+      }));
+
+      setIsEditing(false);
+      setEditedSegments({});
+    } catch (err) {
+      console.error('Save error:', err);
+      setError('Failed to save edits');
+    }
+  };
+
+  // Speaker renaming functions
+  const startEditingSpeaker = (speaker) => {
+    setEditingSpeaker(speaker);
+    setTempSpeakerName(speakerNames[speaker] || speaker);
+  };
+
+  const cancelEditingSpeaker = () => {
+    setEditingSpeaker(null);
+    setTempSpeakerName('');
+  };
+
+  const saveSpeakerName = async () => {
+    if (!editingSpeaker || !tempSpeakerName.trim() || !jobId) return;
+
+    try {
+      const mapping = { [editingSpeaker]: tempSpeakerName.trim() };
+      const response = await fetch(`${API_URL}/job/${jobId}/speakers`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speaker_mapping: mapping }),
+      });
+
+      if (!response.ok) throw new Error('Failed to rename speaker');
+
+      const data = await response.json();
+      setSpeakerNames(prev => ({ ...prev, [editingSpeaker]: tempSpeakerName.trim() }));
+      setResult(prev => ({ ...prev, segments: data.segments, speakers: data.speakers }));
+      cancelEditingSpeaker();
+    } catch (err) {
+      console.error('Rename error:', err);
+      setError('Failed to rename speaker');
+    }
+  };
+
+  // Search functions
+  const performSearch = () => {
+    if (!result?.segments || !searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const matches = [];
+    const query = searchQuery.toLowerCase();
+    result.segments.forEach((segment, index) => {
+      if (segment.text.toLowerCase().includes(query)) {
+        matches.push(index);
+      }
+    });
+    setSearchResults(matches);
+  };
+
+  const replaceInSegment = async (index) => {
+    if (!searchQuery || !result?.segments) return;
+
+    const segment = result.segments[index];
+    const newText = segment.text.replace(new RegExp(searchQuery, 'gi'), replaceText);
+
+    setEditedSegments(prev => ({ ...prev, [index]: newText }));
+
+    // Save immediately
+    const updatedSegments = result.segments.map((seg, i) => ({
+      ...seg,
+      text: i === index ? newText : (editedSegments[i] !== undefined ? editedSegments[i] : seg.text)
+    }));
+
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) throw new Error('Failed to save');
+
+      setResult(prev => ({ ...prev, segments: updatedSegments }));
+      performSearch(); // Refresh search results
+    } catch (err) {
+      console.error('Replace error:', err);
+    }
+  };
+
+  const replaceAll = async () => {
+    if (!searchQuery || !result?.segments) return;
+
+    const updatedSegments = result.segments.map((segment, index) => ({
+      ...segment,
+      text: segment.text.replace(new RegExp(searchQuery, 'gi'), replaceText)
+    }));
+
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: updatedSegments }),
+      });
+
+      if (!response.ok) throw new Error('Failed to save');
+
+      setResult(prev => ({ ...prev, segments: updatedSegments }));
+      setSearchResults([]);
+      setSearchQuery('');
+      setReplaceText('');
+    } catch (err) {
+      console.error('Replace all error:', err);
+      setError('Failed to replace text');
+    }
+  };
+
+  // Highlight matching text
+  const highlightText = (text, index) => {
+    if (!searchQuery || !searchResults.includes(index)) return text;
+
+    const regex = new RegExp(`(${searchQuery})`, 'gi');
+    const parts = text.split(regex);
+
+    return parts.map((part, i) =>
+      regex.test(part) ? <mark key={i} className="bg-yellow-400 text-black px-0.5 rounded">{part}</mark> : part
+    );
+  };
+
+  // Copy result to clipboard
+  const copyToClipboard = async () => {
+    if (!result?.result) return;
+
+    try {
+      await navigator.clipboard.writeText(result.result);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  // Download transcript in selected format
+  const downloadTranscript = async (format) => {
+    if (!jobId) return;
+
+    try {
+      const response = await fetch(`${API_URL}/job/${jobId}/export?format=${format}`);
+
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transcript${EXPORT_FORMATS[format].ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setShowExportMenu(false);
+    } catch (err) {
+      console.error('Export error:', err);
+      setError('Failed to export transcript');
+    }
+  };
+
+  // Clear current selection and start fresh
+  const clearSelection = () => {
+    setFile(null);
+    setFiles([]);
+    setYoutubeUrl('');
+    setResult(null);
+    setError(null);
+    setJobId(null);
+    setCopied(false);
+    setProgress(0);
+    setProgressMessage('');
+    setIsEditing(false);
+    setEditedSegments({});
+    setBatchJobIds([]);
+    setBatchProgress([]);
+    setSpeakerNames({});
+    setEditingSpeaker(null);
+    setTempSpeakerName('');
+    setShowSearchPanel(false);
+    setSearchQuery('');
+    setReplaceText('');
+    setSearchResults([]);
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    setIsPlaying(false);
+    setCurrentTime(0);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const canStart = (inputMode === InputMode.FILE && file) ||
+                   (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
+
+  // Get unique speakers from result
+  const speakers = result?.speakers || [];
+  const currentSegmentIndex = getCurrentSegmentIndex();
 
   return (
-    <div className="max-w-2xl mx-auto p-4 bg-gray-100 text-gray-900">
-      <h1 className="text-2xl font-bold mb-4">Exit Readiness Assessment</h1>
-      {!showResults ? (
-        <>
-          <ProgressBar current={currentQuestion} total={questions.length} />
-          <Question
-            question={questions[currentQuestion]}
-            onAnswer={handleAnswer}
-          />
-        </>
-      ) : (
-        <div>
-          <h2 className="text-xl font-semibold mb-2">
-            Your Overall Exit Readiness Score: {overallScore.toFixed(1)} / 100
-          </h2>
-          <p className="mb-4">
-            {overallScore <= 50 ? (
-              <><AlertCircle className="inline mr-2 text-red-600" /> You have significant work to do to prepare for an exit.</>
-            ) : overallScore <= 70 ? (
-              <><Info className="inline mr-2 text-yellow-600" /> You're on the right track, but there's room for improvement.</>
-            ) : overallScore <= 85 ? (
-              <><Info className="inline mr-2 text-blue-600" /> You're well-prepared, with some areas for fine-tuning.</>
-            ) : (
-              <><CheckCircle className="inline mr-2 text-green-600" /> You're exceptionally well-prepared for a potential exit!</>
-            )}
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        {/* Header */}
+        <header className="text-center mb-12">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <FileAudio className="w-10 h-10 text-blue-400" />
+            <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+              Whisper Transcription
+            </h1>
+          </div>
+          <p className="text-slate-400 text-lg">
+            High-quality transcription with speaker recognition
           </p>
-          
-          <div className="mt-4 mb-6">
-            <h3 className="text-lg font-semibold mb-2">Category Breakdown:</h3>
-            {Object.entries(categoryScores).map(([category, score]) => (
-              <div key={category} className="mb-2">
-                <div className="flex justify-between items-center mb-1">
-                  <h4 className="font-medium">{category}</h4>
-                  <span>{score.toFixed(1)} / 100</span>
+        </header>
+
+        {/* Input Section */}
+        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
+          {/* Mode Tabs */}
+          <div className="flex gap-2 mb-6">
+            <button
+              onClick={() => setInputMode(InputMode.FILE)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                inputMode === InputMode.FILE
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              <Upload className="w-4 h-4" />
+              Upload File
+            </button>
+            <button
+              onClick={() => setInputMode(InputMode.YOUTUBE)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                inputMode === InputMode.YOUTUBE
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              <Link className="w-4 h-4" />
+              YouTube URL
+            </button>
+          </div>
+
+          {/* File Upload */}
+          {inputMode === InputMode.FILE && (
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                isDragging
+                  ? 'border-blue-400 bg-blue-500/10'
+                  : file
+                  ? 'border-green-400 bg-green-500/10'
+                  : 'border-slate-600 hover:border-slate-500 hover:bg-slate-700/30'
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,video/*,.mp3,.wav,.mp4,.mkv,.avi,.webm,.m4a,.flac,.ogg"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+
+              {file ? (
+                <div className="flex items-center justify-center gap-3">
+                  <CheckCircle className="w-6 h-6 text-green-400" />
+                  <span className="text-lg">{file.name}</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearSelection();
+                    }}
+                    className="ml-2 p-1 rounded-full hover:bg-slate-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-                <div className="bg-gray-200 h-4 rounded-full">
+              ) : (
+                <>
+                  <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
+                  <p className="text-lg mb-2">
+                    Drag & drop your audio or video file here
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    Supports MP3, WAV, MP4, MKV, AVI, WebM, M4A, FLAC, OGG
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* YouTube URL Input */}
+          {inputMode === InputMode.YOUTUBE && (
+            <div className="relative">
+              <input
+                type="url"
+                value={youtubeUrl}
+                onChange={(e) => {
+                  setYoutubeUrl(e.target.value);
+                  setError(null);
+                  setResult(null);
+                }}
+                placeholder="https://www.youtube.com/watch?v=..."
+                className="w-full px-4 py-4 bg-slate-700 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+              />
+              {youtubeUrl && (
+                <button
+                  onClick={clearSelection}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Settings */}
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Language Selection */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <Languages className="w-4 h-4" />
+                Language
+              </label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-400"
+              >
+                {Object.entries(LANGUAGES).map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Speaker Diarization Toggle */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                <Users className="w-4 h-4" />
+                Speaker Recognition
+              </label>
+              <button
+                onClick={() => setEnableDiarization(!enableDiarization)}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  enableDiarization
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                {enableDiarization ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+
+            {/* Noise Reduction Toggle */}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                Noise Reduction
+              </label>
+              <button
+                onClick={() => setEnableNoiseReduction(!enableNoiseReduction)}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                  enableNoiseReduction
+                    ? 'bg-green-500 text-white'
+                    : 'bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                {enableNoiseReduction ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+          </div>
+
+          {/* Transcribe Button */}
+          <button
+            onClick={startTranscription}
+            disabled={!canStart || isTranscribing}
+            className={`w-full mt-6 py-4 rounded-xl font-semibold text-lg transition-all ${
+              canStart && !isTranscribing
+                ? 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
+                : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+            }`}
+          >
+            {isTranscribing ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Transcribing... {progress}%
+              </span>
+            ) : (
+              'Start Transcription'
+            )}
+          </button>
+        </div>
+
+        {/* Progress Bar */}
+        {isTranscribing && (
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
+            <div className="flex items-center gap-3 mb-4">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+              <span className="font-medium">{progressMessage || 'Processing your audio...'}</span>
+            </div>
+            <div className="w-full bg-slate-700 rounded-full h-3">
+              <div
+                className="bg-gradient-to-r from-blue-500 to-purple-500 h-3 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-sm text-slate-400 mt-2">
+              Quality-focused transcription may take a few minutes
+            </p>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/50 rounded-2xl p-6 mb-8">
+            <div className="flex items-center gap-3 text-red-400">
+              <AlertCircle className="w-5 h-5" />
+              <span className="font-medium">Error</span>
+            </div>
+            <p className="mt-2 text-red-300">{error}</p>
+          </div>
+        )}
+
+        {/* Results */}
+        {result && (
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+            {/* Hidden audio element */}
+            {audioUrl && (
+              <audio ref={audioRef} src={audioUrl} preload="metadata" />
+            )}
+
+            {/* Results Header */}
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle className="w-6 h-6 text-green-400" />
+                <h2 className="text-xl font-semibold">Transcription Complete</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                {isEditing ? (
+                  <button
+                    onClick={saveEdits}
+                    className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Edit
+                  </button>
+                )}
+                <button
+                  onClick={copyToClipboard}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                    copied ? 'bg-green-600 text-white' : 'bg-slate-700 hover:bg-slate-600'
+                  }`}
+                >
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copied ? 'Copied!' : 'Copy'}
+                </button>
+
+                {/* Export Dropdown */}
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    onClick={() => setShowExportMenu(!showExportMenu)}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Export
+                  </button>
+
+                  {showExportMenu && (
+                    <div className="absolute right-0 mt-2 w-48 bg-slate-700 rounded-lg shadow-xl border border-slate-600 py-2 z-10">
+                      {Object.entries(EXPORT_FORMATS).map(([format, { label, ext, icon: Icon }]) => (
+                        <button
+                          key={format}
+                          onClick={() => downloadTranscript(format)}
+                          className="w-full px-4 py-2 text-left hover:bg-slate-600 flex items-center gap-3 transition-colors"
+                        >
+                          <Icon className="w-4 h-4 text-slate-400" />
+                          <span>{label}</span>
+                          <span className="text-slate-500 text-sm ml-auto">{ext}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Audio Player */}
+            {audioUrl && (
+              <div className="mb-6 bg-slate-700/50 rounded-xl p-4">
+                <div className="flex items-center gap-4 mb-3">
+                  <button
+                    onClick={skipBackward}
+                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                  >
+                    <SkipBack className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={togglePlayPause}
+                    className="p-3 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                  >
+                    {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
+                  </button>
+                  <button
+                    onClick={skipForward}
+                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                  >
+                    <SkipForward className="w-5 h-5" />
+                  </button>
+                  <div className="flex items-center gap-3 text-sm font-mono">
+                    <span>{formatTime(currentTime)}</span>
+                    <span className="text-slate-400">/</span>
+                    <span className="text-slate-400">{formatTime(duration)}</span>
+                  </div>
+                </div>
+                <div className="relative h-2 bg-slate-600 rounded-full overflow-hidden cursor-pointer"
+                     onClick={(e) => {
+                       const rect = e.currentTarget.getBoundingClientRect();
+                       const x = e.clientX - rect.left;
+                       const percentage = x / rect.width;
+                       seekToTime(percentage * duration);
+                     }}>
                   <div
-                    className="bg-blue-600 h-4 rounded-full"
-                    style={{ width: `${score}%` }}
+                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all"
+                    style={{ width: `${(currentTime / duration) * 100}%` }}
                   />
                 </div>
               </div>
-            ))}
-          </div>
-          
-          <h3 className="text-lg font-semibold mb-2">Recommendations:</h3>
-          <div className="space-y-2">
-            {getRecommendations().map((rec, index) => (
-              <RecommendationDetail key={index} recommendation={rec} />
-            ))}
-          </div>
-          
-          <div className="mt-4 space-x-4">
-            <button
-              onClick={handleRetake}
-              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            >
-              Retake Assessment
-            </button>
-            {overallScore > 80 && (
-              <button
-                onClick={handleEquiteqAdvice}
-                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-              >
-                Get Equiteq Advice
-              </button>
             )}
-          </div>
-          
-          {showEquiteqAdvice && (
-            <div className="mt-4 p-4 bg-green-100 rounded">
-              <h3 className="text-lg font-semibold mb-2">Equiteq's Specialized Advice:</h3>
-              <p>
-                Congratulations on your high exit readiness score! As the leading M&A advisor for knowledge-based software and services firms, Equiteq is uniquely positioned to guide you through your exit journey. Our expertise can help you:
-              </p>
-              <ul className="list-disc pl-5 mt-2">
-                <li>Leverage our deep market knowledge of the Knowledge Economy to position your company effectively</li>
-                <li>Access our extensive network of active buyers and investors in your specific sector</li>
-                <li>Benefit from our industry-standard benchmarking studies to optimize your valuation</li>
-                <li>Develop a tailored exit strategy that aligns with current market trends and your business goals</li>
-                <li>Enhance your equity growth potential through our strategic advisory services</li>
-                <li>Prepare comprehensive documentation for due diligence, leveraging our technical transaction expertise</li>
-                <li>Navigate complex negotiations with potential acquirers, backed by our emotional intelligence and sector-specific experience</li>
-                <li>Gain valuable insights from our detailed market assessments and research reports</li>
-              </ul>
-              <p className="mt-2">
-                Contact Equiteq today to discuss how we can maximize the value of your knowledge-based business and guide you through a successful transaction in the dynamic Knowledge Economy landscape.
-              </p>
+
+            {/* Language & Speakers Info */}
+            <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg">
+              {result.language && (
+                <div className="flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-blue-400" />
+                  <span className="text-slate-300">Language:</span>
+                  <span className="font-medium">{LANGUAGES[result.language] || result.language.toUpperCase()}</span>
+                  {result.language_probability && (
+                    <span className="text-slate-400 text-sm">
+                      ({(result.language_probability * 100).toFixed(1)}%)
+                    </span>
+                  )}
+                </div>
+              )}
+              {speakers.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  <span className="text-slate-300">Speakers:</span>
+                  <span className="font-medium">{speakers.length}</span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+
+            {/* Speaker Renaming */}
+            {speakers.length > 0 && (
+              <div className="mb-6 p-4 bg-slate-700/30 rounded-xl">
+                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Edit3 className="w-4 h-4" />
+                  Rename Speakers
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {speakers.map((speaker) => (
+                    <div key={speaker} className="flex items-center gap-1">
+                      {editingSpeaker === speaker ? (
+                        <div className="flex items-center gap-1 bg-slate-600 rounded-lg px-2 py-1">
+                          <input
+                            type="text"
+                            value={tempSpeakerName}
+                            onChange={(e) => setTempSpeakerName(e.target.value)}
+                            className="w-24 bg-slate-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            autoFocus
+                            onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
+                          />
+                          <button
+                            onClick={saveSpeakerName}
+                            className="p-1 text-green-400 hover:text-green-300"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={cancelEditingSpeaker}
+                            className="p-1 text-red-400 hover:text-red-300"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 bg-purple-500/20 text-purple-300 rounded-lg px-3 py-1">
+                          <span className="text-sm">{speakerNames[speaker] || speaker}</span>
+                          <button
+                            onClick={() => startEditingSpeaker(speaker)}
+                            className="p-0.5 hover:text-purple-200 transition-colors"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Search & Replace Panel */}
+            <div className="mb-4">
+              <button
+                onClick={() => setShowSearchPanel(!showSearchPanel)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  showSearchPanel ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <Search className="w-4 h-4" />
+                Search & Replace
+              </button>
+
+              {showSearchPanel && (
+                <div className="mt-3 p-4 bg-slate-700/30 rounded-xl">
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <div className="flex-1 min-w-[200px]">
+                      <label className="text-xs text-slate-400 mb-1 block">Search</label>
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && performSearch()}
+                        placeholder="Search text..."
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-[200px]">
+                      <label className="text-xs text-slate-400 mb-1 block">Replace with</label>
+                      <input
+                        type="text"
+                        value={replaceText}
+                        onChange={(e) => setReplaceText(e.target.value)}
+                        placeholder="Replacement text..."
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={performSearch}
+                      className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg text-white transition-colors"
+                    >
+                      <Search className="w-4 h-4" />
+                      Find
+                    </button>
+                    {searchResults.length > 0 && (
+                      <>
+                        <span className="text-sm text-slate-400">
+                          {searchResults.length} match{searchResults.length !== 1 ? 'es' : ''} found
+                        </span>
+                        <button
+                          onClick={replaceAll}
+                          className="flex items-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 rounded-lg text-white transition-colors"
+                        >
+                          <Replace className="w-4 h-4" />
+                          Replace All
+                        </button>
+                      </>
+                    )}
+                    {searchQuery && (
+                      <button
+                        onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); }}
+                        className="flex items-center gap-1 px-2 py-2 text-slate-400 hover:text-slate-300 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* View Toggles */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <button
+                onClick={() => setShowTimestamps(!showTimestamps)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  showTimestamps ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                Timestamps
+              </button>
+              {speakers.length > 0 && (
+                <button
+                  onClick={() => setShowSpeakers(!showSpeakers)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                    showSpeakers ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  <Users className="w-4 h-4" />
+                  Speakers
+                </button>
+              )}
+            </div>
+
+            {/* Transcription Text */}
+            <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+              {(showTimestamps || showSpeakers) && result.segments ? (
+                <div className="space-y-3">
+                  {result.segments.map((segment, index) => {
+                    const isCurrentSegment = index === currentSegmentIndex;
+                    const isEdited = editedSegments[index] !== undefined;
+
+                    return (
+                      <div
+                        key={index}
+                        ref={el => segmentRefs.current[index] = el}
+                        className={`flex gap-3 p-2 rounded transition-all ${
+                          isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
+                        } ${isEdited ? 'bg-yellow-500/10' : ''}`}
+                      >
+                        {showTimestamps && (
+                          <button
+                            onClick={() => seekToTime(segment.start)}
+                            className="text-blue-400 hover:text-blue-300 font-mono text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors"
+                          >
+                            [{formatTime(segment.start)}]
+                          </button>
+                        )}
+                        {showSpeakers && segment.speaker && (
+                          <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
+                            {segment.speaker}:
+                          </span>
+                        )}
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editedSegments[index] !== undefined ? editedSegments[index] : segment.text}
+                            onChange={(e) => handleEditSegment(index, e.target.value)}
+                            className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400"
+                          />
+                        ) : (
+                          <p className={`text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
+                            {highlightText(editedSegments[index] !== undefined ? editedSegments[index] : segment.text, index)}
+                            {searchResults.includes(index) && replaceText && (
+                              <button
+                                onClick={() => replaceInSegment(index)}
+                                className="ml-2 text-xs px-2 py-0.5 bg-orange-500 hover:bg-orange-600 rounded text-white transition-colors"
+                              >
+                                Replace
+                              </button>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-slate-200 leading-relaxed whitespace-pre-wrap">
+                  {result.result}
+                </p>
+              )}
+            </div>
+
+            {/* New Transcription Button */}
+            <button
+              onClick={clearSelection}
+              className="w-full mt-6 py-3 rounded-lg font-medium bg-slate-700 hover:bg-slate-600 transition-colors"
+            >
+              Start New Transcription
+            </button>
+          </div>
+        )}
+
+        {/* Footer */}
+        <footer className="text-center mt-12 text-slate-500 text-sm">
+          <p>Powered by OpenAI Whisper Large-V3 with speaker diarization</p>
+          <p className="mt-1">Optimized for Apple Silicon</p>
+        </footer>
+      </div>
     </div>
   );
-};
+}
 
-export default ExitReadinessAssessment;
+export default App;
