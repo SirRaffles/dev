@@ -1,0 +1,59 @@
+#
+# Whisper Transcription App - Local Development
+#
+# Run both frontend and backend on your MacBook
+# Optimized for Apple Silicon (M1/M2/M3)
+#
+# Usage:
+#   docker-compose -f docker-compose.local.yml up --build
+#
+# Note: For best Whisper performance on M3, use native scripts instead:
+#   ./scripts/start-all.sh
+#
+
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: whisper-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-large-v3}
+    volumes:
+      # Cache models to avoid re-downloading
+      - whisper-models:/root/.cache/huggingface
+      - whisper-cache:/root/.cache/faster_whisper
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/nas/Dockerfile
+      args:
+        - REACT_APP_API_URL=http://localhost:8000
+    container_name: whisper-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  whisper-models:
+  whisper-cache:

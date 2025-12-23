@@ -44,9 +44,97 @@ High-quality audio and video transcription powered by OpenAI Whisper Large-V3 vi
    - Get your token at: https://huggingface.co/settings/tokens
    - Accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
 
-### Setup
+3. **Environment Setup**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your HuggingFace token
+   ```
 
-#### Backend
+---
+
+## Deployment Options
+
+### Option 1: MacBook Only (Recommended for Development)
+
+Run everything on your MacBook M3 for best performance:
+
+```bash
+# One command to start everything
+./scripts/start-all.sh
+```
+
+Or start services separately:
+
+```bash
+# Terminal 1: Start backend
+./scripts/start-backend.sh
+
+# Terminal 2: Start frontend
+./scripts/start-frontend.sh
+```
+
+**Access:**
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8000
+
+**Stop all services:**
+```bash
+./scripts/stop-all.sh
+```
+
+### Option 2: Hybrid (NAS Frontend + MacBook Backend)
+
+Best for always-on access with optimal ML performance:
+
+| Component | Location | Why |
+|-----------|----------|-----|
+| Frontend | NAS (DXP 4800 Plus) | Always available, low power |
+| Backend | MacBook M3 | Best Whisper performance |
+
+#### Step 1: Start Backend on MacBook
+
+```bash
+./scripts/start-backend.sh
+```
+
+Note your MacBook's IP address (shown in the output).
+
+#### Step 2: Deploy Frontend on NAS
+
+Copy the project to your NAS, then:
+
+```bash
+cd /path/to/project/deploy/nas
+./setup.sh 192.168.1.100  # Replace with your MacBook IP
+```
+
+**Access:** http://your-nas-ip:3000
+
+#### Step 3: When Not Using
+
+- NAS frontend stays running (low resource usage)
+- Stop MacBook backend when not transcribing
+- Frontend will show connection error until backend starts
+
+### Option 3: Docker Compose (Local)
+
+Run both services in Docker on your MacBook:
+
+```bash
+# Set your HuggingFace token
+export HF_TOKEN="your_token"
+
+# Start both services
+docker-compose -f docker-compose.local.yml up --build
+```
+
+> **Note:** Native scripts (Option 1) offer better M3 performance than Docker.
+
+---
+
+## Manual Setup
+
+### Backend
 
 ```bash
 cd backend
@@ -65,7 +153,7 @@ export HF_TOKEN="your_huggingface_token"
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-#### Frontend
+### Frontend
 
 ```bash
 # Install dependencies
@@ -74,20 +162,6 @@ npm install
 # Start development server
 npm start
 ```
-
-### Using Docker Compose
-
-```bash
-# Set your HuggingFace token
-export HF_TOKEN="your_huggingface_token"
-
-# Start both services
-docker-compose up --build
-```
-
-Access at:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
 
 ## Configuration
 
@@ -214,6 +288,53 @@ On MacBook Air M3 with 24GB RAM:
 - English (`en`)
 - French (`fr`)
 - Auto-detect (`auto`)
+
+## Project Structure
+
+```
+whisper-transcription-app/
+├── backend/
+│   ├── main.py              # FastAPI server with Whisper
+│   ├── requirements.txt     # Python dependencies
+│   └── Dockerfile           # Backend container
+├── src/
+│   └── App.js               # React frontend
+├── deploy/
+│   └── nas/
+│       ├── docker-compose.yml  # NAS deployment config
+│       ├── Dockerfile          # Frontend container
+│       ├── nginx.conf          # Nginx configuration
+│       └── setup.sh            # NAS setup script
+├── scripts/
+│   ├── start-backend.sh     # Start backend server
+│   ├── start-frontend.sh    # Start frontend dev server
+│   ├── start-all.sh         # Start everything
+│   └── stop-all.sh          # Stop all services
+├── docker-compose.local.yml # Local Docker deployment
+├── .env.example             # Environment template
+└── README.md
+```
+
+## Troubleshooting
+
+### Backend won't start
+- Check Python 3.11+ is installed: `python3 --version`
+- Ensure ffmpeg is installed: `brew install ffmpeg`
+- Check port 8000 is free: `lsof -i:8000`
+
+### Speaker diarization not working
+- Verify HF_TOKEN is set correctly
+- Accept model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
+
+### Frontend can't connect to backend
+- Ensure backend is running: `curl http://localhost:8000/health`
+- Check REACT_APP_API_URL in frontend
+- For NAS: verify MacBook IP is correct and firewall allows port 8000
+
+### Slow transcription
+- First run downloads the model (~3GB)
+- Subsequent runs use cached model
+- Large files take longer; expect ~0.5-1x real-time on M3
 
 ## License
 

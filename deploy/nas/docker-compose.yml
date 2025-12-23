@@ -1,0 +1,45 @@
+#
+# Whisper Transcription Frontend - NAS Deployment
+#
+# Deploy on your Ugreen DXP 4800 Plus NAS
+# The backend runs on your MacBook M3 for optimal performance
+#
+# Usage:
+#   1. Copy this folder to your NAS
+#   2. Set BACKEND_URL to your MacBook's IP
+#   3. Run: docker-compose up -d
+#
+
+version: '3.8'
+
+services:
+  whisper-frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/nas/Dockerfile
+      args:
+        # Set this to your MacBook's IP address
+        - REACT_APP_API_URL=${BACKEND_URL:-http://192.168.1.100:8000}
+    container_name: whisper-transcription
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      - TZ=Europe/Paris
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Optional: Add Watchtower for automatic updates
+#  watchtower:
+#    image: containrrr/watchtower
+#    container_name: watchtower
+#    restart: unless-stopped
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock
+#    command: --interval 86400 whisper-transcription
