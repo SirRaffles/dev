@@ -168,7 +168,7 @@ async def lifespan(app: FastAPI):
         if hf_token:
             diarization_pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
+                token=hf_token  # Updated: 'use_auth_token' deprecated, use 'token'
             )
 
             # Use MPS on Apple Silicon if available
