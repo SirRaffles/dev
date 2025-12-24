@@ -299,16 +299,31 @@ def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List
             diarization = diarization_pipeline(audio_path)
 
         speakers = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            speakers.append({
-                "start": turn.start,
-                "end": turn.end,
-                "speaker": speaker
-            })
+
+        # Handle pyannote 4.x API (returns object with speaker_diarization attribute)
+        if hasattr(diarization, 'speaker_diarization'):
+            # pyannote 4.x: iterate over speaker_diarization
+            annotation = diarization.speaker_diarization
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                speakers.append({
+                    "start": turn.start,
+                    "end": turn.end,
+                    "speaker": speaker
+                })
+        else:
+            # pyannote 3.x: direct Annotation object
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                speakers.append({
+                    "start": turn.start,
+                    "end": turn.end,
+                    "speaker": speaker
+                })
 
         return speakers
     except Exception as e:
         print(f"Diarization error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
