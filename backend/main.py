@@ -12,7 +12,9 @@ import uuid
 import tempfile
 import subprocess
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+import json
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional, List, Literal
 from contextlib import asynccontextmanager
@@ -20,6 +22,10 @@ from datetime import datetime
 
 # Thread pool for CPU-bound transcription tasks
 transcription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
+
+# Process pool for heavy diarization (prevents blocking main process)
+# Using spawn method for macOS compatibility
+multiprocessing.set_start_method('spawn', force=True)
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -156,33 +162,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Could not configure MLX-Whisper: {e}")
 
-    # Load speaker diarization pipeline
-    print("Loading speaker diarization model...")
-    try:
-        from pyannote.audio import Pipeline
-        import torch
-
-        # Check for HuggingFace token (required for pyannote)
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-
-        if hf_token:
-            diarization_pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                token=hf_token  # Updated: 'use_auth_token' deprecated, use 'token'
-            )
-
-            # Use MPS on Apple Silicon if available
-            if torch.backends.mps.is_available():
-                diarization_pipeline.to(torch.device("mps"))
-                print("Diarization model loaded on MPS (Apple Silicon)!")
-            else:
-                print("Diarization model loaded on CPU!")
-        else:
-            print("Warning: HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
-            print("Get your token at: https://huggingface.co/settings/tokens")
-            print("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
-    except Exception as e:
-        print(f"Warning: Could not load diarization model: {e}")
+    # Check for diarization availability (model loaded on-demand in subprocess)
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if hf_token:
+        print("Speaker diarization: Available (HF_TOKEN set)")
+        print("Note: Diarization model loads in subprocess to keep server responsive")
+        # Mark as available for health check
+        diarization_pipeline = True  # Placeholder to indicate availability
+    else:
+        print("Warning: HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
+        print("Get your token at: https://huggingface.co/settings/tokens")
+        print("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
 
     yield
 
@@ -279,52 +269,151 @@ def apply_noise_reduction(audio_path: str, output_path: str) -> str:
         raise RuntimeError(f"Noise reduction failed: {e}")
 
 
+def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_file: str, hf_token: str):
+    """Subprocess worker for diarization. Runs in separate process to avoid blocking main server."""
+    try:
+        import os
+        os.environ["HF_TOKEN"] = hf_token
+
+        from pyannote.audio import Pipeline
+        import torch
+
+        # Load pipeline in subprocess
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            token=hf_token
+        )
+
+        # Use MPS if available
+        if torch.backends.mps.is_available():
+            pipeline.to(torch.device("mps"))
+
+        # Run diarization
+        if num_speakers and num_speakers > 0:
+            diarization = pipeline(audio_path, num_speakers=num_speakers)
+        else:
+            diarization = pipeline(audio_path)
+
+        speakers = []
+
+        # Handle pyannote 4.x API
+        if hasattr(diarization, 'speaker_diarization'):
+            annotation = diarization.speaker_diarization
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                speakers.append({
+                    "start": float(turn.start),
+                    "end": float(turn.end),
+                    "speaker": str(speaker)
+                })
+        else:
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                speakers.append({
+                    "start": float(turn.start),
+                    "end": float(turn.end),
+                    "speaker": str(speaker)
+                })
+
+        # Write results to file
+        with open(output_file, 'w') as f:
+            json.dump({"status": "success", "speakers": speakers}, f)
+
+    except Exception as e:
+        import traceback
+        with open(output_file, 'w') as f:
+            json.dump({"status": "error", "error": str(e), "traceback": traceback.format_exc()}, f)
+
+
+def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
+    """Run speaker diarization in a separate subprocess to prevent blocking.
+
+    This keeps the FastAPI server responsive during long diarization jobs.
+    Uses polling with sleep to allow other threads to run.
+    """
+    import time
+
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+
+    if not hf_token:
+        print("Warning: HF_TOKEN not set, diarization will fail")
+        return []
+
+    # Create temp file for results
+    output_file = tempfile.mktemp(suffix="_diarization.json")
+
+    try:
+        # Start diarization in subprocess
+        process = multiprocessing.Process(
+            target=_diarization_worker,
+            args=(audio_path, num_speakers, output_file, hf_token)
+        )
+        process.start()
+
+        # Poll for completion instead of blocking join
+        # This allows the thread pool to be more responsive
+        poll_interval = 5  # Check every 5 seconds
+        max_wait = 7200  # 2 hour timeout
+        elapsed = 0
+
+        while process.is_alive() and elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            if elapsed % 60 == 0:  # Log every minute
+                print(f"Diarization in progress... ({elapsed}s elapsed)")
+
+        if process.is_alive():
+            print(f"Diarization timeout after {max_wait}s, terminating...")
+            process.terminate()
+            process.join(timeout=10)
+            if process.is_alive():
+                process.kill()
+            return []
+
+        # Wait for process cleanup
+        process.join(timeout=5)
+
+        # Read results
+        if os.path.exists(output_file):
+            with open(output_file, 'r') as f:
+                result = json.load(f)
+
+            if result.get("status") == "success":
+                speakers = result.get("speakers", [])
+                print(f"Diarization complete: {len(speakers)} speaker segments found")
+                return speakers
+            else:
+                print(f"Diarization subprocess error: {result.get('error')}")
+                if result.get('traceback'):
+                    print(result.get('traceback'))
+                return []
+        else:
+            print("Diarization subprocess did not produce output")
+            return []
+
+    except Exception as e:
+        print(f"Diarization subprocess failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+    finally:
+        # Cleanup
+        if os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+            except:
+                pass
+
+
 def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
     """Run speaker diarization on audio file.
+
+    Uses subprocess for long audio files to prevent blocking the server.
 
     Args:
         audio_path: Path to audio file
         num_speakers: Expected number of speakers (None = auto-detect)
     """
-    global diarization_pipeline
-
-    if diarization_pipeline is None:
-        return []
-
-    try:
-        # Pass num_speakers hint to improve accuracy
-        if num_speakers and num_speakers > 0:
-            diarization = diarization_pipeline(audio_path, num_speakers=num_speakers)
-        else:
-            diarization = diarization_pipeline(audio_path)
-
-        speakers = []
-
-        # Handle pyannote 4.x API (returns object with speaker_diarization attribute)
-        if hasattr(diarization, 'speaker_diarization'):
-            # pyannote 4.x: iterate over speaker_diarization
-            annotation = diarization.speaker_diarization
-            for turn, _, speaker in annotation.itertracks(yield_label=True):
-                speakers.append({
-                    "start": turn.start,
-                    "end": turn.end,
-                    "speaker": speaker
-                })
-        else:
-            # pyannote 3.x: direct Annotation object
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                speakers.append({
-                    "start": turn.start,
-                    "end": turn.end,
-                    "speaker": speaker
-                })
-
-        return speakers
-    except Exception as e:
-        print(f"Diarization error: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+    # Always use subprocess for diarization to prevent server blocking
+    return run_diarization_subprocess(audio_path, num_speakers)
 
 
 def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> List[dict]:
@@ -375,8 +464,10 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
 
         # Run speaker diarization first (if enabled)
+        # Diarization runs in a separate subprocess to keep server responsive
         speakers = []
-        if settings.enable_diarization and diarization_pipeline is not None:
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        if settings.enable_diarization and hf_token:
             job.progress = 10
             if settings.num_speakers:
                 job.progress_message = f"Identifying {settings.num_speakers} speakers..."
@@ -670,7 +761,7 @@ async def root():
         "model_loaded": whisper_model_ready,
         "model_type": "MLX-Whisper (GPU-accelerated)",
         "model_path": whisper_model_path,
-        "diarization_available": diarization_pipeline is not None,
+        "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
         "supported_languages": SUPPORTED_LANGUAGES,
         "message": "Transcription API is running with MLX-Whisper"
     }
@@ -684,7 +775,7 @@ async def health():
         "model_loaded": whisper_model_ready,
         "model_type": "MLX-Whisper",
         "model_path": whisper_model_path,
-        "diarization_available": diarization_pipeline is not None,
+        "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
         "active_jobs": len([j for j in jobs.values() if j.status == "processing"]),
         "total_jobs": len(jobs),
         "supported_languages": list(SUPPORTED_LANGUAGES.keys())
