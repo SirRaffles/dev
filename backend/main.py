@@ -12,6 +12,13 @@ import logging
 import multiprocessing
 from contextlib import asynccontextmanager
 
+# Configure logging
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -36,7 +43,7 @@ async def lifespan(app: FastAPI):
     state.startup_time = time.time()
 
     # Configure MLX-Whisper model path
-    print("Configuring MLX-Whisper for Apple Silicon GPU acceleration...")
+    logger.info("Configuring MLX-Whisper for Apple Silicon GPU acceleration...")
     try:
         import mlx_whisper
         import mlx.core as mx
@@ -46,34 +53,34 @@ async def lifespan(app: FastAPI):
             if mx.metal.is_available():
                 test_array = mx.ones((10, 10))
                 mx.eval(test_array @ test_array)
-                print(f"Metal GPU: OK (device: {mx.default_device()})")
+                logger.info("Metal GPU: OK (device: %s)", mx.default_device())
                 metal_ok = True
             else:
-                print("Metal GPU: Not available, using CPU")
+                logger.info("Metal GPU: Not available, using CPU")
                 mx.set_default_device(mx.cpu)
         except Exception as gpu_err:
-            print(f"Metal GPU: Unstable ({gpu_err}), falling back to CPU")
+            logger.warning("Metal GPU: Unstable (%s), falling back to CPU", gpu_err)
             mx.set_default_device(mx.cpu)
 
         state.whisper_model_path = get_mlx_model_path()
-        print(f"MLX-Whisper model: {state.whisper_model_path}")
-        print("Note: Model will be downloaded on first transcription if not cached")
+        logger.info("MLX-Whisper model: %s", state.whisper_model_path)
+        logger.info("Note: Model will be downloaded on first transcription if not cached")
         state.whisper_model_ready = True
         device_mode = "GPU-accelerated via Metal" if metal_ok else "CPU mode"
-        print(f"MLX-Whisper configured successfully! ({device_mode})")
+        logger.info("MLX-Whisper configured successfully! (%s)", device_mode)
     except Exception as e:
-        print(f"Warning: Could not configure MLX-Whisper: {e}")
+        logger.warning("Could not configure MLX-Whisper: %s", e)
 
     # Check for diarization availability
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if hf_token:
-        print("Speaker diarization: Available (HF_TOKEN set)")
-        print("Note: Diarization model loads in subprocess to keep server responsive")
+        logger.info("Speaker diarization: Available (HF_TOKEN set)")
+        logger.info("Note: Diarization model loads in subprocess to keep server responsive")
         state.diarization_pipeline = True
     else:
-        print("Warning: HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
-        print("Get your token at: https://huggingface.co/settings/tokens")
-        print("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
+        logger.warning("HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
+        logger.warning("Get your token at: https://huggingface.co/settings/tokens")
+        logger.warning("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
 
     # Check for Voxtral API availability
     mistral_api_key = os.environ.get("MISTRAL_API_KEY")
@@ -81,9 +88,9 @@ async def lifespan(app: FastAPI):
         from services.voxtral_service import VoxtralService
         state._voxtral_service = VoxtralService(mistral_api_key)
         state._voxtral_available = True
-        print("Voxtral API: Available (MISTRAL_API_KEY set)")
+        logger.info("Voxtral API: Available (MISTRAL_API_KEY set)")
     else:
-        print("Voxtral API: Not configured (set MISTRAL_API_KEY for cloud transcription)")
+        logger.info("Voxtral API: Not configured (set MISTRAL_API_KEY for cloud transcription)")
 
     yield
 

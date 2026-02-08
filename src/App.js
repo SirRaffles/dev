@@ -1,17 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText } from 'lucide-react';
 
-// Components
+// Components (eagerly loaded - needed immediately)
 import Header from './components/Header';
 import FileInput from './components/FileInput';
 import YouTubeInput from './components/YouTubeInput';
 import SettingsPanel from './components/SettingsPanel';
 import ProgressBar from './components/ProgressBar';
-import AudioPlayer from './components/AudioPlayer';
-import TranscriptView from './components/TranscriptView';
-import DocumentView from './components/DocumentView';
-import VisualElementsPanel from './components/VisualElementsPanel';
 import ExportMenu from './components/ExportMenu';
+
+// Components (lazily loaded - only needed when results are shown)
+const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
+const TranscriptView = lazy(() => import('./components/TranscriptView'));
+const DocumentView = lazy(() => import('./components/DocumentView'));
+const VisualElementsPanel = lazy(() => import('./components/VisualElementsPanel'));
 
 // Hooks
 import useProcessingState from './hooks/useProcessingState';
@@ -316,41 +318,43 @@ function App() {
               </div>
             )}
 
-            {audioUrl && !isDocumentMode && (
-              <AudioPlayer
-                ref={audioRef}
-                audioUrl={audioUrl}
-                onTimeUpdate={handleTimeUpdate}
-                className="mb-6"
-              />
-            )}
+            <Suspense fallback={<div className="text-center py-4 text-slate-400"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></div>}>
+              {audioUrl && !isDocumentMode && (
+                <AudioPlayer
+                  ref={audioRef}
+                  audioUrl={audioUrl}
+                  onTimeUpdate={handleTimeUpdate}
+                  className="mb-6"
+                />
+              )}
 
-            {viewMode === ViewMode.TRANSCRIPT && active.result.segments && (
-              <TranscriptView
-                result={active.result}
-                jobId={active.jobId}
-                onResultUpdate={updateResult}
-                currentTime={currentTime}
-                onSeekToTime={seekToTime}
-              />
-            )}
+              {viewMode === ViewMode.TRANSCRIPT && active.result.segments && (
+                <TranscriptView
+                  result={active.result}
+                  jobId={active.jobId}
+                  onResultUpdate={updateResult}
+                  currentTime={currentTime}
+                  onSeekToTime={seekToTime}
+                />
+              )}
 
-            {viewMode === ViewMode.DOCUMENT && (
-              <DocumentView
-                documentMarkdown={active.result.document_markdown}
-                documentSections={active.result.document_sections}
-                speakerNotes={active.result.speaker_notes}
-                sourceType={sourceType}
-                pageCount={active.result.page_count}
-                slideCount={active.result.slide_count}
-              />
-            )}
+              {viewMode === ViewMode.DOCUMENT && (
+                <DocumentView
+                  documentMarkdown={active.result.document_markdown}
+                  documentSections={active.result.document_sections}
+                  speakerNotes={active.result.speaker_notes}
+                  sourceType={sourceType}
+                  pageCount={active.result.page_count}
+                  slideCount={active.result.slide_count}
+                />
+              )}
 
-            {viewMode === ViewMode.VISUAL && (
-              <VisualElementsPanel
-                visualElements={active.result.visual_elements || []}
-              />
-            )}
+              {viewMode === ViewMode.VISUAL && (
+                <VisualElementsPanel
+                  visualElements={active.result.visual_elements || []}
+                />
+              )}
+            </Suspense>
 
             <button
               onClick={clearSelection}

@@ -167,6 +167,14 @@ class JobStore:
                     job.job_id
                 ))
                 conn.commit()
+            # Evict old completed/failed jobs from cache to bound memory
+            if len(self._cache) > 1000:
+                to_evict = [
+                    jid for jid, j in self._cache.items()
+                    if j.status in ("completed", "failed")
+                ]
+                for jid in to_evict[:len(self._cache) - 500]:
+                    del self._cache[jid]
 
     def delete(self, job_id: str):
         with self._lock:

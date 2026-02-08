@@ -300,4 +300,4 @@ function VisualElementsPanel({
   );
 }
 
-export default VisualElementsPanel;
+export default React.memo(VisualElementsPanel);

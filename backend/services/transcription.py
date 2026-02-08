@@ -5,7 +5,6 @@ Core transcription logic: MLX-Whisper, Parakeet, Voxtral engines.
 import os
 import asyncio
 import logging
-import traceback
 
 from config import MLX_MODELS, PARAKEET_MODEL
 from job_models import TranscriptionSettings
@@ -47,12 +46,12 @@ def transcribe_with_parakeet(audio_path: str) -> dict:
     """Transcribe audio using Parakeet MLX (60x real-time on Apple Silicon)."""
     import parakeet_mlx
 
-    print("Transcribing with Parakeet MLX (60x real-time)...")
+    logger.info("Transcribing with Parakeet MLX (60x real-time)...")
 
     if state._parakeet_model is None:
-        print(f"Loading Parakeet model: {PARAKEET_MODEL['path']}")
+        logger.info("Loading Parakeet model: %s", PARAKEET_MODEL['path'])
         state._parakeet_model = parakeet_mlx.from_pretrained(PARAKEET_MODEL["path"])
-        print("Parakeet model loaded successfully")
+        logger.info("Parakeet model loaded successfully")
 
     result = state._parakeet_model.transcribe(audio_path)
 
@@ -101,7 +100,7 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
     if not state._voxtral_service:
         raise RuntimeError("Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
 
-    print("Transcribing with Voxtral Mini (cloud API)...")
+    logger.info("Transcribing with Voxtral Mini (cloud API)...")
 
     language = None if settings.language == "auto" else settings.language
 
@@ -186,7 +185,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
             if use_parakeet:
                 job.progress_message = "Transcribing with Parakeet MLX (60x real-time)..."
-                print("Using Parakeet MLX for English transcription")
+                logger.info("Using Parakeet MLX for English transcription")
 
                 result = transcribe_with_parakeet(audio_path)
 
@@ -205,7 +204,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
                 model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3"])
                 model_path = model_info["path"]
-                print(f"Using model: {settings.model_size} ({model_path})")
+                logger.info("Using model: %s (%s)", settings.model_size, model_path)
 
                 result = mlx_whisper.transcribe(
                     audio_path,
@@ -271,7 +270,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         job.status = "failed"
         job.error = str(e)
         state.jobs.update(job)
-        traceback.print_exc()
+        logger.exception("Transcription failed for job %s", job_id)
 
     finally:
         try:

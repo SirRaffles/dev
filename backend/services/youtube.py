@@ -4,8 +4,11 @@ YouTube audio download and transcript utilities.
 
 import os
 import re
+import logging
 import subprocess
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _is_valid_youtube_url(url: str) -> bool:
@@ -147,8 +150,8 @@ def get_youtube_transcript(video_id: str, language: str = "auto") -> Optional[di
             return None
 
     except ImportError:
-        print("Warning: youtube-transcript-api not installed")
+        logger.warning("youtube-transcript-api not installed")
         return None
     except Exception as e:
-        print(f"Error getting YouTube transcript: {e}")
+        logger.warning("Error getting YouTube transcript: %s", e)
         return None

@@ -33,4 +33,4 @@ function YouTubeInput({
   );
 }
 
-export default YouTubeInput;
+export default React.memo(YouTubeInput);

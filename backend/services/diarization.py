@@ -4,10 +4,13 @@ Speaker diarization services.
 
 import os
 import json
+import logging
 import tempfile
 import multiprocessing
 import time
 from typing import Optional, List
+
+logger = logging.getLogger(__name__)
 
 
 def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_file: str, hf_token: str):
@@ -63,7 +66,7 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
 
     if not hf_token:
-        print("Warning: HF_TOKEN not set, diarization will fail")
+        logger.warning("HF_TOKEN not set, diarization will fail")
         return []
 
     _tf = tempfile.NamedTemporaryFile(suffix="_diarization.json", delete=False)
@@ -85,10 +88,10 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
             time.sleep(poll_interval)
             elapsed += poll_interval
             if elapsed % 60 == 0:
-                print(f"Diarization in progress... ({elapsed}s elapsed)")
+                logger.info("Diarization in progress... (%ds elapsed)", elapsed)
 
         if process.is_alive():
-            print(f"Diarization timeout after {max_wait}s, terminating...")
+            logger.warning("Diarization timeout after %ds, terminating...", max_wait)
             process.terminate()
             process.join(timeout=10)
             if process.is_alive():
@@ -103,21 +106,19 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
 
             if result.get("status") == "success":
                 speakers = result.get("speakers", [])
-                print(f"Diarization complete: {len(speakers)} speaker segments found")
+                logger.info("Diarization complete: %d speaker segments found", len(speakers))
                 return speakers
             else:
-                print(f"Diarization subprocess error: {result.get('error')}")
+                logger.error("Diarization subprocess error: %s", result.get('error'))
                 if result.get('traceback'):
-                    print(result.get('traceback'))
+                    logger.debug("Diarization traceback:\n%s", result.get('traceback'))
                 return []
         else:
-            print("Diarization subprocess did not produce output")
+            logger.error("Diarization subprocess did not produce output")
             return []
 
     except Exception as e:
-        print(f"Diarization subprocess failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Diarization subprocess failed: %s", e)
         return []
     finally:
         if os.path.exists(output_file):

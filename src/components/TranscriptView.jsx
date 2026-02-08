@@ -1,22 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check } from 'lucide-react';
 import { LANGUAGES, updateSegments, updateSpeakers } from '../utils/api';
+import { formatTime } from './AudioPlayer';
 
 // Escape special regex characters to prevent ReDoS
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Format timestamp for display
-export const formatTime = (seconds) => {
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 100);
-
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
-  }
-  return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
-};
 
 function TranscriptView({
   result,
@@ -406,7 +394,7 @@ function TranscriptView({
 
               return (
                 <div
-                  key={index}
+                  key={`seg-${segment.start}-${segment.end}`}
                   ref={el => segmentRefs.current[index] = el}
                   className={`flex gap-3 p-2 rounded transition-all ${
                     isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
@@ -459,4 +447,4 @@ function TranscriptView({
   );
 }
 
-export default TranscriptView;
+export default React.memo(TranscriptView);

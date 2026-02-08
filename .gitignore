@@ -48,9 +48,10 @@ venv/
 .venv/
 ENV/
 
-# Whisper model cache
+# ML model files
 *.bin
 *.pt
+*.gguf
 
 # Temporary files
 *.tmp
