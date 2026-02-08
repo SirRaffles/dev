@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.whisper.jpr-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/davidmarchesseau/Development/whisper-transcription-app/scripts/start-watcher-with-health-check.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/davidmarchesseau/Development/whisper-transcription-app/watcher</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HF_TOKEN</key>
+        <string>__HF_TOKEN_PLACEHOLDER__</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <!-- Start automatically on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it crashes (but not if it exits cleanly) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Prevent rapid restart loops -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>/Users/davidmarchesseau/.jpr_watcher.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/davidmarchesseau/.jpr_watcher.error.log</string>
+
+    <!-- Run as background process -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Nice priority (lower CPU priority) -->
+    <key>Nice</key>
+    <integer>5</integer>
+</dict>
+</plist>

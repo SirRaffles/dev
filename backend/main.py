@@ -14,23 +14,46 @@ import subprocess
 import asyncio
 import multiprocessing
 import json
+import shutil
+import sqlite3
+import threading
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional, List, Literal
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-# Thread pool for CPU-bound transcription tasks
-transcription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
+logger = logging.getLogger(__name__)
+
+# Thread pool for MLX-Whisper transcription tasks
+# IMPORTANT: max_workers=1 to prevent Metal GPU race conditions on macOS 26.x
+# Multiple concurrent MLX GPU operations cause MTLCommandBuffer crashes
+transcription_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
 
 # Process pool for heavy diarization (prevents blocking main process)
 # Using spawn method for macOS compatibility
 multiprocessing.set_start_method('spawn', force=True)
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+
+# Multi-modal processing imports
+from models.multimodal import (
+    MultiModalJob,
+    VisualElement,
+    VideoProcessingSettings,
+    PDFProcessingSettings,
+    PPTXProcessingSettings,
+)
+from services.model_manager import get_model_manager
+from processors.pdf_processor import PDFProcessor
+from processors.pptx_processor import PPTXProcessor
+from processors.video_processor import VideoProcessor
 
 # Audio restoration
 import numpy as np
@@ -42,9 +65,207 @@ whisper_model_path = None  # HuggingFace repo path for MLX model
 whisper_model_ready = False  # Flag to indicate model is configured
 diarization_pipeline = None
 
-# In-memory job storage (for production, use Redis or database)
-jobs = {}
-batch_jobs = {}  # Storage for batch jobs
+# Application startup time for uptime tracking
+startup_time = None
+
+
+class JobStore:
+    """
+    SQLite-backed job storage with in-memory cache.
+    Provides persistence across backend restarts.
+    """
+
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            # Default to user's home directory
+            db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
+        self.db_path = db_path
+        self._cache = {}  # In-memory cache for fast access
+        self._lock = threading.Lock()
+        self._init_db()
+        # Set restrictive permissions (owner read/write only)
+        try:
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            pass
+        self._load_active_jobs()
+
+    def _get_connection(self):
+        """Get a thread-local database connection."""
+        return sqlite3.connect(self.db_path, check_same_thread=False)
+
+    def _init_db(self):
+        """Initialize the database schema."""
+        with self._get_connection() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    progress INTEGER DEFAULT 0,
+                    progress_message TEXT,
+                    result TEXT,
+                    error TEXT,
+                    language TEXT,
+                    language_probability REAL,
+                    segments TEXT,
+                    speakers TEXT,
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)
+            ''')
+            conn.commit()
+        logger.info(f"Job store initialized at {self.db_path}")
+
+    def _load_active_jobs(self):
+        """Load active (non-completed) jobs from database into cache."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM jobs WHERE status IN ('pending', 'processing')"
+            )
+            for row in cursor.fetchall():
+                job = self._row_to_job(row)
+                self._cache[job.job_id] = job
+        logger.info(f"Loaded {len(self._cache)} active jobs from database")
+
+    def _row_to_job(self, row) -> 'TranscriptionJob':
+        """Convert a database row to a TranscriptionJob object."""
+        job = TranscriptionJob(row[0])  # job_id
+        job.status = row[1]
+        job.progress = row[2] or 0
+        job.progress_message = row[3] or ""
+        job.result = json.loads(row[4]) if row[4] else None
+        job.error = row[5]
+        job.language = row[6]
+        job.language_probability = row[7]
+        job.segments = json.loads(row[8]) if row[8] else []
+        job.speakers = json.loads(row[9]) if row[9] else []
+        return job
+
+    def _job_to_row(self, job: 'TranscriptionJob', file_path: str = None) -> tuple:
+        """Convert a TranscriptionJob to database row values."""
+        return (
+            job.job_id,
+            job.status,
+            job.progress,
+            job.progress_message,
+            json.dumps(job.result) if job.result else None,
+            job.error,
+            job.language,
+            job.language_probability,
+            json.dumps(job.segments) if job.segments else None,
+            json.dumps(job.speakers) if job.speakers else None,
+            file_path,
+        )
+
+    def create(self, job: 'TranscriptionJob', file_path: str = None):
+        """Create a new job in the store."""
+        with self._lock:
+            self._cache[job.job_id] = job
+            with self._get_connection() as conn:
+                conn.execute('''
+                    INSERT INTO jobs (job_id, status, progress, progress_message,
+                                     result, error, language, language_probability,
+                                     segments, speakers, file_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', self._job_to_row(job, file_path))
+                conn.commit()
+
+    def get(self, job_id: str) -> Optional['TranscriptionJob']:
+        """Get a job by ID (from cache or database)."""
+        with self._lock:
+            if job_id in self._cache:
+                return self._cache[job_id]
+
+            # Try loading from database
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    job = self._row_to_job(row)
+                    self._cache[job_id] = job
+                    return job
+            return None
+
+    def update(self, job: 'TranscriptionJob'):
+        """Update a job in the store."""
+        with self._lock:
+            self._cache[job.job_id] = job
+            with self._get_connection() as conn:
+                conn.execute('''
+                    UPDATE jobs SET status=?, progress=?, progress_message=?,
+                                   result=?, error=?, language=?, language_probability=?,
+                                   segments=?, speakers=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE job_id=?
+                ''', (
+                    job.status, job.progress, job.progress_message,
+                    json.dumps(job.result) if job.result else None,
+                    job.error, job.language, job.language_probability,
+                    json.dumps(job.segments) if job.segments else None,
+                    json.dumps(job.speakers) if job.speakers else None,
+                    job.job_id
+                ))
+                conn.commit()
+
+    def delete(self, job_id: str):
+        """Delete a job from the store."""
+        with self._lock:
+            self._cache.pop(job_id, None)
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
+                conn.commit()
+
+    def get_all(self) -> dict:
+        """Get all cached jobs (for API responses)."""
+        return dict(self._cache)
+
+    def get_active_count(self) -> int:
+        """Get count of active (processing) jobs."""
+        return len([j for j in self._cache.values() if j.status == "processing"])
+
+    def __contains__(self, job_id: str) -> bool:
+        """Check if job exists in store."""
+        return self.get(job_id) is not None
+
+    def __len__(self) -> int:
+        """Return number of cached jobs."""
+        return len(self._cache)
+
+    def __setitem__(self, job_id: str, job: 'TranscriptionJob'):
+        """Set a job (create or update)."""
+        if job_id in self._cache:
+            self.update(job)
+        else:
+            self.create(job)
+
+    def __getitem__(self, job_id: str) -> 'TranscriptionJob':
+        """Get a job by ID, raises KeyError if not found."""
+        job = self.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return job
+
+    def __delitem__(self, job_id: str):
+        """Delete a job by ID."""
+        self.delete(job_id)
+
+    def values(self):
+        """Return cached job values (for compatibility)."""
+        return self._cache.values()
+
+    def keys(self):
+        """Return cached job keys (for compatibility)."""
+        return self._cache.keys()
+
+    def items(self):
+        """Return cached job items (for compatibility)."""
+        return self._cache.items()
+
 
 # Supported languages (Whisper supports 99, these are the most common)
 SUPPORTED_LANGUAGES = {
@@ -88,6 +309,15 @@ class BatchJob:
         self.total = len(job_ids)
 
 
+# Initialize job stores (must be after TranscriptionJob class definition)
+job_store = JobStore()
+batch_jobs = {}  # Batch jobs remain in-memory (short-lived)
+multimodal_jobs = {}  # Multi-modal jobs remain in-memory for now
+
+# Legacy compatibility: jobs dict now backed by JobStore
+jobs = job_store
+
+
 class YouTubeRequest(BaseModel):
     url: str
     language: str = "auto"
@@ -106,8 +336,10 @@ class TranscriptionSettings(BaseModel):
     enable_diarization: bool = True
     num_speakers: Optional[int] = None  # Number of speakers (None = auto-detect)
     enable_noise_reduction: bool = False  # Apply noise reduction before transcription
-    model_size: str = "large-v3"  # tiny, base, small, medium, large-v3
+    model_size: str = "large-v3-turbo"  # tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3
     translate_to_english: bool = False  # Translate output to English (any language → English)
+    engine: str = "whisper"  # "whisper" | "voxtral-api"
+    context_terms: Optional[List[str]] = None  # Voxtral context biasing (up to 100 terms)
 
 
 # Available MLX-Whisper model sizes with descriptions
@@ -117,7 +349,161 @@ MLX_MODELS = {
     "small": {"path": "mlx-community/whisper-small", "description": "Balanced speed/quality (~244M params)"},
     "medium": {"path": "mlx-community/whisper-medium", "description": "High quality, moderate speed (~769M params)"},
     "large-v3": {"path": "mlx-community/whisper-large-v3-mlx", "description": "Best quality, slowest (~1.5B params)"},
+    "large-v3-turbo": {"path": "mlx-community/whisper-large-v3-turbo", "description": "6x faster, near-best quality (~809M params)"},
+    "distil-large-v3": {"path": "mlx-community/distil-whisper-large-v3", "description": "5x faster, fewer hallucinations (~756M params)"},
 }
+
+# English-only optimized model (Parakeet MLX - 60x real-time on Apple Silicon)
+# Parakeet uses CTC/RNN-T architecture and is optimized for English
+PARAKEET_MODEL = {
+    "path": "mlx-community/parakeet-tdt-0.6b-v2",  # Default Parakeet model
+    "description": "60x real-time, English only (~600M params)",
+    "language": "en",
+}
+
+# Voxtral cloud transcription models (Mistral API)
+VOXTRAL_MODELS = {
+    "voxtral-mini": {
+        "api_id": "voxtral-mini-latest",
+        "description": "Cloud: Best accuracy, built-in diarization ($0.003/min)",
+        "engine": "voxtral-api",
+    },
+}
+_voxtral_available = False
+_voxtral_service = None
+
+# Check if Parakeet is available and has correct API
+_parakeet_available = False
+_parakeet_model = None  # Cached model instance
+try:
+    import parakeet_mlx
+    # Verify the module has the expected from_pretrained function
+    if hasattr(parakeet_mlx, 'from_pretrained'):
+        _parakeet_available = True
+except ImportError:
+    pass
+
+
+def select_optimal_model(language: str, model_size: str, speed_priority: bool = False) -> str:
+    """
+    Select the optimal model based on language and speed preference.
+
+    For English with speed_priority=True, use Parakeet MLX (60x real-time).
+    For other cases, use the user-selected model or default to large-v3-turbo.
+    """
+    # If speed priority is enabled and language is English, suggest Parakeet
+    # (Fall back to large-v3-turbo if Parakeet isn't available)
+    if speed_priority and language == "en":
+        if _parakeet_available:
+            return "parakeet"
+        # Fall back to large-v3-turbo for speed
+        return "large-v3-turbo"
+
+    # Use the user-selected model
+    return model_size
+
+
+def transcribe_with_parakeet(audio_path: str) -> dict:
+    """
+    Transcribe audio using Parakeet MLX (60x real-time on Apple Silicon).
+
+    Parakeet is English-only but significantly faster than Whisper.
+
+    Args:
+        audio_path: Path to audio file (wav, mp3, etc.)
+
+    Returns:
+        Dict with 'text' and 'segments' keys
+    """
+    global _parakeet_model
+    import parakeet_mlx
+
+    print("Transcribing with Parakeet MLX (60x real-time)...")
+
+    # Load model (cached for reuse)
+    if _parakeet_model is None:
+        print(f"Loading Parakeet model: {PARAKEET_MODEL['path']}")
+        _parakeet_model = parakeet_mlx.from_pretrained(PARAKEET_MODEL["path"])
+        print("Parakeet model loaded successfully")
+
+    # Transcribe using the model's transcribe method
+    result = _parakeet_model.transcribe(audio_path)
+
+    # Convert AlignedResult to our segment format
+    segments = []
+    all_text_parts = []
+
+    # AlignedResult has a 'tokens' attribute containing aligned tokens/sentences
+    if hasattr(result, 'tokens') and result.tokens:
+        for token in result.tokens:
+            # Each token may have start, end, and text-like attributes
+            text_part = ""
+            start_time = 0.0
+            end_time = 0.0
+
+            # Handle different token structures
+            if hasattr(token, 'text'):
+                text_part = str(token.text).strip()
+            elif hasattr(token, '__str__'):
+                text_part = str(token).strip()
+
+            if hasattr(token, 'start'):
+                start_time = float(token.start)
+            if hasattr(token, 'end'):
+                end_time = float(token.end)
+
+            if text_part:
+                all_text_parts.append(text_part)
+                segments.append({
+                    "start": start_time,
+                    "end": end_time,
+                    "text": text_part,
+                })
+    elif hasattr(result, '__str__'):
+        # Fallback: convert result to string
+        text = str(result).strip()
+        all_text_parts.append(text)
+        segments.append({"start": 0, "end": 0, "text": text})
+
+    full_text = " ".join(all_text_parts)
+
+    return {
+        "text": full_text,
+        "segments": segments,
+        "language": "en",  # Parakeet is English-only
+    }
+
+
+def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) -> dict:
+    """
+    Transcribe audio using Voxtral Mini Transcribe V2 (Mistral API).
+
+    Voxtral provides ~4% WER accuracy with built-in speaker diarization.
+    No separate pyannote step needed — speakers are returned inline.
+
+    Args:
+        audio_path: Path to audio file (wav, mp3, flac, etc.)
+        settings: Transcription settings with language, diarization, etc.
+
+    Returns:
+        Dict with 'text', 'segments', 'language', and 'speakers' keys
+    """
+    if not _voxtral_service:
+        raise RuntimeError("Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+
+    print("Transcribing with Voxtral Mini (cloud API)...")
+
+    language = None if settings.language == "auto" else settings.language
+
+    result = _voxtral_service.transcribe(
+        audio_path=audio_path,
+        language=language or "auto",
+        enable_diarization=settings.enable_diarization,
+        word_timestamps=settings.word_timestamps,
+        context_terms=settings.context_terms,
+    )
+
+    return result
 
 
 class SpeakerRenameRequest(BaseModel):
@@ -139,26 +525,50 @@ def get_mlx_model_path():
         "large": "mlx-community/whisper-large-v3-mlx",
         "large-v2": "mlx-community/whisper-large-v2-mlx",
         "large-v3": "mlx-community/whisper-large-v3-mlx",
+        "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+        "distil-large-v3": "mlx-community/distil-whisper-large-v3",
     }
 
-    model_size = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
-    return mlx_models.get(model_size, mlx_models["large-v3"])
+    model_size = os.environ.get("WHISPER_MODEL_SIZE", "large-v3-turbo")
+    return mlx_models.get(model_size, mlx_models["large-v3-turbo"])
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Configure models on startup."""
-    global whisper_model_path, whisper_model_ready, diarization_pipeline
+    global whisper_model_path, whisper_model_ready, diarization_pipeline, startup_time
+
+    # Record startup time for health monitoring
+    startup_time = time.time()
 
     # Configure MLX-Whisper model path
     print("Configuring MLX-Whisper for Apple Silicon GPU acceleration...")
     try:
         import mlx_whisper
+        import mlx.core as mx
+
+        # Test Metal GPU availability and stability
+        metal_ok = False
+        try:
+            if mx.metal.is_available():
+                # Run a quick GPU test to check for Metal stability
+                test_array = mx.ones((10, 10))
+                mx.eval(test_array @ test_array)  # Force GPU execution
+                print(f"Metal GPU: OK (device: {mx.default_device()})")
+                metal_ok = True
+            else:
+                print("Metal GPU: Not available, using CPU")
+                mx.set_default_device(mx.cpu)
+        except Exception as gpu_err:
+            print(f"Metal GPU: Unstable ({gpu_err}), falling back to CPU")
+            mx.set_default_device(mx.cpu)
+
         whisper_model_path = get_mlx_model_path()
         print(f"MLX-Whisper model: {whisper_model_path}")
         print("Note: Model will be downloaded on first transcription if not cached")
         whisper_model_ready = True
-        print("MLX-Whisper configured successfully! (GPU-accelerated via Metal)")
+        device_mode = "GPU-accelerated via Metal" if metal_ok else "CPU mode"
+        print(f"MLX-Whisper configured successfully! ({device_mode})")
     except Exception as e:
         print(f"Warning: Could not configure MLX-Whisper: {e}")
 
@@ -173,6 +583,17 @@ async def lifespan(app: FastAPI):
         print("Warning: HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
         print("Get your token at: https://huggingface.co/settings/tokens")
         print("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
+
+    # Check for Voxtral API availability
+    global _voxtral_available, _voxtral_service
+    mistral_api_key = os.environ.get("MISTRAL_API_KEY")
+    if mistral_api_key:
+        from services.voxtral_service import VoxtralService
+        _voxtral_service = VoxtralService(mistral_api_key)
+        _voxtral_available = True
+        print("Voxtral API: Available (MISTRAL_API_KEY set)")
+    else:
+        print("Voxtral API: Not configured (set MISTRAL_API_KEY for cloud transcription)")
 
     yield
 
@@ -189,13 +610,37 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _cors_origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API key authentication middleware
+# Set API_KEY env var to enable; leave unset to disable auth (local dev)
+_api_key = os.environ.get("API_KEY")
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not _api_key:
+            return await call_next(request)
+        # Allow health endpoint without auth
+        if request.url.path in ("/health", "/docs", "/openapi.json"):
+            return await call_next(request)
+        # Allow CORS preflight
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        if key != _api_key:
+            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+        return await call_next(request)
+
+if _api_key:
+    app.add_middleware(APIKeyMiddleware)
+    logger.info("API key authentication enabled")
 
 
 def extract_audio(input_path: str, output_path: str) -> str:
@@ -218,12 +663,30 @@ def extract_audio(input_path: str, output_path: str) -> str:
     return output_path
 
 
+def _is_valid_youtube_url(url: str) -> bool:
+    """Validate that the URL is a legitimate YouTube URL."""
+    import re
+    youtube_patterns = [
+        r'^https?://(www\.)?youtube\.com/watch\?',
+        r'^https?://(www\.)?youtube\.com/shorts/',
+        r'^https?://(www\.)?youtube\.com/embed/',
+        r'^https?://youtu\.be/',
+        r'^https?://music\.youtube\.com/watch\?',
+    ]
+    return any(re.match(pattern, url) for pattern in youtube_patterns)
+
+
 def download_youtube_audio(url: str, output_dir: str) -> str:
     """Download audio from YouTube URL using yt-dlp."""
+    if not _is_valid_youtube_url(url):
+        raise ValueError("Invalid URL. Only YouTube URLs are accepted.")
+
     output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
 
     cmd = [
         "yt-dlp",
+        "--no-exec",
+        "--no-batch",
         "-x",
         "--audio-format", "wav",
         "--audio-quality", "0",
@@ -232,7 +695,11 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
         url,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # 10 min timeout
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("YouTube download timed out after 10 minutes")
+
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {result.stderr}")
 
@@ -241,6 +708,119 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
             return os.path.join(output_dir, f)
 
     raise RuntimeError("No audio file found after download")
+
+
+def extract_video_id(url: str) -> Optional[str]:
+    """Extract video ID from various YouTube URL formats."""
+    import re
+
+    patterns = [
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def get_youtube_transcript(video_id: str, language: str = "auto") -> Optional[dict]:
+    """Try to get existing YouTube transcript (instant, no download needed).
+
+    Returns transcript in our segment format, or None if no transcript available.
+    This is much faster than downloading and transcribing with Whisper.
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        from youtube_transcript_api._errors import (
+            TranscriptsDisabled,
+            NoTranscriptFound,
+            VideoUnavailable,
+        )
+
+        try:
+            api = YouTubeTranscriptApi()
+
+            # Get available transcripts
+            transcript_list = api.list(video_id)
+
+            # Try to get transcript in requested language
+            transcript = None
+            detected_language = None
+
+            if language != "auto":
+                # Try exact language match first
+                try:
+                    transcript = transcript_list.find_transcript([language]).fetch()
+                    detected_language = language
+                except NoTranscriptFound:
+                    # Try translated version
+                    try:
+                        for t in transcript_list:
+                            if t.is_translatable:
+                                transcript = t.translate(language).fetch()
+                                detected_language = language
+                                break
+                    except Exception:
+                        pass
+
+            # If no specific language or not found, get any available transcript
+            if transcript is None:
+                for t in transcript_list:
+                    transcript = t.fetch()
+                    detected_language = t.language_code
+                    break
+
+            if transcript is None:
+                # Last resort: just fetch default transcript
+                transcript = api.fetch(video_id)
+                detected_language = "auto"
+
+            if transcript is None:
+                return None
+
+            # Convert to our segment format (handle both dict and object formats)
+            segments = []
+            for item in transcript:
+                # Handle FetchedTranscriptSnippet objects
+                if hasattr(item, 'text'):
+                    start = float(item.start)
+                    duration = float(item.duration) if hasattr(item, 'duration') else 0
+                    text = item.text.strip()
+                else:
+                    # Handle dict format
+                    start = float(item.get("start", 0))
+                    duration = float(item.get("duration", 0))
+                    text = item.get("text", "").strip()
+
+                segments.append({
+                    "start": start,
+                    "end": start + duration,
+                    "text": text,
+                })
+
+            # Build full text
+            full_text = " ".join(seg["text"] for seg in segments)
+
+            return {
+                "segments": segments,
+                "text": full_text,
+                "language": detected_language,
+                "source": "youtube_captions",  # Mark as from YouTube captions
+            }
+
+        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable):
+            return None
+
+    except ImportError:
+        print("Warning: youtube-transcript-api not installed")
+        return None
+    except Exception as e:
+        print(f"Error getting YouTube transcript: {e}")
+        return None
 
 
 def apply_noise_reduction(audio_path: str, output_path: str) -> str:
@@ -338,7 +918,9 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
         return []
 
     # Create temp file for results
-    output_file = tempfile.mktemp(suffix="_diarization.json")
+    _tf = tempfile.NamedTemporaryFile(suffix="_diarization.json", delete=False)
+    output_file = _tf.name
+    _tf.close()
 
     try:
         # Start diarization in subprocess
@@ -399,7 +981,7 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
         if os.path.exists(output_file):
             try:
                 os.remove(output_file)
-            except:
+            except OSError:
                 pass
 
 
@@ -444,14 +1026,26 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
     if not job:
         return
 
-    if not whisper_model_ready:
+    # Check engine/model availability
+    use_voxtral = settings.engine == "voxtral-api"
+    use_parakeet = settings.model_size == "parakeet" and not use_voxtral
+
+    if use_voxtral:
+        if not _voxtral_available:
+            job.status = "failed"
+            job.error = "Voxtral API not configured. Set MISTRAL_API_KEY environment variable."
+            return
+    elif use_parakeet:
+        if not _parakeet_available:
+            job.status = "failed"
+            job.error = "Parakeet MLX not installed. Install with: pip install parakeet-mlx"
+            return
+    elif not whisper_model_ready:
         job.status = "failed"
         job.error = "MLX-Whisper not configured. Please restart the server."
         return
 
     try:
-        import mlx_whisper
-
         job.status = "processing"
         job.progress = 5
         job.progress_message = "Starting transcription..."
@@ -463,95 +1057,140 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             cleaned_audio_path = audio_path.replace(".wav", "_cleaned.wav")
             audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
 
-        # Run speaker diarization first (if enabled)
-        # Diarization runs in a separate subprocess to keep server responsive
-        speakers = []
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-        if settings.enable_diarization and hf_token:
-            job.progress = 10
-            if settings.num_speakers:
-                job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+        # === VOXTRAL API ENGINE ===
+        if use_voxtral:
+            job.progress = 15
+            job.progress_message = "Transcribing with Voxtral (cloud API)..."
+
+            result = transcribe_with_voxtral(audio_path, settings)
+
+            job.language = result.get("language", "unknown")
+            job.language_probability = 0.99
+
+            transcription_segments = result.get("segments", [])
+            full_text = result.get("text", "")
+
+            # Voxtral returns speakers inline — extract unique speaker list
+            voxtral_speakers = result.get("speakers", [])
+            if voxtral_speakers:
+                job.speakers = [{"speaker": s} for s in voxtral_speakers]
+
+        else:
+            # === LOCAL ENGINES (Whisper / Parakeet) ===
+            # Run speaker diarization first (if enabled)
+            # Diarization runs in a separate subprocess to keep server responsive
+            speakers = []
+            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+            if settings.enable_diarization and hf_token:
+                job.progress = 10
+                if settings.num_speakers:
+                    job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+                else:
+                    job.progress_message = "Identifying speakers..."
+                speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
+                job.speakers = speakers
+
+            job.progress = 20
+
+            # Use Parakeet or MLX-Whisper based on model selection
+            if use_parakeet:
+                job.progress_message = "Transcribing with Parakeet MLX (60x real-time)..."
+                print("Using Parakeet MLX for English transcription")
+
+                result = transcribe_with_parakeet(audio_path)
+
+                # Extract results
+                job.language = "en"
+                job.language_probability = 0.99
+
+                transcription_segments = result.get("segments", [])
+                full_text = result.get("text", "")
+
             else:
-                job.progress_message = "Identifying speakers..."
-            speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
-            job.speakers = speakers
+                # Use MLX-Whisper
+                import mlx_whisper
 
-        job.progress = 20
-        job.progress_message = "Transcribing with MLX-Whisper (GPU-accelerated)..."
+                job.progress_message = "Transcribing with MLX-Whisper (GPU-accelerated)..."
 
-        # Prepare language setting
-        language = None if settings.language == "auto" else settings.language
+                # Prepare language setting
+                language = None if settings.language == "auto" else settings.language
 
-        # Get the model path based on selected model size
-        model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3"])
-        model_path = model_info["path"]
-        print(f"Using model: {settings.model_size} ({model_path})")
+                # Get the model path based on selected model size
+                model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3"])
+                model_path = model_info["path"]
+                print(f"Using model: {settings.model_size} ({model_path})")
 
-        # Run transcription with MLX-Whisper (uses Metal GPU on Apple Silicon)
-        # Note: MLX-Whisper uses greedy decoding (beam search not yet implemented)
-        # task="translate" outputs English regardless of source language
-        result = mlx_whisper.transcribe(
-            audio_path,
-            path_or_hf_repo=model_path,
-            language=language,
-            task="translate" if settings.translate_to_english else "transcribe",
-            word_timestamps=settings.word_timestamps,
-            condition_on_previous_text=True,  # Better coherence
-            no_speech_threshold=0.6,
-            compression_ratio_threshold=2.4,
-            verbose=False,
-            fp16=True,  # Use FP16 for faster inference on Apple Silicon
-        )
+                # Run transcription with MLX-Whisper (uses Metal GPU on Apple Silicon)
+                # Note: MLX-Whisper uses greedy decoding (beam search not yet implemented)
+                # task="translate" outputs English regardless of source language
+                result = mlx_whisper.transcribe(
+                    audio_path,
+                    path_or_hf_repo=model_path,
+                    language=language,
+                    task="translate" if settings.translate_to_english else "transcribe",
+                    word_timestamps=settings.word_timestamps,
+                    condition_on_previous_text=True,  # Better coherence
+                    no_speech_threshold=0.6,
+                    compression_ratio_threshold=2.4,
+                    verbose=False,
+                    fp16=True,  # Use FP16 for faster inference on Apple Silicon
+                )
 
-        # Extract language info from result
-        job.language = result.get("language", "unknown")
-        job.language_probability = 0.99  # MLX-Whisper doesn't provide this
+                # Extract language info from result
+                job.language = result.get("language", "unknown")
+                job.language_probability = 0.99  # MLX-Whisper doesn't provide this
+
+                # Process segments from MLX-Whisper result
+                transcription_segments = []
+                full_text_parts = []
+
+                for segment in result.get("segments", []):
+                    seg_data = {
+                        "start": segment["start"],
+                        "end": segment["end"],
+                        "text": segment["text"].strip(),
+                    }
+
+                    # Extract word timestamps if available
+                    if settings.word_timestamps and "words" in segment:
+                        seg_data["words"] = [
+                            {
+                                "word": w.get("word", w.get("text", "")),
+                                "start": w["start"],
+                                "end": w["end"],
+                                "probability": w.get("probability", 1.0)
+                            }
+                            for w in segment["words"]
+                        ]
+
+                    transcription_segments.append(seg_data)
+                    full_text_parts.append(segment["text"].strip())
+
+                full_text = result.get("text", " ".join(full_text_parts))
+
+            # Assign speakers to segments (local engines only — Voxtral does this inline)
+            if speakers:
+                transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
+
         job.progress = 70
         job.progress_message = "Processing segments..."
-
-        # Process segments from MLX-Whisper result
-        transcription_segments = []
-        full_text_parts = []
-
-        for segment in result.get("segments", []):
-            seg_data = {
-                "start": segment["start"],
-                "end": segment["end"],
-                "text": segment["text"].strip(),
-            }
-
-            # Extract word timestamps if available
-            if settings.word_timestamps and "words" in segment:
-                seg_data["words"] = [
-                    {
-                        "word": w.get("word", w.get("text", "")),
-                        "start": w["start"],
-                        "end": w["end"],
-                        "probability": w.get("probability", 1.0)
-                    }
-                    for w in segment["words"]
-                ]
-
-            transcription_segments.append(seg_data)
-            full_text_parts.append(segment["text"].strip())
 
         job.progress = 90
         job.progress_message = "Finalizing..."
 
-        # Assign speakers to segments
-        if speakers:
-            transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
-
         job.segments = transcription_segments
-        job.result = result.get("text", " ".join(full_text_parts))
+        job.result = full_text
         job.progress = 100
         job.progress_message = "Complete!"
         job.status = "completed"
-        print(f"Transcription complete (MLX-Whisper): {len(transcription_segments)} segments")
+        jobs.update(job)
+        model_name = "Voxtral" if use_voxtral else ("Parakeet MLX" if use_parakeet else "MLX-Whisper")
+        logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
 
     except Exception as e:
         job.status = "failed"
         job.error = str(e)
+        jobs.update(job)
         import traceback
         traceback.print_exc()
 
@@ -769,15 +1408,43 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Detailed health check."""
+    """
+    Detailed health check with model functionality verification.
+    Returns degraded status if model isn't ready to process.
+    """
+    # Determine overall status
+    is_ready = whisper_model_ready
+    status = "healthy" if is_ready else "degraded"
+
+    # Calculate uptime
+    uptime_seconds = None
+    if startup_time:
+        uptime_seconds = int(time.time() - startup_time)
+
+    # Test Metal GPU availability (non-blocking quick check)
+    gpu_available = False
+    try:
+        import mlx.core as mx
+        gpu_available = mx.metal.is_available()
+    except Exception:
+        pass
+
     return {
-        "status": "healthy",
+        "status": status,
         "model_loaded": whisper_model_ready,
+        "model_functional": is_ready,  # Can we actually process transcriptions?
         "model_type": "MLX-Whisper",
         "model_path": whisper_model_path,
+        "gpu_available": gpu_available,
         "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
-        "active_jobs": len([j for j in jobs.values() if j.status == "processing"]),
-        "total_jobs": len(jobs),
+        "voxtral_available": _voxtral_available,
+        "engines": {
+            "whisper": {"available": whisper_model_ready, "type": "local"},
+            "voxtral-api": {"available": _voxtral_available, "type": "cloud"},
+        },
+        "active_jobs": job_store.get_active_count(),
+        "total_jobs": len(job_store),
+        "uptime_seconds": uptime_seconds,
         "supported_languages": list(SUPPORTED_LANGUAGES.keys())
     }
 
@@ -790,16 +1457,30 @@ async def transcribe_file(
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
     enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
-    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    model_size: str = Query("large-v3-turbo", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language → English)"),
+    speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
+    engine: str = Query("whisper", description="Transcription engine: whisper (local) or voxtral-api (cloud)"),
+    context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
-    if not whisper_model_ready:
+    # Validate engine
+    if engine == "voxtral-api":
+        if not _voxtral_available:
+            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine != "whisper":
+        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+
+    if engine == "whisper" and not whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
-    if model_size not in MLX_MODELS:
-        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+    # Select optimal model based on language and speed preference (whisper engine only)
+    effective_model = model_size
+    if engine == "whisper":
+        effective_model = select_optimal_model(language, model_size, speed_priority)
+        if effective_model not in MLX_MODELS and effective_model != "parakeet":
+            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -808,14 +1489,38 @@ async def transcribe_file(
     job = TranscriptionJob(job_id)
     jobs[job_id] = job
 
-    temp_dir = tempfile.mkdtemp()
+    # Validate file extension
+    ALLOWED_EXTENSIONS = {
+        ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac",  # audio
+        ".mp4", ".mkv", ".avi", ".webm", ".mov",           # video
+    }
     file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{file_ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}"
+        )
+
+    temp_dir = tempfile.mkdtemp()
     input_path = os.path.join(temp_dir, f"input{file_ext}")
 
+    # Max upload size: 500MB (configurable via MAX_UPLOAD_SIZE_MB env var)
+    max_size = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
+
     try:
-        contents = await file.read()
+        # Stream file to disk in chunks to avoid loading entire file into memory
+        file_size = 0
         with open(input_path, "wb") as f:
-            f.write(contents)
+            while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                file_size += len(chunk)
+                if file_size > max_size:
+                    f.close()
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {max_size // (1024 * 1024)}MB."
+                    )
+                f.write(chunk)
 
         audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
@@ -828,6 +1533,11 @@ async def transcribe_file(
             extract_audio(input_path, audio_path)
             os.remove(input_path)
 
+        # Parse context terms from comma-separated string
+        parsed_context_terms = None
+        if context_terms:
+            parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
+
         settings = TranscriptionSettings(
             vad_filter=False,  # Disabled - causes empty results with some audio
             word_timestamps=word_timestamps,
@@ -835,13 +1545,15 @@ async def transcribe_file(
             enable_diarization=enable_diarization,
             num_speakers=num_speakers,
             enable_noise_reduction=enable_noise_reduction,
-            model_size=model_size,
+            model_size=effective_model,
             translate_to_english=translate_to_english,
+            engine=engine,
+            context_terms=parsed_context_terms,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
-        return {"job_id": job_id, "status": "processing", "model": model_size}
+        return {"job_id": job_id, "status": "processing", "model": effective_model, "engine": engine}
 
     except Exception as e:
         try:
@@ -849,23 +1561,44 @@ async def transcribe_file(
             shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/transcribe/youtube")
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
-    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    model_size: str = Query("large-v3-turbo", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
+    use_captions: bool = Query(True, description="Try YouTube captions first (instant, if available)"),
+    speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
+    engine: str = Query("whisper", description="Transcription engine: whisper (local) or voxtral-api (cloud)"),
+    context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
 ):
-    """Download and transcribe audio from a YouTube URL."""
-    if not whisper_model_ready:
+    """Download and transcribe audio from a YouTube URL.
+
+    If use_captions=True (default), tries to get existing YouTube captions first.
+    This is instant and doesn't require downloading. Falls back to Whisper if
+    no captions are available.
+    """
+    # Validate engine
+    if engine == "voxtral-api":
+        if not _voxtral_available:
+            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine != "whisper":
+        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+
+    if engine == "whisper" and not whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
-    if model_size not in MLX_MODELS:
-        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+    # Select optimal model based on language and speed preference (whisper engine only)
+    effective_model = model_size
+    if engine == "whisper":
+        effective_model = select_optimal_model(request.language, model_size, speed_priority)
+        if effective_model not in MLX_MODELS and effective_model != "parakeet":
+            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if request.language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -874,12 +1607,54 @@ async def transcribe_youtube(
     job = TranscriptionJob(job_id)
     jobs[job_id] = job
 
+    # Extract video ID from URL
+    video_id = extract_video_id(request.url)
+
+    # Try YouTube captions first (instant, no download needed)
+    if use_captions and video_id:
+        job.status = "processing"
+        job.progress_message = "Checking for YouTube captions..."
+
+        transcript = get_youtube_transcript(video_id, request.language)
+
+        if transcript:
+            # Success! Return completed job immediately
+            job.status = "completed"
+            job.progress = 100
+            job.progress_message = "Complete (YouTube captions)"
+            job.segments = transcript["segments"]
+            job.result = transcript["text"]
+            job.language = transcript["language"]
+            job.language_probability = 1.0  # Captions are definitive
+
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "source": "youtube_captions",
+                "language": transcript["language"],
+                "segment_count": len(transcript["segments"]),
+            }
+
+    # Fall back to download + Whisper transcription
     temp_dir = tempfile.mkdtemp()
 
     try:
         job.status = "downloading"
         job.progress_message = "Downloading audio from YouTube..."
-        audio_path = download_youtube_audio(request.url, temp_dir)
+
+        # Run download in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        audio_path = await loop.run_in_executor(
+            transcription_executor,
+            download_youtube_audio,
+            request.url,
+            temp_dir
+        )
+
+        # Parse context terms from comma-separated string
+        parsed_context_terms = None
+        if context_terms:
+            parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
 
         settings = TranscriptionSettings(
             vad_filter=False,  # Disabled - causes empty results with some audio
@@ -888,13 +1663,15 @@ async def transcribe_youtube(
             enable_diarization=request.enable_diarization,
             num_speakers=num_speakers,
             enable_noise_reduction=request.enable_noise_reduction,
-            model_size=model_size,
+            model_size=effective_model,
             translate_to_english=request.translate_to_english,
+            engine=engine,
+            context_terms=parsed_context_terms,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
-        return {"job_id": job_id, "status": "processing", "model": model_size}
+        return {"job_id": job_id, "status": "processing", "source": engine, "model": model_size, "engine": engine}
 
     except Exception as e:
         try:
@@ -904,7 +1681,8 @@ async def transcribe_youtube(
             pass
         job.status = "failed"
         job.error = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/job/{job_id}")
@@ -1006,12 +1784,36 @@ async def delete_job(job_id: str):
 @app.get("/models")
 async def list_models():
     """List available transcription models with descriptions."""
+    models = [
+        {"id": key, "path": val["path"], "description": val["description"], "engine": "whisper"}
+        for key, val in MLX_MODELS.items()
+    ]
+
+    # Add Parakeet if available
+    if _parakeet_available:
+        models.append({
+            "id": "parakeet",
+            "path": PARAKEET_MODEL["path"],
+            "description": PARAKEET_MODEL["description"],
+            "language": "en",  # English only
+            "engine": "whisper",
+        })
+
+    # Add Voxtral models if available
+    if _voxtral_available:
+        for key, val in VOXTRAL_MODELS.items():
+            models.append({
+                "id": key,
+                "api_id": val["api_id"],
+                "description": val["description"],
+                "engine": val["engine"],
+            })
+
     return {
-        "models": [
-            {"id": key, "path": val["path"], "description": val["description"]}
-            for key, val in MLX_MODELS.items()
-        ],
-        "default": "large-v3"
+        "models": models,
+        "default": "large-v3-turbo",
+        "parakeet_available": _parakeet_available,
+        "voxtral_available": _voxtral_available,
     }
 
 
@@ -1022,16 +1824,30 @@ async def transcribe_batch(
     language: str = Query("auto", description="Language code: en, fr, or auto"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
-    model_size: str = Query("large-v3", description="Model size: tiny, base, small, medium, large-v3"),
+    model_size: str = Query("large-v3-turbo", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language → English)"),
+    speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
+    engine: str = Query("whisper", description="Transcription engine: whisper (local) or voxtral-api (cloud)"),
+    context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
-    if not whisper_model_ready:
+    # Validate engine
+    if engine == "voxtral-api":
+        if not _voxtral_available:
+            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine != "whisper":
+        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+
+    if engine == "whisper" and not whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
-    if model_size not in MLX_MODELS:
-        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+    # Select optimal model based on language and speed preference (whisper engine only)
+    effective_model = model_size
+    if engine == "whisper":
+        effective_model = select_optimal_model(language, model_size, speed_priority)
+        if effective_model not in MLX_MODELS and effective_model != "parakeet":
+            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -1069,14 +1885,21 @@ async def transcribe_batch(
                 extract_audio(input_path, audio_path)
                 os.remove(input_path)
 
+            # Parse context terms from comma-separated string
+            parsed_context_terms = None
+            if context_terms:
+                parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
+
             settings = TranscriptionSettings(
                 vad_filter=False,  # Disabled - causes empty results with some audio
                 word_timestamps=word_timestamps,
                 language=language,
                 enable_diarization=enable_diarization,
                 num_speakers=num_speakers,
-                model_size=model_size,
+                model_size=effective_model,
                 translate_to_english=translate_to_english,
+                engine=engine,
+                context_terms=parsed_context_terms,
             )
 
             background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -1284,6 +2107,736 @@ async def search_transcript(
     }
 
 
+# =============================================================================
+# MULTI-MODAL PROCESSING ENDPOINTS
+# =============================================================================
+
+SUPPORTED_DOCUMENT_EXTENSIONS = {
+    ".pdf": "PDF document",
+    ".pptx": "PowerPoint presentation",
+    ".ppt": "PowerPoint (legacy)",
+}
+
+SUPPORTED_VIDEO_EXTENSIONS = {
+    ".mp4": "MP4 video",
+    ".mov": "QuickTime video",
+    ".mkv": "Matroska video",
+    ".avi": "AVI video",
+    ".webm": "WebM video",
+}
+
+
+async def _process_multimodal_job(job: MultiModalJob, file_path: Path, processor):
+    """Background task for multi-modal processing."""
+    try:
+        await processor.run(file_path)
+    except Exception as e:
+        job.status = "failed"
+        job.error = str(e)
+        import traceback
+        traceback.print_exc()
+
+
+@app.post("/process/multimodal")
+async def process_multimodal(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    language: str = Query("auto", description="Language for audio transcription"),
+    enable_diarization: bool = Query(True, description="Enable speaker identification"),
+    enable_visual_analysis: bool = Query(True, description="Analyze visual content with VLM"),
+    enable_ocr: bool = Query(True, description="Extract text from images via OCR"),
+):
+    """
+    Process any supported file type with auto-detection.
+
+    Supports:
+    - Videos: MP4, MOV, MKV, AVI, WEBM (audio + visual extraction)
+    - PDFs: Text, images, tables extraction
+    - PowerPoints: Slides, notes, embedded media
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename required")
+
+    file_ext = Path(file.filename).suffix.lower()
+
+    # Determine file type and create appropriate job
+    if file_ext in SUPPORTED_VIDEO_EXTENSIONS:
+        source_type = "video"
+    elif file_ext in SUPPORTED_DOCUMENT_EXTENSIONS:
+        if file_ext == ".pdf":
+            source_type = "pdf"
+        else:
+            source_type = "pptx"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file_ext}. Supported: {list(SUPPORTED_VIDEO_EXTENSIONS.keys()) + list(SUPPORTED_DOCUMENT_EXTENSIONS.keys())}"
+        )
+
+    # Create job
+    job = MultiModalJob(
+        source_type=source_type,
+        source_filename=file.filename,
+        enable_diarization=enable_diarization,
+        enable_visual_analysis=enable_visual_analysis,
+        enable_ocr=enable_ocr,
+    )
+    multimodal_jobs[job.job_id] = job
+
+    # Save uploaded file
+    temp_dir = Path(tempfile.mkdtemp())
+    input_path = temp_dir / f"input{file_ext}"
+
+    try:
+        contents = await file.read()
+        with open(input_path, "wb") as f:
+            f.write(contents)
+
+        # Update job with actual path
+        job.source_filename = str(input_path)
+
+        # Create appropriate processor
+        if source_type == "video":
+            settings = VideoProcessingSettings(
+                language=language,
+                enable_diarization=enable_diarization,
+                enable_visual_analysis=enable_visual_analysis,
+                ocr_enabled=enable_ocr,
+            )
+            processor = VideoProcessor(job, settings=settings)
+        elif source_type == "pdf":
+            settings = PDFProcessingSettings(
+                describe_charts=enable_visual_analysis,
+            )
+            processor = PDFProcessor(job, settings=settings)
+        else:  # pptx
+            settings = PPTXProcessingSettings(
+                describe_slides=enable_visual_analysis,
+            )
+            processor = PPTXProcessor(job, settings=settings)
+
+        # Run in background
+        background_tasks.add_task(_process_multimodal_job, job, input_path, processor)
+
+        return {
+            "job_id": job.job_id,
+            "detected_type": source_type,
+            "status": "processing",
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/process/pdf")
+async def process_pdf(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    extract_images: bool = Query(True, description="Extract images from PDF"),
+    describe_charts: bool = Query(True, description="Describe charts/diagrams with VLM"),
+    preserve_tables: bool = Query(True, description="Preserve table structure"),
+):
+    """Process a PDF document with text and visual extraction."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF file required")
+
+    job = MultiModalJob(
+        source_type="pdf",
+        source_filename=file.filename,
+    )
+    multimodal_jobs[job.job_id] = job
+
+    temp_dir = Path(tempfile.mkdtemp())
+    input_path = temp_dir / "input.pdf"
+
+    try:
+        contents = await file.read()
+        with open(input_path, "wb") as f:
+            f.write(contents)
+
+        job.source_filename = str(input_path)
+
+        settings = PDFProcessingSettings(
+            extract_images=extract_images,
+            describe_charts=describe_charts,
+            preserve_tables=preserve_tables,
+        )
+        processor = PDFProcessor(job, settings=settings)
+
+        background_tasks.add_task(_process_multimodal_job, job, input_path, processor)
+
+        return {
+            "job_id": job.job_id,
+            "status": "processing",
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/process/pptx")
+async def process_pptx(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    extract_speaker_notes: bool = Query(True, description="Extract speaker notes"),
+    describe_slides: bool = Query(True, description="Describe slides with VLM"),
+    extract_embedded_media: bool = Query(True, description="Extract embedded audio/video"),
+):
+    """Process a PowerPoint presentation."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename required")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in [".pptx", ".ppt"]:
+        raise HTTPException(status_code=400, detail="PowerPoint file required (.pptx or .ppt)")
+
+    job = MultiModalJob(
+        source_type="pptx",
+        source_filename=file.filename,
+    )
+    multimodal_jobs[job.job_id] = job
+
+    temp_dir = Path(tempfile.mkdtemp())
+    input_path = temp_dir / f"input{ext}"
+
+    try:
+        contents = await file.read()
+        with open(input_path, "wb") as f:
+            f.write(contents)
+
+        job.source_filename = str(input_path)
+
+        settings = PPTXProcessingSettings(
+            extract_speaker_notes=extract_speaker_notes,
+            describe_slides=describe_slides,
+            extract_embedded_media=extract_embedded_media,
+        )
+        processor = PPTXProcessor(job, settings=settings)
+
+        background_tasks.add_task(_process_multimodal_job, job, input_path, processor)
+
+        return {
+            "job_id": job.job_id,
+            "status": "processing",
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/process/video")
+async def process_video_multimodal(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    language: str = Query("auto", description="Language for transcription"),
+    enable_diarization: bool = Query(True, description="Enable speaker identification"),
+    enable_visual_analysis: bool = Query(True, description="Analyze visual content"),
+    keyframe_interval: float = Query(30.0, description="Max seconds between keyframe extraction"),
+    scene_detection: bool = Query(True, description="Use scene change detection"),
+    model_size: str = Query("large-v3-turbo", description="Whisper model size"),
+):
+    """Process a video with audio transcription and visual extraction."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename required")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in SUPPORTED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format. Supported: {list(SUPPORTED_VIDEO_EXTENSIONS.keys())}"
+        )
+
+    if model_size not in MLX_MODELS:
+        raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+
+    job = MultiModalJob(
+        source_type="video",
+        source_filename=file.filename,
+        enable_diarization=enable_diarization,
+        enable_visual_analysis=enable_visual_analysis,
+    )
+    multimodal_jobs[job.job_id] = job
+
+    temp_dir = Path(tempfile.mkdtemp())
+    input_path = temp_dir / f"input{ext}"
+
+    try:
+        contents = await file.read()
+        with open(input_path, "wb") as f:
+            f.write(contents)
+
+        job.source_filename = str(input_path)
+
+        settings = VideoProcessingSettings(
+            language=language,
+            enable_diarization=enable_diarization,
+            enable_visual_analysis=enable_visual_analysis,
+            keyframe_interval=keyframe_interval,
+            scene_detection=scene_detection,
+            model_size=model_size,
+        )
+        processor = VideoProcessor(job, settings=settings)
+
+        background_tasks.add_task(_process_multimodal_job, job, input_path, processor)
+
+        return {
+            "job_id": job.job_id,
+            "status": "processing",
+            "filename": file.filename,
+            "model": model_size,
+        }
+
+    except Exception as e:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error(f"Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/process/job/{job_id}")
+async def get_multimodal_job_status(job_id: str):
+    """Get the status and result of a multi-modal processing job."""
+    job = multimodal_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    response = {
+        "job_id": job.job_id,
+        "source_type": job.source_type,
+        "status": job.status,
+        "progress": job.progress,
+        "progress_message": job.progress_message,
+        "duration": job.duration,
+        "page_count": job.page_count,
+        "slide_count": job.slide_count,
+        "frames_extracted": job.frames_extracted,
+        "frames_analyzed": job.frames_analyzed,
+        "processing_time_seconds": job.processing_time_seconds,
+    }
+
+    if job.status == "completed":
+        # Transform visual elements to include API URLs for images
+        visual_elements_with_urls = []
+        for elem in job.visual_elements:
+            elem_dict = elem.model_dump()
+            # Replace filesystem path with API URL
+            if elem.image_path:
+                elem_dict["image_path"] = f"/process/job/{job_id}/image/{elem.element_id}"
+            visual_elements_with_urls.append(elem_dict)
+
+        response.update({
+            "audio_transcript": job.audio_transcript,
+            "audio_segments": [seg.model_dump() for seg in job.audio_segments],
+            "visual_elements": visual_elements_with_urls,
+            "document_sections": [sec.model_dump() for sec in job.document_sections],
+            "document_markdown": job.document_markdown,
+            "merged_timeline": [seg.model_dump() for seg in job.merged_timeline],
+            "detected_language": job.detected_language,
+            "speakers": job.speakers,
+            "models_used": job.models_used,
+        })
+    elif job.status == "failed":
+        response["error"] = job.error
+
+    return response
+
+
+@app.get("/process/job/{job_id}/visual-content")
+async def get_visual_content(job_id: str):
+    """Get extracted visual content for a multi-modal job."""
+    job = multimodal_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Transform visual elements to include API URLs for images
+    visuals_with_urls = []
+    for elem in job.visual_elements:
+        elem_dict = elem.model_dump()
+        if elem.image_path:
+            elem_dict["image_path"] = f"/process/job/{job_id}/image/{elem.element_id}"
+        visuals_with_urls.append(elem_dict)
+
+    return {
+        "job_id": job.job_id,
+        "total_elements": len(job.visual_elements),
+        "visuals": visuals_with_urls,
+    }
+
+
+@app.get("/process/job/{job_id}/image/{element_id}")
+async def get_visual_element_image(job_id: str, element_id: str):
+    """Get an image from a visual element."""
+    job = multimodal_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Find the visual element by ID
+    element = None
+    for elem in job.visual_elements:
+        if elem.element_id == element_id:
+            element = elem
+            break
+
+    if not element:
+        raise HTTPException(status_code=404, detail="Visual element not found")
+
+    if not element.image_path:
+        raise HTTPException(status_code=404, detail="Element has no image")
+
+    image_path = Path(element.image_path).resolve()
+
+    # Path traversal protection: ensure image is within the job's image directory
+    if job.image_dir:
+        allowed_dir = Path(job.image_dir).resolve()
+        if not str(image_path).startswith(str(allowed_dir)):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
+
+    # Determine media type from extension
+    ext = image_path.suffix.lower()
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    media_type = media_types.get(ext, "image/png")
+
+    return FileResponse(
+        path=str(image_path),
+        media_type=media_type,
+        filename=f"{element_id}{ext}",
+    )
+
+
+@app.delete("/process/job/{job_id}")
+async def delete_multimodal_job(job_id: str):
+    """Delete a multi-modal processing job."""
+    if job_id not in multimodal_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = multimodal_jobs[job_id]
+
+    # Clean up image directory if it exists
+    if job.image_dir:
+        image_dir_path = Path(job.image_dir)
+        if image_dir_path.exists():
+            try:
+                shutil.rmtree(image_dir_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up image_dir {job.image_dir}: {e}")
+
+    del multimodal_jobs[job_id]
+    return {"status": "deleted"}
+
+
+def generate_multimodal_markdown(job: MultiModalJob, include_visuals: bool = True) -> str:
+    """Generate enhanced markdown with visual content."""
+    lines = [
+        f"# Multi-Modal Transcript",
+        f"",
+        f"**Source:** {Path(job.source_filename).name if job.source_filename else 'Unknown'}",
+        f"**Type:** {job.source_type}",
+    ]
+
+    if job.duration:
+        mins = int(job.duration // 60)
+        secs = int(job.duration % 60)
+        lines.append(f"**Duration:** {mins}:{secs:02d}")
+
+    if job.detected_language:
+        lines.append(f"**Language:** {SUPPORTED_LANGUAGES.get(job.detected_language, job.detected_language)}")
+
+    if job.speakers:
+        lines.append(f"**Speakers:** {', '.join(job.speakers)}")
+
+    lines.extend(["", "---", ""])
+
+    # Document content (for PDF/PPTX)
+    if job.document_markdown:
+        lines.append("## Document Content")
+        lines.append("")
+        lines.append(job.document_markdown)
+        lines.append("")
+
+    # Timeline with visual references (for video)
+    if job.merged_timeline:
+        lines.append("## Timeline")
+        lines.append("")
+
+        current_visual = None
+
+        for segment in job.merged_timeline:
+            # Show visual change
+            if include_visuals and segment.visual and segment.visual != current_visual:
+                current_visual = segment.visual
+                lines.append("---")
+                lines.append(f"### Visual: {segment.visual.type.value.title()}")
+                lines.append(f"*Timestamp: {format_timestamp(segment.visual.timestamp or 0)}*")
+                lines.append("")
+
+                if segment.visual.text_content:
+                    lines.append("```")
+                    lines.append(segment.visual.text_content)
+                    lines.append("```")
+                    lines.append("")
+
+                if segment.visual.description:
+                    lines.append(f"> {segment.visual.description}")
+                    lines.append("")
+
+            # Show audio segment
+            if segment.audio:
+                speaker = segment.audio.speaker or ""
+                timestamp = format_timestamp(segment.audio.start)
+                lines.append(f"**[{timestamp}] {speaker}:** {segment.audio.text}")
+                lines.append("")
+
+    # Audio-only segments (fallback)
+    elif job.audio_segments:
+        lines.append("## Transcript")
+        lines.append("")
+
+        current_speaker = None
+        for segment in job.audio_segments:
+            speaker = segment.speaker
+
+            if speaker and speaker != current_speaker:
+                lines.append(f"\n### {speaker}\n")
+                current_speaker = speaker
+
+            timestamp = format_timestamp(segment.start)
+            lines.append(f"**[{timestamp}]** {segment.text}")
+            lines.append("")
+
+    # Visual elements list (for documents)
+    if include_visuals and job.visual_elements and job.source_type in ["pdf", "pptx"]:
+        lines.append("")
+        lines.append("## Visual Elements")
+        lines.append("")
+
+        for i, elem in enumerate(job.visual_elements, 1):
+            location = ""
+            if elem.page:
+                location = f"Page {elem.page}"
+            elif elem.slide:
+                location = f"Slide {elem.slide}"
+
+            lines.append(f"### {i}. {elem.type.value.title()} ({location})")
+
+            if elem.description:
+                lines.append(f"> {elem.description}")
+                lines.append("")
+
+            if elem.text_content:
+                lines.append("**Extracted Text:**")
+                lines.append("```")
+                lines.append(elem.text_content[:500] + ("..." if len(elem.text_content) > 500 else ""))
+                lines.append("```")
+                lines.append("")
+
+    # Metadata footer
+    lines.extend([
+        "",
+        "---",
+        f"*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
+        f"*Models used: {', '.join(job.models_used)}*" if job.models_used else "",
+        f"*Processing time: {job.processing_time_seconds:.1f}s*" if job.processing_time_seconds else "",
+    ])
+
+    return "\n".join(lines)
+
+
+def generate_multimodal_json(job: MultiModalJob) -> dict:
+    """Generate structured JSON export."""
+    return {
+        "version": "2.0.0",
+        "job_id": job.job_id,
+        "source": {
+            "filename": Path(job.source_filename).name if job.source_filename else None,
+            "type": job.source_type,
+            "duration": job.duration,
+            "page_count": job.page_count,
+            "slide_count": job.slide_count,
+        },
+        "processing": {
+            "models_used": job.models_used,
+            "processing_time_seconds": job.processing_time_seconds,
+            "frames_extracted": job.frames_extracted,
+            "frames_analyzed": job.frames_analyzed,
+        },
+        "audio": {
+            "language": job.detected_language,
+            "language_probability": job.language_probability,
+            "speakers": job.speakers,
+            "transcript": job.audio_transcript,
+            "segments": [seg.model_dump() for seg in job.audio_segments],
+        },
+        "visual": {
+            "elements": [elem.model_dump() for elem in job.visual_elements],
+        },
+        "document": {
+            "markdown": job.document_markdown,
+            "sections": [sec.model_dump() for sec in job.document_sections],
+        },
+        "multimodal": {
+            "merged_timeline": [seg.model_dump() for seg in job.merged_timeline],
+        },
+    }
+
+
+@app.get("/process/job/{job_id}/export")
+async def export_multimodal_transcript(
+    job_id: str,
+    format: Literal["txt", "md", "json", "srt"] = Query(..., description="Export format"),
+    include_visuals: bool = Query(True, description="Include visual content in export"),
+):
+    """Export multi-modal transcript in various formats."""
+    job = multimodal_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Processing not completed")
+
+    filename = f"multimodal_{job_id[:8]}"
+
+    if format == "md":
+        content = generate_multimodal_markdown(job, include_visuals)
+        return StreamingResponse(
+            io.BytesIO(content.encode()),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename={filename}.md"}
+        )
+
+    elif format == "json":
+        content = generate_multimodal_json(job)
+        return JSONResponse(
+            content=content,
+            headers={"Content-Disposition": f"attachment; filename={filename}.json"}
+        )
+
+    elif format == "txt":
+        # Plain text - audio transcript only
+        lines = []
+        for segment in job.audio_segments:
+            speaker = f"{segment.speaker}: " if segment.speaker else ""
+            timestamp = format_timestamp(segment.start)
+            lines.append(f"[{timestamp}] {speaker}{segment.text}")
+
+        content = "\n".join(lines)
+        return StreamingResponse(
+            io.BytesIO(content.encode()),
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={filename}.txt"}
+        )
+
+    elif format == "srt":
+        # SRT format - audio only
+        lines = []
+        for i, segment in enumerate(job.audio_segments, 1):
+            start = format_srt_timestamp(segment.start)
+            end = format_srt_timestamp(segment.end)
+            speaker_prefix = f"{segment.speaker}: " if segment.speaker else ""
+
+            lines.append(str(i))
+            lines.append(f"{start} --> {end}")
+            lines.append(f"{speaker_prefix}{segment.text}")
+            lines.append("")
+
+        content = "\n".join(lines)
+        return StreamingResponse(
+            io.BytesIO(content.encode()),
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={filename}.srt"}
+        )
+
+
+@app.get("/models/status")
+async def get_models_status():
+    """Get current model loading status and memory usage."""
+    model_manager = get_model_manager()
+    return model_manager.get_status()
+
+
+@app.post("/models/preload")
+async def preload_models(
+    models: List[str] = Query(..., description="Models to preload: whisper, vision, diarization"),
+):
+    """Preload models for faster processing."""
+    model_manager = get_model_manager()
+    results = {}
+
+    for model_name in models:
+        try:
+            if model_name == "whisper":
+                success = await model_manager.load_whisper()
+            elif model_name == "vision":
+                success = await model_manager.load_vision()
+            elif model_name == "diarization":
+                success = await model_manager.load_diarization()
+            else:
+                results[model_name] = {"success": False, "error": "Unknown model"}
+                continue
+
+            results[model_name] = {"success": success}
+        except Exception as e:
+            results[model_name] = {"success": False, "error": str(e)}
+
+    return {"results": results, "status": model_manager.get_status()}
+
+
+@app.post("/models/unload")
+async def unload_models(
+    models: List[str] = Query(..., description="Models to unload: vision, diarization"),
+):
+    """Unload models to free memory."""
+    from services.model_manager import ModelName
+
+    model_manager = get_model_manager()
+    results = {}
+
+    model_mapping = {
+        "whisper": ModelName.WHISPER,
+        "vision": ModelName.VISION,
+        "diarization": ModelName.DIARIZATION,
+    }
+
+    for model_name in models:
+        if model_name not in model_mapping:
+            results[model_name] = {"success": False, "error": "Unknown model"}
+            continue
+
+        try:
+            success = model_manager.unload_model(model_mapping[model_name])
+            results[model_name] = {"success": success}
+        except Exception as e:
+            results[model_name] = {"success": False, "error": str(e)}
+
+    return {"results": results, "status": model_manager.get_status()}
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.environ.get("UVICORN_HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=8000)

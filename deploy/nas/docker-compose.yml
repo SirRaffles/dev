@@ -10,8 +10,6 @@
 #   3. Run: docker-compose up -d
 #
 
-version: '3.8'
-
 services:
   whisper-frontend:
     build:
