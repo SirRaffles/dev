@@ -293,9 +293,9 @@ async def transcribe_batch(
         input_path = os.path.join(temp_dir, f"input{file_ext}")
 
         try:
-            contents = await file.read()
             with open(input_path, "wb") as f:
-                f.write(contents)
+                while chunk := await file.read(1024 * 1024):
+                    f.write(chunk)
 
             audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 

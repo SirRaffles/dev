@@ -176,13 +176,10 @@ export async function submitMultiModalProcessing(file, options = {}) {
 }
 
 export async function submitYouTubeTranscription(url, options = {}) {
+  // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
-    language: options.language || 'auto',
-    enable_diarization: options.enableDiarization ?? true,
-    enable_noise_reduction: options.enableNoiseReduction ?? false,
     model_size: options.modelSize || 'large-v3-turbo',
     word_timestamps: options.wordTimestamps ?? false,
-    translate_to_english: options.translateToEnglish ?? false,
     speed_priority: options.speedPriority ?? false,
     engine: options.engine || 'whisper',
   });
@@ -195,6 +192,7 @@ export async function submitYouTubeTranscription(url, options = {}) {
     params.append('context_terms', options.contextTerms);
   }
 
+  // Body contains YouTubeRequest fields
   const response = await fetch(`${API_URL}/transcribe/youtube?${params}`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),

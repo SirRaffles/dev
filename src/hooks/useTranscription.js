@@ -6,225 +6,140 @@ import {
   submitYouTubeTranscription,
   submitBatchTranscription,
 } from '../utils/api';
+import { usePollingJob } from './usePollingJob';
+
+const fetchTranscriptionStatus = (id) => fetchJobStatus(id, false);
 
 export function useTranscription() {
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [jobId, setJobId] = useState(null);
-  const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState('');
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+  const job = usePollingJob(fetchTranscriptionStatus);
 
-  // Batch state
+  // Batch-specific state (not shared with useMultiModal)
   const [batchProgress, setBatchProgress] = useState([]);
-
-  const pollIntervalRef = useRef(null);
-  const pollCountRef = useRef(0);
-
-  const getPollInterval = () => {
-    const count = pollCountRef.current;
-    if (count < 10) return 1000;   // First 10s: every 1s
-    if (count < 30) return 2000;   // Next 40s: every 2s
-    return 5000;                    // After that: every 5s
-  };
-
-  // Poll for single job status
-  const pollJobStatus = useCallback(async (id) => {
-    try {
-      const data = await fetchJobStatus(id);
-
-      setProgress(data.progress || 0);
-      setProgressMessage(data.progress_message || '');
-
-      if (data.status === 'completed') {
-        setResult(data);
-        setIsTranscribing(false);
-        if (pollIntervalRef.current) {
-          clearTimeout(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-      } else if (data.status === 'failed') {
-        setError(data.error || 'Transcription failed');
-        setIsTranscribing(false);
-        setJobId(null);
-        if (pollIntervalRef.current) {
-          clearTimeout(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-      }
-    } catch (err) {
-      console.error('Error polling job status:', err);
-    }
-  }, []);
+  const batchPollRef = useRef(null);
 
   // Poll batch job status
   const pollBatchJobStatus = useCallback(async (batchId) => {
     try {
       const data = await fetchBatchStatus(batchId);
 
-      setBatchProgress(data.jobs.map(job => ({
-        job_id: job.job_id,
-        status: job.status,
-        progress: job.progress,
-        error: job.error
+      setBatchProgress(data.jobs.map(j => ({
+        job_id: j.job_id,
+        status: j.status,
+        progress: j.progress,
+        error: j.error,
       })));
 
-      setProgress(data.overall_progress);
-      setProgressMessage(`${data.completed}/${data.total} files completed`);
+      job.setProgress(data.overall_progress);
+      job.setProgressMessage(`${data.completed}/${data.total} files completed`);
 
       if (data.overall_status === 'completed') {
-        setIsTranscribing(false);
         // Fetch first completed job result to display
         if (data.jobs.length > 0) {
           const firstJobId = data.jobs[0].job_id;
           const resultData = await fetchJobStatus(firstJobId);
-          setResult(resultData);
-          setJobId(firstJobId);
+          job.updateResult(resultData);
+          job.startJob(firstJobId);
         }
-        if (pollIntervalRef.current) {
-          clearTimeout(pollIntervalRef.current);
-          pollIntervalRef.current = null;
+        job.stopPolling();
+        if (batchPollRef.current) {
+          clearInterval(batchPollRef.current);
+          batchPollRef.current = null;
         }
       } else if (data.overall_status === 'failed' && data.completed === 0) {
-        setError('All files failed to transcribe');
-        setIsTranscribing(false);
-        if (pollIntervalRef.current) {
-          clearTimeout(pollIntervalRef.current);
-          pollIntervalRef.current = null;
+        job.failJob('All files failed to transcribe');
+        if (batchPollRef.current) {
+          clearInterval(batchPollRef.current);
+          batchPollRef.current = null;
         }
       }
     } catch (err) {
       console.error('Error polling batch status:', err);
     }
-  }, []);
+  }, [job]);
 
-  // Start polling when job is created (with backoff)
+  // Cleanup batch polling on unmount
   useEffect(() => {
-    if (jobId && isTranscribing) {
-      pollCountRef.current = 0;
-
-      const schedulePoll = () => {
-        pollIntervalRef.current = setTimeout(async () => {
-          await pollJobStatus(jobId);
-          pollCountRef.current += 1;
-          // Only continue if still transcribing (ref check avoids stale closure)
-          if (pollIntervalRef.current !== null) {
-            schedulePoll();
-          }
-        }, getPollInterval());
-      };
-
-      // Initial poll immediately, then schedule with backoff
-      pollJobStatus(jobId);
-      schedulePoll();
-    }
-
     return () => {
-      if (pollIntervalRef.current) {
-        clearTimeout(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+      if (batchPollRef.current) {
+        clearInterval(batchPollRef.current);
+        batchPollRef.current = null;
       }
     };
-  }, [jobId, isTranscribing, pollJobStatus]);
+  }, []);
 
   // Submit file for transcription
   const transcribeFile = useCallback(async (file, options = {}) => {
-    setError(null);
-    setResult(null);
-    setIsTranscribing(true);
-    setProgress(0);
-    setProgressMessage('Starting...');
+    job.reset();
+    setBatchProgress([]);
 
     try {
+      job.startJob(null, 'Starting...');
       const data = await submitTranscription(file, options);
-      setJobId(data.job_id);
+      job.startJob(data.job_id, 'Processing...');
     } catch (err) {
-      setError(err.message || 'Failed to start transcription');
-      setIsTranscribing(false);
+      job.failJob(err.message || 'Failed to start transcription');
     }
-  }, []);
+  }, [job]);
 
   // Submit YouTube URL for transcription
   const transcribeYouTube = useCallback(async (url, options = {}) => {
-    setError(null);
-    setResult(null);
-    setIsTranscribing(true);
-    setProgress(0);
-    setProgressMessage('Downloading video...');
+    job.reset();
+    setBatchProgress([]);
 
     try {
+      job.startJob(null, 'Downloading video...');
       const data = await submitYouTubeTranscription(url, options);
-      setJobId(data.job_id);
+      job.startJob(data.job_id, 'Processing...');
     } catch (err) {
-      setError(err.message || 'Failed to start YouTube transcription');
-      setIsTranscribing(false);
+      job.failJob(err.message || 'Failed to start YouTube transcription');
     }
-  }, []);
+  }, [job]);
 
   // Submit multiple files for batch transcription
   const transcribeBatch = useCallback(async (files, options = {}) => {
-    setError(null);
-    setResult(null);
-    setIsTranscribing(true);
-    setProgress(0);
-    setProgressMessage('Uploading files...');
+    job.reset();
     setBatchProgress([]);
 
     try {
+      job.startJob(null, 'Uploading files...');
       const data = await submitBatchTranscription(files, options);
 
-      // Initialize progress tracking
       setBatchProgress(data.job_ids.map(id => ({ job_id: id, progress: 0, status: 'pending' })));
 
-      // Start polling batch status
+      // Start polling batch status (uses interval, not the single-job poller)
       const batchId = data.batch_id;
-      pollIntervalRef.current = setInterval(() => {
+      batchPollRef.current = setInterval(() => {
         pollBatchJobStatus(batchId);
       }, 2000);
       pollBatchJobStatus(batchId);
-
     } catch (err) {
-      setError(err.message || 'Failed to start batch transcription');
-      setIsTranscribing(false);
+      job.failJob(err.message || 'Failed to start batch transcription');
     }
-  }, [pollBatchJobStatus]);
+  }, [job, pollBatchJobStatus]);
 
-  // Reset state
+  // Reset (also clears batch state)
   const reset = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearTimeout(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    setIsTranscribing(false);
-    setJobId(null);
-    setProgress(0);
-    setProgressMessage('');
-    setResult(null);
-    setError(null);
+    job.reset();
     setBatchProgress([]);
-  }, []);
-
-  // Update result (for edits)
-  const updateResult = useCallback((newResult) => {
-    setResult(newResult);
-  }, []);
+    if (batchPollRef.current) {
+      clearInterval(batchPollRef.current);
+      batchPollRef.current = null;
+    }
+  }, [job]);
 
   return {
-    // State
-    isTranscribing,
-    jobId,
-    progress,
-    progressMessage,
-    result,
-    error,
+    isTranscribing: job.isActive,
+    jobId: job.jobId,
+    progress: job.progress,
+    progressMessage: job.progressMessage,
+    result: job.result,
+    error: job.error,
     batchProgress,
-
-    // Actions
     transcribeFile,
     transcribeYouTube,
     transcribeBatch,
     reset,
-    updateResult,
+    updateResult: job.updateResult,
   };
 }
 

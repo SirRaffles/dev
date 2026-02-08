@@ -85,7 +85,13 @@ class ModelManager:
                     ["vm_stat"], capture_output=True, text=True
                 )
                 lines = result.stdout.split("\n")
+                # Parse page size from first line of vm_stat output
                 page_size = 16384  # Default for Apple Silicon
+                if lines and "page size of" in lines[0]:
+                    try:
+                        page_size = int(lines[0].split("page size of")[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
 
                 free_pages = 0
                 for line in lines:
