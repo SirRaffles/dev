@@ -1,0 +1,179 @@
+"""
+Export format generators for transcription jobs.
+"""
+
+import io
+from datetime import datetime
+
+from config import SUPPORTED_LANGUAGES
+from job_models import TranscriptionJob
+
+
+def format_timestamp(seconds: float) -> str:
+    """Format seconds to HH:MM:SS.mm"""
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    ms = int((seconds % 1) * 100)
+
+    if hrs > 0:
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}.{ms:02d}"
+    return f"{mins:02d}:{secs:02d}.{ms:02d}"
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds to SRT timestamp format."""
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
+
+
+def generate_txt(job: TranscriptionJob, include_timestamps: bool = True, include_speakers: bool = True) -> str:
+    """Generate plain text transcript."""
+    lines = []
+
+    for segment in job.segments:
+        parts = []
+
+        if include_timestamps:
+            parts.append(f"[{format_timestamp(segment['start'])}]")
+
+        if include_speakers and segment.get("speaker"):
+            parts.append(f"{segment['speaker']}:")
+
+        parts.append(segment["text"])
+        lines.append(" ".join(parts))
+
+    return "\n".join(lines)
+
+
+def generate_markdown(job: TranscriptionJob) -> str:
+    """Generate Markdown transcript."""
+    lines = [
+        f"# Transcript",
+        f"",
+        f"**Language:** {SUPPORTED_LANGUAGES.get(job.language, job.language)} ({job.language_probability*100:.1f}% confidence)",
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"",
+        "---",
+        ""
+    ]
+
+    current_speaker = None
+
+    for segment in job.segments:
+        speaker = segment.get("speaker")
+
+        if speaker and speaker != current_speaker:
+            lines.append(f"\n### {speaker}\n")
+            current_speaker = speaker
+
+        timestamp = format_timestamp(segment["start"])
+        lines.append(f"**[{timestamp}]** {segment['text']}\n")
+
+    return "\n".join(lines)
+
+
+def generate_srt(job: TranscriptionJob) -> str:
+    """Generate SRT subtitle file."""
+    lines = []
+
+    for i, segment in enumerate(job.segments, 1):
+        start = format_srt_timestamp(segment["start"])
+        end = format_srt_timestamp(segment["end"])
+
+        speaker_prefix = f"{segment['speaker']}: " if segment.get("speaker") else ""
+
+        lines.append(str(i))
+        lines.append(f"{start} --> {end}")
+        lines.append(f"{speaker_prefix}{segment['text']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_pdf(job: TranscriptionJob) -> bytes:
+    """Generate PDF transcript."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75*inch, bottomMargin=0.75*inch)
+
+    styles = getSampleStyleSheet()
+    title_style = styles['Heading1']
+    meta_style = ParagraphStyle('Meta', parent=styles['Normal'], fontSize=10, textColor='gray')
+    speaker_style = ParagraphStyle('Speaker', parent=styles['Heading3'], fontSize=12, spaceAfter=6)
+    text_style = ParagraphStyle('Text', parent=styles['Normal'], fontSize=11, leading=14, spaceAfter=12)
+    timestamp_style = ParagraphStyle('Timestamp', parent=styles['Normal'], fontSize=9, textColor='blue')
+
+    story = []
+
+    story.append(Paragraph("Transcript", title_style))
+    story.append(Spacer(1, 12))
+
+    lang_name = SUPPORTED_LANGUAGES.get(job.language, job.language)
+    story.append(Paragraph(f"Language: {lang_name} ({job.language_probability*100:.1f}% confidence)", meta_style))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", meta_style))
+    story.append(Spacer(1, 24))
+
+    current_speaker = None
+
+    for segment in job.segments:
+        speaker = segment.get("speaker")
+
+        if speaker and speaker != current_speaker:
+            story.append(Spacer(1, 12))
+            story.append(Paragraph(speaker, speaker_style))
+            current_speaker = speaker
+
+        timestamp = format_timestamp(segment["start"])
+        story.append(Paragraph(f"[{timestamp}]", timestamp_style))
+        story.append(Paragraph(segment["text"], text_style))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generate_docx(job: TranscriptionJob) -> bytes:
+    """Generate DOCX transcript."""
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+
+    doc = Document()
+    doc.add_heading("Transcript", level=1)
+
+    lang_name = SUPPORTED_LANGUAGES.get(job.language, job.language)
+    meta = doc.add_paragraph()
+    meta.add_run(f"Language: {lang_name} ({job.language_probability*100:.1f}% confidence)\n").italic = True
+    meta.add_run(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}").italic = True
+
+    doc.add_paragraph()
+
+    current_speaker = None
+
+    for segment in job.segments:
+        speaker = segment.get("speaker")
+
+        if speaker and speaker != current_speaker:
+            doc.add_heading(speaker, level=2)
+            current_speaker = speaker
+
+        para = doc.add_paragraph()
+
+        timestamp_run = para.add_run(f"[{format_timestamp(segment['start'])}] ")
+        timestamp_run.font.color.rgb = RGBColor(0, 102, 204)
+        timestamp_run.font.size = Pt(9)
+
+        text_run = para.add_run(segment["text"])
+        text_run.font.size = Pt(11)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()

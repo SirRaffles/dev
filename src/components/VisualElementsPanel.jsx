@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Image, BarChart2, GitBranch, Code, FileText, X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import { API_URL } from '../utils/api';
 
@@ -45,6 +45,8 @@ function VisualElementsPanel({
 }) {
   const [selectedElement, setSelectedElement] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  const lightboxRef = useRef(null);
+  const previousFocusRef = useRef(null);
 
   if (visualElements.length === 0) {
     return (
@@ -68,20 +70,54 @@ function VisualElementsPanel({
   };
 
   const openLightbox = (index) => {
+    previousFocusRef.current = document.activeElement;
     setLightboxIndex(index);
   };
 
-  const closeLightbox = () => {
+  const closeLightbox = useCallback(() => {
     setLightboxIndex(null);
-  };
-
-  const navigateLightbox = (direction) => {
-    if (lightboxIndex === null) return;
-    const newIndex = lightboxIndex + direction;
-    if (newIndex >= 0 && newIndex < visualElements.length) {
-      setLightboxIndex(newIndex);
+    // Restore focus to the element that opened the lightbox
+    if (previousFocusRef.current) {
+      previousFocusRef.current.focus();
+      previousFocusRef.current = null;
     }
-  };
+  }, []);
+
+  const navigateLightbox = useCallback((direction) => {
+    setLightboxIndex((prev) => {
+      if (prev === null) return null;
+      const newIndex = prev + direction;
+      if (newIndex >= 0 && newIndex < visualElements.length) return newIndex;
+      return prev;
+    });
+  }, [visualElements.length]);
+
+  // Keyboard navigation for lightbox
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+
+    const handleKeyDown = (e) => {
+      switch (e.key) {
+        case 'Escape':
+          closeLightbox();
+          break;
+        case 'ArrowLeft':
+          navigateLightbox(-1);
+          break;
+        case 'ArrowRight':
+          navigateLightbox(1);
+          break;
+        default:
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    // Focus the lightbox container for screen readers
+    if (lightboxRef.current) lightboxRef.current.focus();
+
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxIndex, closeLightbox, navigateLightbox]);
 
   const handleElementClick = (element, index) => {
     setSelectedElement(element);
@@ -95,7 +131,7 @@ function VisualElementsPanel({
   return (
     <div className={className}>
       {/* Element grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" role="list" aria-label="Visual elements">
         {visualElements.map((element, index) => {
           const Icon = getIcon(element.type);
           const colorClass = getColor(element.type);
@@ -103,8 +139,12 @@ function VisualElementsPanel({
           return (
             <div
               key={element.element_id || index}
+              role="listitem"
+              tabIndex={0}
+              aria-label={`${element.type || 'Visual'} element${element.page ? `, page ${element.page}` : ''}${element.slide ? `, slide ${element.slide}` : ''}: ${element.description || 'No description'}`}
               onClick={() => handleElementClick(element, index)}
-              className={`relative bg-slate-800 rounded-lg overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-blue-500 ${
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleElementClick(element, index); } }}
+              className={`relative bg-slate-800 rounded-lg overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none ${
                 selectedElement?.element_id === element.element_id
                   ? 'ring-2 ring-blue-400'
                   : ''
@@ -176,12 +216,18 @@ function VisualElementsPanel({
       {/* Lightbox modal */}
       {lightboxIndex !== null && visualElements[lightboxIndex] && (
         <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+          ref={lightboxRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Viewing ${visualElements[lightboxIndex].type || 'visual'} element ${lightboxIndex + 1} of ${visualElements.length}`}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center focus:outline-none"
           onClick={closeLightbox}
         >
           {/* Close button */}
           <button
             onClick={closeLightbox}
+            aria-label="Close lightbox"
             className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
           >
             <X className="w-6 h-6 text-white" />
@@ -191,6 +237,7 @@ function VisualElementsPanel({
           {lightboxIndex > 0 && (
             <button
               onClick={(e) => { e.stopPropagation(); navigateLightbox(-1); }}
+              aria-label="Previous element"
               className="absolute left-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
             >
               <ChevronLeft className="w-6 h-6 text-white" />
@@ -199,6 +246,7 @@ function VisualElementsPanel({
           {lightboxIndex < visualElements.length - 1 && (
             <button
               onClick={(e) => { e.stopPropagation(); navigateLightbox(1); }}
+              aria-label="Next element"
               className="absolute right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
             >
               <ChevronRight className="w-6 h-6 text-white" />

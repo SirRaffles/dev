@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText } from 'lucide-react';
 
 // Components
@@ -14,24 +14,14 @@ import VisualElementsPanel from './components/VisualElementsPanel';
 import ExportMenu from './components/ExportMenu';
 
 // Hooks
-import useTranscription from './hooks/useTranscription';
-import useMultiModal from './hooks/useMultiModal';
+import useProcessingState from './hooks/useProcessingState';
+import useAudioPlayback from './hooks/useAudioPlayback';
 
 // Utils
-import { API_URL, isDocumentFile, isMediaFile, getSourceType } from './utils/api';
+import { API_URL } from './utils/api';
 
-// Input mode tabs
-const InputMode = {
-  FILE: 'file',
-  YOUTUBE: 'youtube',
-};
-
-// View modes for results
-const ViewMode = {
-  TRANSCRIPT: 'transcript',
-  DOCUMENT: 'document',
-  VISUAL: 'visual',
-};
+const InputMode = { FILE: 'file', YOUTUBE: 'youtube' };
+const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' };
 
 function App() {
   // Input state
@@ -40,7 +30,7 @@ function App() {
   const [file, setFile] = useState(null);
   const [files, setFiles] = useState([]);
 
-  // Settings state
+  // Settings
   const [settings, setSettings] = useState({
     modelSize: 'large-v3-turbo',
     language: 'auto',
@@ -54,96 +44,47 @@ function App() {
     contextTerms: '',
   });
 
-  // Track Voxtral availability from health endpoint
   const [voxtralAvailable, setVoxtralAvailable] = useState(false);
-
-  // Result view state
   const [viewMode, setViewMode] = useState(ViewMode.TRANSCRIPT);
 
-  // Audio playback
-  const [audioUrl, setAudioUrl] = useState(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const audioRef = useRef(null);
-
-  // Hooks
-  const transcription = useTranscription();
-  const multiModal = useMultiModal();
+  // Custom hooks
+  const { transcription, multiModal, isDocumentMode, sourceType, active, resetAll, updateResult } =
+    useProcessingState(file);
+  const { audioUrl, currentTime, audioRef, setFileAudio, clearAudio, seekToTime, handleTimeUpdate } =
+    useAudioPlayback();
 
   // Check Voxtral availability on mount
   useEffect(() => {
     fetch(`${API_URL}/health`)
       .then(res => res.json())
-      .then(data => {
-        if (data.voxtral_available) {
-          setVoxtralAvailable(true);
-        }
-      })
+      .then(data => { if (data.voxtral_available) setVoxtralAvailable(true); })
       .catch(() => {});
   }, []);
 
-  // Determine which processing mode to use based on file
-  const isDocumentMode = file && isDocumentFile(file.name);
-  const activeResult = isDocumentMode ? multiModal.result : transcription.result;
-  const activeError = isDocumentMode ? multiModal.error : transcription.error;
-  const isProcessing = isDocumentMode ? multiModal.isProcessing : transcription.isTranscribing;
-  const activeProgress = isDocumentMode ? multiModal.progress : transcription.progress;
-  const activeProgressMessage = isDocumentMode ? multiModal.progressMessage : transcription.progressMessage;
-  const activeJobId = isDocumentMode ? multiModal.jobId : transcription.jobId;
-  const sourceType = file ? getSourceType(file.name) : null;
-
-  // Handle file selection
+  // Handlers
   const handleFileSelect = (selectedFile) => {
     setFile(selectedFile);
     setFiles([]);
-
-    // Create audio URL for media files (revoke previous to prevent memory leak)
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    if (selectedFile && isMediaFile(selectedFile.name)) {
-      const url = URL.createObjectURL(selectedFile);
-      setAudioUrl(url);
-    } else {
-      setAudioUrl(null);
-    }
-
-    // Reset results
-    transcription.reset();
-    multiModal.reset();
+    setFileAudio(selectedFile);
+    resetAll();
   };
 
-  // Handle multiple files selection
   const handleFilesSelect = (selectedFiles) => {
     setFiles(selectedFiles);
     setFile(null);
-    setAudioUrl(null);
-    transcription.reset();
-    multiModal.reset();
+    clearAudio();
+    resetAll();
   };
 
-  // Clear selection
   const clearSelection = () => {
     setFile(null);
     setFiles([]);
     setYoutubeUrl('');
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl);
-      setAudioUrl(null);
-    }
-    setCurrentTime(0);
-    transcription.reset();
-    multiModal.reset();
+    clearAudio();
+    resetAll();
     setViewMode(ViewMode.TRANSCRIPT);
   };
 
-  // Cleanup audio URL on unmount
-  useEffect(() => {
-    return () => {
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
-    };
-  }, [audioUrl]);
-
-  // Start processing
   const startProcessing = async () => {
     const options = {
       language: settings.language,
@@ -158,74 +99,39 @@ function App() {
       contextTerms: settings.contextTerms,
     };
 
-    // Batch mode
     if (files.length > 1) {
       await transcription.transcribeBatch(files, options);
-      return;
-    }
-
-    // Document mode
-    if (isDocumentMode) {
+    } else if (isDocumentMode) {
       await multiModal.processDocument(file);
-      return;
-    }
-
-    // Single file transcription
-    if (inputMode === InputMode.FILE && file) {
+    } else if (inputMode === InputMode.FILE && file) {
       await transcription.transcribeFile(file, options);
     } else if (inputMode === InputMode.YOUTUBE && youtubeUrl.trim()) {
       await transcription.transcribeYouTube(youtubeUrl, options);
     }
   };
 
-  // Handle seek from transcript
-  const handleSeekToTime = (time) => {
-    if (audioRef.current) {
-      audioRef.current.seekToTime(time);
-    }
-  };
-
-  // Handle time update from audio player
-  const handleTimeUpdate = (time) => {
-    setCurrentTime(time);
-  };
-
-  // Check if we can start
   const canStart = (inputMode === InputMode.FILE && (file || files.length > 0)) ||
                    (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
 
-  // Determine available view modes based on result
-  const getAvailableViewModes = () => {
-    if (!activeResult) return [];
-
+  // Available view modes based on result type
+  const availableViewModes = useMemo(() => {
+    if (!active.result) return [];
     if (isDocumentMode) {
       const modes = [ViewMode.DOCUMENT];
-      if (activeResult.visual_elements?.length > 0) {
-        modes.push(ViewMode.VISUAL);
-      }
+      if (active.result.visual_elements?.length > 0) modes.push(ViewMode.VISUAL);
       return modes;
     }
-
-    // Audio/Video mode
     const modes = [ViewMode.TRANSCRIPT];
-    if (activeResult.visual_elements?.length > 0) {
-      modes.push(ViewMode.VISUAL);
-    }
+    if (active.result.visual_elements?.length > 0) modes.push(ViewMode.VISUAL);
     return modes;
-  };
-
-  const availableViewModes = getAvailableViewModes();
+  }, [active.result, isDocumentMode]);
 
   // Set default view mode when result arrives
   useEffect(() => {
-    if (activeResult) {
-      if (isDocumentMode) {
-        setViewMode(ViewMode.DOCUMENT);
-      } else {
-        setViewMode(ViewMode.TRANSCRIPT);
-      }
+    if (active.result) {
+      setViewMode(isDocumentMode ? ViewMode.DOCUMENT : ViewMode.TRANSCRIPT);
     }
-  }, [activeResult, isDocumentMode]);
+  }, [active.result, isDocumentMode]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
@@ -235,34 +141,37 @@ function App() {
         {/* Input Section */}
         <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
           {/* Mode Tabs */}
-          <div className="flex gap-2 mb-6">
+          <div className="flex gap-2 mb-6" role="tablist" aria-label="Input source">
             <button
+              role="tab"
+              aria-selected={inputMode === InputMode.FILE}
               onClick={() => setInputMode(InputMode.FILE)}
-              disabled={isProcessing}
+              disabled={active.isProcessing}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                 inputMode === InputMode.FILE
                   ? 'bg-blue-500 text-white'
                   : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               } disabled:opacity-50`}
             >
-              <Upload className="w-4 h-4" />
+              <Upload className="w-4 h-4" aria-hidden="true" />
               Upload File
             </button>
             <button
+              role="tab"
+              aria-selected={inputMode === InputMode.YOUTUBE}
               onClick={() => setInputMode(InputMode.YOUTUBE)}
-              disabled={isProcessing}
+              disabled={active.isProcessing}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                 inputMode === InputMode.YOUTUBE
                   ? 'bg-blue-500 text-white'
                   : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               } disabled:opacity-50`}
             >
-              <Link className="w-4 h-4" />
+              <Link className="w-4 h-4" aria-hidden="true" />
               YouTube URL
             </button>
           </div>
 
-          {/* File Input */}
           {inputMode === InputMode.FILE && (
             <FileInput
               file={file}
@@ -270,47 +179,42 @@ function App() {
               onFileSelect={handleFileSelect}
               onFilesSelect={handleFilesSelect}
               onClear={clearSelection}
-              disabled={isProcessing}
+              disabled={active.isProcessing}
               showDocumentSupport={true}
             />
           )}
 
-          {/* YouTube Input */}
           {inputMode === InputMode.YOUTUBE && (
             <YouTubeInput
               url={youtubeUrl}
-              onUrlChange={(url) => {
-                setYoutubeUrl(url);
-                transcription.reset();
-              }}
+              onUrlChange={(url) => { setYoutubeUrl(url); transcription.reset(); }}
               onClear={clearSelection}
-              disabled={isProcessing}
+              disabled={active.isProcessing}
             />
           )}
 
-          {/* Settings */}
           <SettingsPanel
             settings={settings}
             onSettingsChange={setSettings}
             showForDocuments={isDocumentMode}
-            disabled={isProcessing}
+            disabled={active.isProcessing}
             voxtralAvailable={voxtralAvailable}
           />
 
           {/* Start Button */}
           <button
             onClick={startProcessing}
-            disabled={!canStart || isProcessing}
+            disabled={!canStart || active.isProcessing}
             className={`w-full mt-6 py-4 rounded-xl font-semibold text-lg transition-all ${
-              canStart && !isProcessing
+              canStart && !active.isProcessing
                 ? 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
                 : 'bg-slate-700 text-slate-400 cursor-not-allowed'
             }`}
           >
-            {isProcessing ? (
+            {active.isProcessing ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="w-5 h-5 animate-spin" />
-                {isDocumentMode ? 'Processing...' : 'Transcribing...'} {activeProgress}%
+                {isDocumentMode ? 'Processing...' : 'Transcribing...'} {active.progress}%
               </span>
             ) : isDocumentMode ? (
               'Process Document'
@@ -323,30 +227,29 @@ function App() {
         </div>
 
         {/* Progress Bar */}
-        {isProcessing && (
+        {active.isProcessing && (
           <ProgressBar
-            progress={activeProgress}
-            progressMessage={activeProgressMessage}
+            progress={active.progress}
+            progressMessage={active.progressMessage}
             sourceType={sourceType}
             batchProgress={transcription.batchProgress}
           />
         )}
 
         {/* Error Display */}
-        {activeError && (
-          <div className="bg-red-500/10 border border-red-500/50 rounded-2xl p-6 mb-8">
+        {active.error && (
+          <div role="alert" className="bg-red-500/10 border border-red-500/50 rounded-2xl p-6 mb-8">
             <div className="flex items-center gap-3 text-red-400">
-              <AlertCircle className="w-5 h-5" />
+              <AlertCircle className="w-5 h-5" aria-hidden="true" />
               <span className="font-medium">Error</span>
             </div>
-            <p className="mt-2 text-red-300">{activeError}</p>
+            <p className="mt-2 text-red-300">{active.error}</p>
           </div>
         )}
 
         {/* Results */}
-        {activeResult && (
+        {active.result && (
           <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
-            {/* Results Header */}
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div className="flex items-center gap-3">
                 <CheckCircle className="w-6 h-6 text-green-400" />
@@ -355,8 +258,8 @@ function App() {
                 </h2>
               </div>
               <ExportMenu
-                jobId={activeJobId}
-                result={activeResult}
+                jobId={active.jobId}
+                result={active.result}
                 isMultiModal={isDocumentMode}
                 filename={file?.name?.replace(/\.[^/.]+$/, '') || 'transcript'}
               />
@@ -364,9 +267,11 @@ function App() {
 
             {/* View Mode Tabs */}
             {availableViewModes.length > 1 && (
-              <div className="flex gap-2 mb-6">
+              <div className="flex gap-2 mb-6" role="tablist" aria-label="Result view">
                 {availableViewModes.includes(ViewMode.TRANSCRIPT) && (
                   <button
+                    role="tab"
+                    aria-selected={viewMode === ViewMode.TRANSCRIPT}
                     onClick={() => setViewMode(ViewMode.TRANSCRIPT)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.TRANSCRIPT
@@ -374,12 +279,14 @@ function App() {
                         : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                     }`}
                   >
-                    <FileText className="w-4 h-4" />
+                    <FileText className="w-4 h-4" aria-hidden="true" />
                     Transcript
                   </button>
                 )}
                 {availableViewModes.includes(ViewMode.DOCUMENT) && (
                   <button
+                    role="tab"
+                    aria-selected={viewMode === ViewMode.DOCUMENT}
                     onClick={() => setViewMode(ViewMode.DOCUMENT)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.DOCUMENT
@@ -387,12 +294,14 @@ function App() {
                         : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                     }`}
                   >
-                    <FileText className="w-4 h-4" />
+                    <FileText className="w-4 h-4" aria-hidden="true" />
                     Document
                   </button>
                 )}
                 {availableViewModes.includes(ViewMode.VISUAL) && (
                   <button
+                    role="tab"
+                    aria-selected={viewMode === ViewMode.VISUAL}
                     onClick={() => setViewMode(ViewMode.VISUAL)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.VISUAL
@@ -400,14 +309,13 @@ function App() {
                         : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                     }`}
                   >
-                    <Image className="w-4 h-4" />
+                    <Image className="w-4 h-4" aria-hidden="true" />
                     Visual Content
                   </button>
                 )}
               </div>
             )}
 
-            {/* Audio Player (only for audio/video) */}
             {audioUrl && !isDocumentMode && (
               <AudioPlayer
                 ref={audioRef}
@@ -417,35 +325,33 @@ function App() {
               />
             )}
 
-            {/* Content Views */}
-            {viewMode === ViewMode.TRANSCRIPT && activeResult.segments && (
+            {viewMode === ViewMode.TRANSCRIPT && active.result.segments && (
               <TranscriptView
-                result={activeResult}
-                jobId={activeJobId}
-                onResultUpdate={isDocumentMode ? multiModal.updateResult : transcription.updateResult}
+                result={active.result}
+                jobId={active.jobId}
+                onResultUpdate={updateResult}
                 currentTime={currentTime}
-                onSeekToTime={handleSeekToTime}
+                onSeekToTime={seekToTime}
               />
             )}
 
             {viewMode === ViewMode.DOCUMENT && (
               <DocumentView
-                documentMarkdown={activeResult.document_markdown}
-                documentSections={activeResult.document_sections}
-                speakerNotes={activeResult.speaker_notes}
+                documentMarkdown={active.result.document_markdown}
+                documentSections={active.result.document_sections}
+                speakerNotes={active.result.speaker_notes}
                 sourceType={sourceType}
-                pageCount={activeResult.page_count}
-                slideCount={activeResult.slide_count}
+                pageCount={active.result.page_count}
+                slideCount={active.result.slide_count}
               />
             )}
 
             {viewMode === ViewMode.VISUAL && (
               <VisualElementsPanel
-                visualElements={activeResult.visual_elements || []}
+                visualElements={active.result.visual_elements || []}
               />
             )}
 
-            {/* New Button */}
             <button
               onClick={clearSelection}
               className="w-full mt-6 py-3 rounded-lg font-medium bg-slate-700 hover:bg-slate-600 transition-colors"
@@ -455,7 +361,6 @@ function App() {
           </div>
         )}
 
-        {/* Footer */}
         <footer className="text-center mt-12 text-slate-500 text-sm">
           <p>Powered by MLX-Whisper with GPU acceleration</p>
           <p className="mt-1">Optimized for Apple Silicon (M1/M2/M3)</p>
