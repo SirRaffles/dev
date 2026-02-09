@@ -248,6 +248,16 @@ def process_file(
         logger.warning(f"Skipping (sync failed): {filename}")
         return False
 
+    # Skip corrupt/empty files (legitimate recordings are always > 1KB)
+    try:
+        file_size = file_path.stat().st_size
+        if file_size < 1024:
+            logger.warning(f"Skipping corrupt file ({file_size} bytes): {filename}")
+            state.mark_permanently_failed(file_path, f"Corrupt file ({file_size} bytes)")
+            return True
+    except OSError:
+        pass
+
     logger.info(f"Processing: {filename}")
     notify_transcription_started(filename)
 

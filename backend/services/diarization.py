@@ -18,12 +18,20 @@ def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_fil
     try:
         os.environ["HF_TOKEN"] = hf_token
 
-        from pyannote.audio import Pipeline
         import torch
+        import torch.serialization
+
+        # PyTorch 2.6+ defaults to weights_only=True in torch.load, but
+        # pyannote model checkpoints contain custom classes that aren't in
+        # the safe-globals list. We trust HuggingFace-hosted pyannote models,
+        # so override the default in this isolated subprocess.
+        torch.serialization._default_to_weights_only = lambda pickle_module: False
+
+        from pyannote.audio import Pipeline
 
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            token=hf_token
+            use_auth_token=hf_token
         )
 
         if torch.backends.mps.is_available():

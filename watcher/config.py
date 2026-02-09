@@ -13,7 +13,7 @@ WATCH_EXTENSIONS = {".m4a"}
 
 # Backend API
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-API_TIMEOUT = 60  # seconds for API calls
+API_TIMEOUT = 300  # seconds for API calls (large files need more time)
 POLL_INTERVAL = 5  # seconds between status polls
 MAX_POLL_TIME = 3600  # 1 hour max transcription time (for long recordings)
 
@@ -22,7 +22,7 @@ TRANSCRIPTION_SETTINGS = {
     "language": "auto",
     "enable_diarization": True,
     "enable_noise_reduction": False,
-    "model_size": "large-v3",
+    "model_size": "large-v3-turbo",
     "word_timestamps": False,
     "translate_to_english": False,
 }

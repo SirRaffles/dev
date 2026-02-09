@@ -68,6 +68,10 @@ class StateManager:
         if entry is None:
             return False
 
+        # Skip permanently failed files (e.g. corrupt/empty files)
+        if entry.get("status") == "permanently_failed":
+            return True
+
         # Check if file was modified since processing
         if entry.get("status") == "completed":
             try:
@@ -146,6 +150,24 @@ class StateManager:
         self.state["processed_files"][key] = entry
         self._save_state()
         logger.info(f"Marked as completed: {file_path.name}")
+
+    def mark_permanently_failed(self, file_path: Path, error: str) -> None:
+        """Mark a file as permanently failed (will not be retried)."""
+        key = str(file_path.resolve())
+        entry = self.state["processed_files"].get(key, {})
+        try:
+            entry["file_size"] = file_path.stat().st_size
+            entry["file_mtime"] = file_path.stat().st_mtime
+        except OSError:
+            pass
+        entry.update({
+            "status": "permanently_failed",
+            "failed_at": datetime.now().isoformat(),
+            "error": error,
+        })
+        self.state["processed_files"][key] = entry
+        self._save_state()
+        logger.warning(f"Permanently failed: {file_path.name} - {error}")
 
     def mark_failed(self, file_path: Path, error: str, attempt: int = 0) -> None:
         """Mark a file as failed and add to retry queue."""

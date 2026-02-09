@@ -28,6 +28,7 @@ echo -e "${BLUE}========================================${NC}"
 if [ -z "$HF_TOKEN" ]; then
     if [ -f "$PROJECT_DIR/.env" ]; then
         source "$PROJECT_DIR/.env"
+        export HF_TOKEN
     fi
 fi
 
