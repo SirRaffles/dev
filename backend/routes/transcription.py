@@ -12,12 +12,14 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Literal
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.responses import StreamingResponse
+
+from rate_limit import check_rate_limit
 
 from config import (
     SUPPORTED_LANGUAGES, MLX_MODELS, ALLOWED_EXTENSIONS,
-    ALLOWED_AUDIO_EXTENSIONS,
+    ALLOWED_AUDIO_EXTENSIONS, VOXTRAL_LOCAL_MODELS, VOXTRAL_LOCAL_LANGUAGES,
 )
 from job_models import (
     TranscriptionJob, BatchJob, TranscriptionSettings,
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/transcribe/file")
+@router.post("/transcribe/file", dependencies=[Depends(check_rate_limit)])
 async def transcribe_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -46,21 +48,32 @@ async def transcribe_file(
     word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language -> English)"),
     speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
-    engine: str = Query("whisper", description="Transcription engine: whisper (local) or voxtral-api (cloud)"),
+    engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine == "voxtral-local":
+        if not state._voxtral_local_available:
+            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
     elif engine != "whisper":
-        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
 
     if engine == "whisper" and not state.whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
     effective_model = model_size
-    if engine == "whisper":
+    if engine == "voxtral-local":
+        if model_size not in VOXTRAL_LOCAL_MODELS:
+            effective_model = "voxtral-mini-3b"
+        if language not in VOXTRAL_LOCAL_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
+            )
+    elif engine == "whisper":
         effective_model = select_optimal_model(language, model_size, speed_priority)
         if effective_model not in MLX_MODELS and effective_model != "parakeet":
             raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
@@ -128,16 +141,16 @@ async def transcribe_file(
 
         return {"job_id": job_id, "status": "processing", "model": effective_model, "engine": engine}
 
+    except HTTPException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
     except Exception as e:
-        try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.error(f"Internal error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/transcribe/youtube")
+@router.post("/transcribe/youtube", dependencies=[Depends(check_rate_limit)])
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
@@ -146,21 +159,32 @@ async def transcribe_youtube(
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers"),
     use_captions: bool = Query(True, description="Try YouTube captions first"),
     speed_priority: bool = Query(False, description="Optimize for speed"),
-    engine: str = Query("whisper", description="Transcription engine: whisper or voxtral-api"),
+    engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral"),
 ):
     """Download and transcribe audio from a YouTube URL."""
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine == "voxtral-local":
+        if not state._voxtral_local_available:
+            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
     elif engine != "whisper":
-        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
 
     if engine == "whisper" and not state.whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
     effective_model = model_size
-    if engine == "whisper":
+    if engine == "voxtral-local":
+        if model_size not in VOXTRAL_LOCAL_MODELS:
+            effective_model = "voxtral-mini-3b"
+        if request.language not in VOXTRAL_LOCAL_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
+            )
+    elif engine == "whisper":
         effective_model = select_optimal_model(request.language, model_size, speed_priority)
         if effective_model not in MLX_MODELS and effective_model != "parakeet":
             raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
@@ -188,6 +212,7 @@ async def transcribe_youtube(
             job.result = transcript["text"]
             job.language = transcript["language"]
             job.language_probability = 1.0
+            state.jobs.update(job)
 
             return {
                 "job_id": job_id,
@@ -202,10 +227,11 @@ async def transcribe_youtube(
     try:
         job.status = "downloading"
         job.progress_message = "Downloading audio from YouTube..."
+        state.jobs.update(job)
 
         loop = asyncio.get_event_loop()
         audio_path = await loop.run_in_executor(
-            state.transcription_executor,
+            None,
             download_youtube_audio,
             request.url,
             temp_dir
@@ -233,17 +259,15 @@ async def transcribe_youtube(
         return {"job_id": job_id, "status": "processing", "source": engine, "model": model_size, "engine": engine}
 
     except Exception as e:
-        try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
         job.status = "failed"
         job.error = str(e)
-        logger.error(f"Internal error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        state.jobs.update(job)
+        logger.error(f"YouTube transcription error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/transcribe/batch")
+@router.post("/transcribe/batch", dependencies=[Depends(check_rate_limit)])
 async def transcribe_batch(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
@@ -254,21 +278,32 @@ async def transcribe_batch(
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     translate_to_english: bool = Query(False, description="Translate output to English"),
     speed_priority: bool = Query(False, description="Optimize for speed"),
-    engine: str = Query("whisper", description="Transcription engine"),
+    engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Context terms for Voxtral"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
+    elif engine == "voxtral-local":
+        if not state._voxtral_local_available:
+            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
     elif engine != "whisper":
-        raise HTTPException(status_code=400, detail=f"Invalid engine. Use: whisper or voxtral-api")
+        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
 
     if engine == "whisper" and not state.whisper_model_ready:
         raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
 
     effective_model = model_size
-    if engine == "whisper":
+    if engine == "voxtral-local":
+        if model_size not in VOXTRAL_LOCAL_MODELS:
+            effective_model = "voxtral-mini-3b"
+        if language not in VOXTRAL_LOCAL_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
+            )
+    elif engine == "whisper":
         effective_model = select_optimal_model(language, model_size, speed_priority)
         if effective_model not in MLX_MODELS and effective_model != "parakeet":
             raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
@@ -292,10 +327,23 @@ async def transcribe_batch(
         file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
         input_path = os.path.join(temp_dir, f"input{file_ext}")
 
+        max_size = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
+
         try:
+            file_size = 0
             with open(input_path, "wb") as f:
                 while chunk := await file.read(1024 * 1024):
+                    file_size += len(chunk)
+                    if file_size > max_size:
+                        f.close()
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        job.status = "failed"
+                        job.error = f"File too large. Maximum size is {max_size // (1024 * 1024)}MB."
+                        break
                     f.write(chunk)
+
+            if job.status == "failed":
+                continue
 
             audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
@@ -327,10 +375,7 @@ async def transcribe_batch(
             background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
         except Exception as e:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
+            shutil.rmtree(temp_dir, ignore_errors=True)
             job.status = "failed"
             job.error = str(e)
 

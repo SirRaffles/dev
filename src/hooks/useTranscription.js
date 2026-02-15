@@ -15,6 +15,7 @@ export function useTranscription() {
 
   // Batch-specific state (not shared with useMultiModal)
   const [batchProgress, setBatchProgress] = useState([]);
+  const [batchResults, setBatchResults] = useState([]);
   const batchPollRef = useRef(null);
 
   // Poll batch job status
@@ -33,12 +34,25 @@ export function useTranscription() {
       job.setProgressMessage(`${data.completed}/${data.total} files completed`);
 
       if (data.overall_status === 'completed') {
-        // Fetch first completed job result to display
+        // Fetch all completed job results for batch navigation
         if (data.jobs.length > 0) {
-          const firstJobId = data.jobs[0].job_id;
-          const resultData = await fetchJobStatus(firstJobId);
-          job.updateResult(resultData);
-          job.startJob(firstJobId);
+          const allResults = await Promise.all(
+            data.jobs.map(async (j) => {
+              try {
+                const resultData = await fetchJobStatus(j.job_id);
+                return { job_id: j.job_id, result: resultData };
+              } catch {
+                return { job_id: j.job_id, result: null };
+              }
+            })
+          );
+          setBatchResults(allResults.filter(r => r.result !== null));
+          // Display first result by default
+          const firstResult = allResults.find(r => r.result !== null);
+          if (firstResult) {
+            job.updateResult(firstResult.result);
+            job.startJob(firstResult.job_id);
+          }
         }
         job.stopPolling();
         if (batchPollRef.current) {
@@ -89,7 +103,15 @@ export function useTranscription() {
     try {
       job.startJob(null, 'Downloading video...');
       const data = await submitYouTubeTranscription(url, options);
-      job.startJob(data.job_id, 'Processing...');
+
+      if (data.status === 'completed') {
+        // Captions fast path: result is already available, fetch it directly
+        const result = await fetchJobStatus(data.job_id, false);
+        job.updateResult(result);
+        job.startJob(data.job_id, 'Complete (YouTube captions)');
+      } else {
+        job.startJob(data.job_id, 'Processing...');
+      }
     } catch (err) {
       job.failJob(err.message || 'Failed to start YouTube transcription');
     }
@@ -117,10 +139,19 @@ export function useTranscription() {
     }
   }, [job, pollBatchJobStatus]);
 
+  // Select a specific batch result to display
+  const selectBatchResult = useCallback((index) => {
+    if (batchResults[index]) {
+      job.updateResult(batchResults[index].result);
+      job.startJob(batchResults[index].job_id);
+    }
+  }, [batchResults, job]);
+
   // Reset (also clears batch state)
   const reset = useCallback(() => {
     job.reset();
     setBatchProgress([]);
+    setBatchResults([]);
     if (batchPollRef.current) {
       clearInterval(batchPollRef.current);
       batchPollRef.current = null;
@@ -135,6 +166,8 @@ export function useTranscription() {
     result: job.result,
     error: job.error,
     batchProgress,
+    batchResults,
+    selectBatchResult,
     transcribeFile,
     transcribeYouTube,
     transcribeBatch,

@@ -17,10 +17,25 @@ def _is_valid_youtube_url(url: str) -> bool:
         r'^https?://(www\.)?youtube\.com/watch\?',
         r'^https?://(www\.)?youtube\.com/shorts/',
         r'^https?://(www\.)?youtube\.com/embed/',
+        r'^https?://(www\.)?youtube\.com/live/',
         r'^https?://youtu\.be/',
         r'^https?://music\.youtube\.com/watch\?',
     ]
     return any(re.match(pattern, url) for pattern in youtube_patterns)
+
+
+def _parse_ytdlp_error(stderr: str) -> str:
+    """Map common yt-dlp error patterns to user-friendly messages."""
+    stderr_lower = stderr.lower()
+    if "video unavailable" in stderr_lower or "private video" in stderr_lower:
+        return "This video is unavailable or private"
+    if "sign in to confirm" in stderr_lower or "age" in stderr_lower:
+        return "This video is age-restricted and cannot be downloaded"
+    if "not a valid url" in stderr_lower:
+        return "Invalid YouTube URL"
+    if "copyright" in stderr_lower:
+        return "This video is unavailable due to a copyright claim"
+    return "YouTube download failed. The video may be unavailable or region-restricted."
 
 
 def download_youtube_audio(url: str, output_dir: str) -> str:
@@ -48,7 +63,7 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
         raise RuntimeError("YouTube download timed out after 10 minutes")
 
     if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {result.stderr}")
+        raise RuntimeError(_parse_ytdlp_error(result.stderr))
 
     for f in os.listdir(output_dir):
         if f.endswith(".wav"):
@@ -60,8 +75,9 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
 def extract_video_id(url: str) -> Optional[str]:
     """Extract video ID from various YouTube URL formats."""
     patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/live\/)([a-zA-Z0-9_-]{11})',
         r'(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})',
+        r'(?:music\.youtube\.com\/watch\?.*v=)([a-zA-Z0-9_-]{11})',
     ]
 
     for pattern in patterns:
