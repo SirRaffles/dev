@@ -117,9 +117,45 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
     return result
 
 
+def _get_audio_duration(audio_path: str) -> float:
+    """Get audio duration in seconds using ffprobe."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def _extract_audio_chunk(audio_path: str, start: float, duration: float, output_path: str) -> bool:
+    """Extract a chunk of audio as 16kHz mono WAV for Voxtral."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", audio_path, "-ss", str(start), "-t", str(duration),
+             "-ar", "16000", "-ac", "1", output_path, "-y", "-loglevel", "error"],
+            capture_output=True, timeout=60, check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettings) -> dict:
-    """Transcribe audio using Voxtral Mini 3B locally via mlx-audio."""
+    """Transcribe audio using Voxtral Mini 3B locally via mlx-audio.
+
+    Automatically chunks audio into 30-second segments (the encoder's max)
+    and merges results with correct timestamps.
+    """
+    import tempfile
     from mlx_audio.stt.utils import load as mlx_audio_load
+
+    CHUNK_DURATION = 30  # seconds — Voxtral encoder max (WhisperFeatureExtractor chunk_length)
+    MAX_TOKENS_PER_CHUNK = 4096
 
     # Determine which model variant to use
     model_key = settings.model_size if settings.model_size in VOXTRAL_LOCAL_MODELS else "voxtral-mini-3b"
@@ -135,45 +171,68 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
         logger.info("Voxtral Local model loaded successfully")
 
     model = state._voxtral_local_model
+    language = settings.language if settings.language != "auto" else None
 
-    language = settings.language if settings.language != "auto" else "en"
+    # Get total duration to determine chunking
+    total_duration = _get_audio_duration(audio_path)
+    if total_duration <= 0:
+        total_duration = CHUNK_DURATION  # fallback: treat as single chunk
 
-    # Generate transcription
-    result = model.generate(audio_path, language=language, max_tokens=1024)
+    num_chunks = max(1, int(total_duration / CHUNK_DURATION) + (1 if total_duration % CHUNK_DURATION > 0.5 else 0))
+    logger.info("Audio duration: %.1fs, splitting into %d chunk(s) of %ds", total_duration, num_chunks, CHUNK_DURATION)
 
-    # Parse result into standard format
     segments = []
-    full_text = ""
+    all_text_parts = []
 
-    if isinstance(result, dict):
-        full_text = result.get("text", "")
-        for seg in result.get("segments", []):
-            segments.append({
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 0),
-                "text": seg.get("text", "").strip(),
-            })
-    elif isinstance(result, str):
-        full_text = result.strip()
-        segments.append({"start": 0, "end": 0, "text": full_text})
-    elif hasattr(result, "text"):
-        full_text = str(result.text).strip()
-        result_segments = getattr(result, "segments", None)
-        if result_segments:
-            for seg in result_segments:
+    for i in range(num_chunks):
+        chunk_start = i * CHUNK_DURATION
+        chunk_dur = min(CHUNK_DURATION, total_duration - chunk_start)
+        if chunk_dur < 0.5:
+            break
+
+        # Extract chunk as WAV
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            if not _extract_audio_chunk(audio_path, chunk_start, chunk_dur, tmp_path):
+                logger.warning("Failed to extract chunk %d (%.1fs-%.1fs), skipping", i, chunk_start, chunk_start + chunk_dur)
+                continue
+
+            gen_kwargs = {"max_tokens": MAX_TOKENS_PER_CHUNK}
+            if language:
+                gen_kwargs["language"] = language
+
+            result = model.generate(tmp_path, **gen_kwargs)
+
+            # Parse chunk result
+            chunk_text = ""
+            if hasattr(result, "text"):
+                chunk_text = str(result.text).strip()
+            elif isinstance(result, dict):
+                chunk_text = result.get("text", "").strip()
+            elif isinstance(result, str):
+                chunk_text = result.strip()
+            else:
+                chunk_text = str(result).strip()
+
+            if chunk_text and chunk_text != ".":
                 segments.append({
-                    "start": getattr(seg, "start", 0),
-                    "end": getattr(seg, "end", 0),
-                    "text": getattr(seg, "text", "").strip(),
+                    "start": chunk_start,
+                    "end": chunk_start + chunk_dur,
+                    "text": chunk_text,
                 })
-        else:
-            segments.append({"start": 0, "end": 0, "text": full_text})
-    else:
-        full_text = str(result).strip()
-        segments.append({"start": 0, "end": 0, "text": full_text})
+                all_text_parts.append(chunk_text)
 
-    if not full_text and segments:
-        full_text = " ".join(s["text"] for s in segments)
+            logger.info("Chunk %d/%d (%.0fs-%.0fs): %d chars", i + 1, num_chunks, chunk_start, chunk_start + chunk_dur, len(chunk_text))
+
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    full_text = " ".join(all_text_parts)
 
     return {
         "text": full_text,
