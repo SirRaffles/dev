@@ -265,9 +265,9 @@ class TranscriptionSettings(BaseModel):
     enable_diarization: bool = True
     num_speakers: Optional[int] = None
     enable_noise_reduction: bool = False
-    model_size: str = "large-v3-turbo"
+    model_size: str = "voxtral-mini-3b"
     translate_to_english: bool = False
-    engine: str = "whisper"
+    engine: str = "voxtral-local"
     context_terms: Optional[List[str]] = None
     two_pass: bool = False
 

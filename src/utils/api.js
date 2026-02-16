@@ -142,7 +142,7 @@ export async function submitTranscription(file, options = {}) {
     language: options.language || 'auto',
     enable_diarization: options.enableDiarization ?? true,
     enable_noise_reduction: options.enableNoiseReduction ?? false,
-    model_size: options.modelSize || 'large-v3-turbo',
+    model_size: options.modelSize || 'voxtral-mini-3b',
     word_timestamps: options.wordTimestamps ?? false,
     translate_to_english: options.translateToEnglish ?? false,
     speed_priority: options.speedPriority ?? false,
@@ -193,7 +193,7 @@ export async function submitMultiModalProcessing(file, options = {}) {
 export async function submitYouTubeTranscription(url, options = {}) {
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
-    model_size: options.modelSize || 'large-v3-turbo',
+    model_size: options.modelSize || 'voxtral-mini-3b',
     word_timestamps: options.wordTimestamps ?? false,
     speed_priority: options.speedPriority ?? false,
     engine: options.engine || 'voxtral-local',
@@ -288,7 +288,7 @@ export async function submitBatchTranscription(files, options = {}) {
   const params = new URLSearchParams({
     language: options.language || 'auto',
     enable_diarization: options.enableDiarization ?? true,
-    model_size: options.modelSize || 'large-v3-turbo',
+    model_size: options.modelSize || 'voxtral-mini-3b',
     word_timestamps: options.wordTimestamps ?? false,
     translate_to_english: options.translateToEnglish ?? false,
     speed_priority: options.speedPriority ?? false,
