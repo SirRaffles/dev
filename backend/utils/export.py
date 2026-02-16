@@ -3,6 +3,7 @@ Export format generators for transcription jobs.
 """
 
 import io
+import json
 from datetime import datetime
 
 from config import SUPPORTED_LANGUAGES
@@ -83,6 +84,33 @@ def generate_srt(job: TranscriptionJob) -> str:
     for i, segment in enumerate(job.segments, 1):
         start = format_srt_timestamp(segment["start"])
         end = format_srt_timestamp(segment["end"])
+
+        speaker_prefix = f"{segment['speaker']}: " if segment.get("speaker") else ""
+
+        lines.append(str(i))
+        lines.append(f"{start} --> {end}")
+        lines.append(f"{speaker_prefix}{segment['text']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_vtt_timestamp(seconds: float) -> str:
+    """Format seconds to WebVTT timestamp (HH:MM:SS.mmm with dot separator)."""
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{ms:03d}"
+
+
+def generate_vtt(job: TranscriptionJob) -> str:
+    """Generate WebVTT subtitle file."""
+    lines = ["WEBVTT", ""]
+
+    for i, segment in enumerate(job.segments, 1):
+        start = format_vtt_timestamp(segment["start"])
+        end = format_vtt_timestamp(segment["end"])
 
         speaker_prefix = f"{segment['speaker']}: " if segment.get("speaker") else ""
 
@@ -177,3 +205,33 @@ def generate_docx(job: TranscriptionJob) -> bytes:
     doc.save(buffer)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def generate_json_export(
+    job: TranscriptionJob,
+    engine: str = None,
+    warnings: list = None,
+    edits: list = None,
+) -> str:
+    """Generate canonical JSON export with metadata and audit trail."""
+    lang_name = SUPPORTED_LANGUAGES.get(job.language, job.language)
+
+    data = {
+        "metadata": {
+            "generated_at": datetime.now().isoformat(),
+            "engine": engine,
+            "language": job.language,
+            "language_name": lang_name,
+            "language_confidence": job.language_probability,
+            "segment_count": len(job.segments),
+            "speaker_count": len(set(
+                s.get("speaker") for s in job.segments if s.get("speaker")
+            )),
+        },
+        "text": job.result,
+        "segments": job.segments,
+        "warnings": warnings or [],
+        "edits": edits or [],
+    }
+
+    return json.dumps(data, indent=2, ensure_ascii=False)

@@ -122,7 +122,32 @@ class JobStore:
             file_path,
         )
 
+    def prune_completed(self, max_age_hours: int = 24):
+        """Remove completed/failed jobs older than max_age_hours from DB and cache."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM jobs WHERE status IN ('completed', 'failed') "
+                    "AND updated_at < datetime('now', ? || ' hours')",
+                    (f"-{max_age_hours}",)
+                )
+                pruned = cursor.rowcount
+                conn.commit()
+            if pruned:
+                # Remove stale entries from cache too
+                stale = [
+                    jid for jid, j in self._cache.items()
+                    if j.status in ("completed", "failed")
+                ]
+                # Keep only recent ones; cache doesn't track timestamps,
+                # so evict all completed/failed beyond a size threshold
+                if len(self._cache) > 500:
+                    for jid in stale[:len(stale) - 100]:
+                        self._cache.pop(jid, None)
+                logger.info("Pruned %d completed/failed jobs older than %dh", pruned, max_age_hours)
+
     def create(self, job: TranscriptionJob, file_path: str = None):
+        self.prune_completed()
         with self._lock:
             self._cache[job.job_id] = job
             with self._get_connection() as conn:
@@ -244,6 +269,119 @@ class TranscriptionSettings(BaseModel):
     translate_to_english: bool = False
     engine: str = "whisper"
     context_terms: Optional[List[str]] = None
+    two_pass: bool = False
+
+
+class RefinementStore:
+    """
+    SQLite-backed storage for transcript refinement results.
+    Uses the same database as JobStore.
+    """
+
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
+        self.db_path = db_path
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _get_connection(self):
+        return sqlite3.connect(self.db_path, check_same_thread=False)
+
+    def _init_db(self):
+        with self._get_connection() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS refinements (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    analysis TEXT,
+                    refined_segments TEXT,
+                    speaker_mapping TEXT,
+                    corrections_applied INTEGER DEFAULT 0,
+                    speakers_identified INTEGER DEFAULT 0,
+                    web_searches_performed INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_refinements_status ON refinements(status)
+            ''')
+            conn.commit()
+        logger.info("Refinement store initialized")
+
+    def create(self, job_id: str):
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO refinements (job_id, status) VALUES (?, 'pending')",
+                    (job_id,)
+                )
+                conn.commit()
+
+    def get(self, job_id: str) -> Optional[dict]:
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM refinements WHERE job_id = ?", (job_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_dict(row, cursor.description)
+
+    def update_status(self, job_id: str, status: str, error: str = None):
+        with self._lock:
+            with self._get_connection() as conn:
+                if error:
+                    conn.execute(
+                        "UPDATE refinements SET status=?, error=? WHERE job_id=?",
+                        (status, error, job_id)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE refinements SET status=? WHERE job_id=?",
+                        (status, job_id)
+                    )
+                conn.commit()
+
+    def save_result(self, job_id: str, result: dict):
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute('''
+                    UPDATE refinements SET
+                        status='completed',
+                        analysis=?,
+                        refined_segments=?,
+                        speaker_mapping=?,
+                        corrections_applied=?,
+                        speakers_identified=?,
+                        web_searches_performed=?,
+                        completed_at=CURRENT_TIMESTAMP
+                    WHERE job_id=?
+                ''', (
+                    json.dumps(result.get("analysis")),
+                    json.dumps(result.get("refined_segments")),
+                    json.dumps(result.get("speaker_mapping")),
+                    result.get("corrections_applied", 0),
+                    result.get("speakers_identified", 0),
+                    result.get("web_searches_performed", 0),
+                    job_id,
+                ))
+                conn.commit()
+
+    def _row_to_dict(self, row, description) -> dict:
+        columns = [col[0] for col in description]
+        d = dict(zip(columns, row))
+        # Parse JSON fields
+        for field in ("analysis", "refined_segments", "speaker_mapping"):
+            if d.get(field):
+                try:
+                    d[field] = json.loads(d[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return d
 
 
 class SpeakerRenameRequest(BaseModel):

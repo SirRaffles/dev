@@ -28,7 +28,7 @@ from job_models import (
 from services.audio import extract_audio
 from services.youtube import download_youtube_audio, extract_video_id, get_youtube_transcript
 from services.transcription import select_optimal_model, transcribe_audio
-from utils.export import generate_txt, generate_markdown, generate_srt, generate_pdf, generate_docx
+from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import state
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ async def transcribe_file(
     speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
     engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
+    two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
     if engine == "voxtral-api":
@@ -135,6 +136,7 @@ async def transcribe_file(
             translate_to_english=translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
+            two_pass=two_pass and engine == "voxtral-api",
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -161,6 +163,7 @@ async def transcribe_youtube(
     speed_priority: bool = Query(False, description="Optimize for speed"),
     engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral"),
+    two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
     if engine == "voxtral-api":
@@ -252,6 +255,7 @@ async def transcribe_youtube(
             translate_to_english=request.translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
+            two_pass=two_pass and engine == "voxtral-api",
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -280,6 +284,7 @@ async def transcribe_batch(
     speed_priority: bool = Query(False, description="Optimize for speed"),
     engine: str = Query("whisper", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Context terms for Voxtral"),
+    two_pass: bool = Query(False, description="Two-pass mode (voxtral-api only, 2x cost)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
     if engine == "voxtral-api":
@@ -370,6 +375,7 @@ async def transcribe_batch(
                 translate_to_english=translate_to_english,
                 engine=engine,
                 context_terms=parsed_context_terms,
+                two_pass=two_pass and engine == "voxtral-api",
             )
 
             background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -481,7 +487,7 @@ async def get_job_status(job_id: str):
 @router.get("/job/{job_id}/export")
 async def export_transcript(
     job_id: str,
-    format: Literal["txt", "md", "srt", "pdf", "docx"] = Query(..., description="Export format"),
+    format: Literal["txt", "md", "srt", "vtt", "json", "pdf", "docx"] = Query(..., description="Export format"),
 ):
     """Export transcript in various formats."""
     job = state.jobs.get(job_id)
@@ -516,6 +522,22 @@ async def export_transcript(
             io.BytesIO(content.encode()),
             media_type="text/plain",
             headers={"Content-Disposition": f"attachment; filename={filename}.srt"}
+        )
+
+    elif format == "vtt":
+        content = generate_vtt(job)
+        return StreamingResponse(
+            io.BytesIO(content.encode()),
+            media_type="text/vtt",
+            headers={"Content-Disposition": f"attachment; filename={filename}.vtt"}
+        )
+
+    elif format == "json":
+        content = generate_json_export(job)
+        return StreamingResponse(
+            io.BytesIO(content.encode()),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename={filename}.json"}
         )
 
     elif format == "pdf":

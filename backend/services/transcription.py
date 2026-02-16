@@ -5,11 +5,14 @@ Core transcription logic: MLX-Whisper, Parakeet, Voxtral engines.
 import os
 import asyncio
 import logging
+import shutil
+import tempfile
 
-from config import MLX_MODELS, PARAKEET_MODEL
+from config import MLX_MODELS, PARAKEET_MODEL, VOXTRAL_LOCAL_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
-from services.diarization import run_diarization, assign_speakers_to_segments
+from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
+from services.postprocess import normalize_segments
 import state
 
 logger = logging.getLogger(__name__)
@@ -17,20 +20,9 @@ logger = logging.getLogger(__name__)
 
 def get_mlx_model_path():
     """Get the MLX-Whisper model path based on environment or default."""
-    mlx_models = {
-        "tiny": "mlx-community/whisper-tiny",
-        "base": "mlx-community/whisper-base",
-        "small": "mlx-community/whisper-small",
-        "medium": "mlx-community/whisper-medium",
-        "large": "mlx-community/whisper-large-v3-mlx",
-        "large-v2": "mlx-community/whisper-large-v2-mlx",
-        "large-v3": "mlx-community/whisper-large-v3-mlx",
-        "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
-        "distil-large-v3": "mlx-community/distil-whisper-large-v3",
-    }
-
     model_size = os.environ.get("WHISPER_MODEL_SIZE", "large-v3-turbo")
-    return mlx_models.get(model_size, mlx_models["large-v3-turbo"])
+    model_info = MLX_MODELS.get(model_size, MLX_MODELS["large-v3-turbo"])
+    return model_info["path"]
 
 
 def select_optimal_model(language: str, model_size: str, speed_priority: bool = False) -> str:
@@ -100,19 +92,94 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
     if not state._voxtral_service:
         raise RuntimeError("Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
 
-    logger.info("Transcribing with Voxtral Mini (cloud API)...")
-
     language = None if settings.language == "auto" else settings.language
 
-    result = state._voxtral_service.transcribe(
-        audio_path=audio_path,
-        language=language or "auto",
-        enable_diarization=settings.enable_diarization,
-        word_timestamps=settings.word_timestamps,
-        context_terms=settings.context_terms,
-    )
+    # Two-pass mode: get both timestamps and language accuracy (2x API cost)
+    if settings.two_pass and language:
+        logger.info("Transcribing with Voxtral Mini (cloud API, two-pass mode)...")
+        result = state._voxtral_service.transcribe_two_pass(
+            audio_path=audio_path,
+            language=language,
+            enable_diarization=settings.enable_diarization,
+            word_timestamps=settings.word_timestamps,
+            context_terms=settings.context_terms,
+        )
+    else:
+        logger.info("Transcribing with Voxtral Mini (cloud API)...")
+        result = state._voxtral_service.transcribe(
+            audio_path=audio_path,
+            language=language or "auto",
+            enable_diarization=settings.enable_diarization,
+            word_timestamps=settings.word_timestamps,
+            context_terms=settings.context_terms,
+        )
 
     return result
+
+
+def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettings) -> dict:
+    """Transcribe audio using Voxtral Mini 3B locally via mlx-audio."""
+    from mlx_audio.stt.utils import load as mlx_audio_load
+
+    # Determine which model variant to use
+    model_key = settings.model_size if settings.model_size in VOXTRAL_LOCAL_MODELS else "voxtral-mini-3b"
+    model_path = VOXTRAL_LOCAL_MODELS[model_key]["path"]
+
+    logger.info("Transcribing with Voxtral Local (%s)...", model_path)
+
+    # Lazy-load: cache model in state to avoid reloading on every request
+    if state._voxtral_local_model is None or state._voxtral_local_model_name != model_path:
+        logger.info("Loading Voxtral Local model: %s", model_path)
+        state._voxtral_local_model = mlx_audio_load(model_path)
+        state._voxtral_local_model_name = model_path
+        logger.info("Voxtral Local model loaded successfully")
+
+    model = state._voxtral_local_model
+
+    language = settings.language if settings.language != "auto" else "en"
+
+    # Generate transcription
+    result = model.generate(audio_path, language=language, max_tokens=1024)
+
+    # Parse result into standard format
+    segments = []
+    full_text = ""
+
+    if isinstance(result, dict):
+        full_text = result.get("text", "")
+        for seg in result.get("segments", []):
+            segments.append({
+                "start": seg.get("start", 0),
+                "end": seg.get("end", 0),
+                "text": seg.get("text", "").strip(),
+            })
+    elif isinstance(result, str):
+        full_text = result.strip()
+        segments.append({"start": 0, "end": 0, "text": full_text})
+    elif hasattr(result, "text"):
+        full_text = str(result.text).strip()
+        result_segments = getattr(result, "segments", None)
+        if result_segments:
+            for seg in result_segments:
+                segments.append({
+                    "start": getattr(seg, "start", 0),
+                    "end": getattr(seg, "end", 0),
+                    "text": getattr(seg, "text", "").strip(),
+                })
+        else:
+            segments.append({"start": 0, "end": 0, "text": full_text})
+    else:
+        full_text = str(result).strip()
+        segments.append({"start": 0, "end": 0, "text": full_text})
+
+    if not full_text and segments:
+        full_text = " ".join(s["text"] for s in segments)
+
+    return {
+        "text": full_text,
+        "segments": segments,
+        "language": language or "auto",
+    }
 
 
 def _run_transcription_sync(job_id: str, audio_path: str, settings: TranscriptionSettings):
@@ -123,12 +190,18 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         return
 
     use_voxtral = settings.engine == "voxtral-api"
-    use_parakeet = settings.model_size == "parakeet" and not use_voxtral
+    use_voxtral_local = settings.engine == "voxtral-local"
+    use_parakeet = settings.model_size == "parakeet" and not use_voxtral and not use_voxtral_local
 
     if use_voxtral:
         if not state._voxtral_available:
             job.status = "failed"
             job.error = "Voxtral API not configured. Set MISTRAL_API_KEY environment variable."
+            return
+    elif use_voxtral_local:
+        if not state._voxtral_local_available:
+            job.status = "failed"
+            job.error = "Voxtral Local not available. Install with: pip install mlx-audio"
             return
     elif use_parakeet:
         if not state._parakeet_available:
@@ -167,23 +240,50 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             voxtral_speakers = result.get("speakers", [])
             if voxtral_speakers:
                 job.speakers = [{"speaker": s} for s in voxtral_speakers]
+                transcription_segments = stitch_speaker_turns(transcription_segments)
 
         else:
-            # === LOCAL ENGINES (Whisper / Parakeet) ===
+            # === LOCAL ENGINES (Whisper / Parakeet / Voxtral Local) ===
             speakers = []
             hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-            if settings.enable_diarization and hf_token:
-                job.progress = 10
-                if settings.num_speakers:
-                    job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+            if settings.enable_diarization:
+                if not hf_token:
+                    logger.warning(
+                        "Diarization requested but HF_TOKEN is not set. "
+                        "Skipping speaker identification."
+                    )
                 else:
-                    job.progress_message = "Identifying speakers..."
-                speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
-                job.speakers = speakers
+                    job.progress = 10
+                    if settings.num_speakers:
+                        job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+                    else:
+                        job.progress_message = "Identifying speakers..."
+                    try:
+                        speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
+                    except Exception as e:
+                        logger.warning("Diarization failed, continuing without speaker identification: %s", e)
+                        speakers = []
+                    job.speakers = speakers
 
             job.progress = 20
 
-            if use_parakeet:
+            if use_voxtral_local:
+                if settings.word_timestamps:
+                    logger.warning("word_timestamps=True ignored: Voxtral Local does not support word-level timestamps")
+                job.progress_message = "Transcribing with Voxtral Local (~4% WER)..."
+                logger.info("Using Voxtral Local for transcription")
+
+                result = transcribe_with_voxtral_local(audio_path, settings)
+
+                job.language = result.get("language", "auto")
+                job.language_probability = 0.99
+
+                transcription_segments = result.get("segments", [])
+                full_text = result.get("text", "")
+
+            elif use_parakeet:
+                if settings.word_timestamps:
+                    logger.warning("word_timestamps=True ignored: Parakeet does not support word-level timestamps")
                 job.progress_message = "Transcribing with Parakeet MLX (60x real-time)..."
                 logger.info("Using Parakeet MLX for English transcription")
 
@@ -250,9 +350,13 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
             if speakers:
                 transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
+                transcription_segments = stitch_speaker_turns(transcription_segments)
 
         job.progress = 70
         job.progress_message = "Processing segments..."
+
+        # Apply text normalization (whitespace, punctuation, stutter removal)
+        normalize_segments(transcription_segments)
 
         job.progress = 90
         job.progress_message = "Finalizing..."
@@ -263,7 +367,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         job.progress_message = "Complete!"
         job.status = "completed"
         state.jobs.update(job)
-        model_name = "Voxtral" if use_voxtral else ("Parakeet MLX" if use_parakeet else "MLX-Whisper")
+        model_name = "Voxtral API" if use_voxtral else ("Voxtral Local" if use_voxtral_local else ("Parakeet MLX" if use_parakeet else "MLX-Whisper"))
         logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
 
     except Exception as e:
@@ -274,11 +378,11 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
     finally:
         try:
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
             parent_dir = os.path.dirname(audio_path)
-            if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
-                os.rmdir(parent_dir)
+            if parent_dir and os.path.isdir(parent_dir) and parent_dir.startswith(tempfile.gettempdir()):
+                shutil.rmtree(parent_dir, ignore_errors=True)
+            elif os.path.exists(audio_path):
+                os.remove(audio_path)
         except Exception:
             pass
 

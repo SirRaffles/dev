@@ -1,6 +1,6 @@
 import React from 'react';
-import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen } from 'lucide-react';
-import { LANGUAGES, MODEL_SIZES, ENGINES, VOXTRAL_MODELS } from '../utils/api';
+import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen, Layers } from 'lucide-react';
+import { LANGUAGES, MODEL_SIZES, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS } from '../utils/api';
 
 function SettingsPanel({
   settings,
@@ -8,6 +8,7 @@ function SettingsPanel({
   showForDocuments = false,
   disabled = false,
   voxtralAvailable = false,
+  voxtralLocalAvailable = false,
 }) {
   const {
     modelSize = 'large-v3-turbo',
@@ -18,15 +19,18 @@ function SettingsPanel({
     wordTimestamps = false,
     enableNoiseReduction = false,
     speedPriority = false,
-    engine = 'whisper',
+    engine = 'voxtral-local',
     contextTerms = '',
+    twoPass = false,
   } = settings;
 
   const handleChange = (key, value) => {
     onSettingsChange?.({ ...settings, [key]: value });
   };
 
-  const isVoxtral = engine === 'voxtral-api';
+  const isVoxtralApi = engine === 'voxtral-api';
+  const isVoxtralLocal = engine === 'voxtral-local';
+  const isWhisper = engine === 'whisper';
 
   // For document processing, only show relevant settings
   if (showForDocuments) {
@@ -35,7 +39,7 @@ function SettingsPanel({
         <p className="text-sm text-slate-400 mb-2">
           Document processing will extract text, images, and visual content.
         </p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           Charts and diagrams will be analyzed using GLM-4.6V vision model.
         </p>
       </div>
@@ -45,43 +49,53 @@ function SettingsPanel({
   return (
     <div className="mt-6 space-y-4">
       {/* Engine Selector */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button
           onClick={() => {
-            const updates = { engine: 'whisper' };
-            // Reset model to whisper default when switching back
-            if (isVoxtral) {
-              updates.modelSize = 'large-v3-turbo';
-            }
-            onSettingsChange?.({ ...settings, ...updates });
+            if (!voxtralLocalAvailable) return;
+            onSettingsChange?.({ ...settings, engine: 'voxtral-local', modelSize: 'voxtral-mini-3b' });
+          }}
+          disabled={disabled || !voxtralLocalAvailable}
+          title={!voxtralLocalAvailable ? 'Install mlx-audio for local Voxtral transcription' : 'Best accuracy (~4% WER), on-device'}
+          className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
+            isVoxtralLocal
+              ? 'bg-teal-500 text-white'
+              : 'bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600'
+          } ${!voxtralLocalAvailable ? 'cursor-not-allowed' : ''}`}
+        >
+          <Cpu className="w-4 h-4" />
+          Voxtral Local
+        </button>
+        <button
+          onClick={() => {
+            onSettingsChange?.({ ...settings, engine: 'whisper', modelSize: 'large-v3-turbo' });
           }}
           disabled={disabled}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
-            !isVoxtral
+          className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
+            isWhisper
               ? 'bg-blue-500 text-white'
               : 'bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600'
           }`}
         >
           <Cpu className="w-4 h-4" />
-          Whisper (Local)
+          Whisper
         </button>
         <button
           onClick={() => {
             if (!voxtralAvailable) return;
-            const updates = { engine: 'voxtral-api', modelSize: 'voxtral-mini' };
-            onSettingsChange?.({ ...settings, ...updates });
+            onSettingsChange?.({ ...settings, engine: 'voxtral-api', modelSize: 'voxtral-mini' });
           }}
           disabled={disabled || !voxtralAvailable}
           title={!voxtralAvailable ? 'Set MISTRAL_API_KEY to enable Voxtral cloud transcription' : 'Cloud transcription with Mistral Voxtral'}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
-            isVoxtral
+          className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
+            isVoxtralApi
               ? 'bg-violet-500 text-white'
               : 'bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600'
           } ${!voxtralAvailable ? 'cursor-not-allowed' : ''}`}
         >
           <Cloud className="w-4 h-4" />
-          Voxtral (Cloud)
-          {isVoxtral && <span className="text-xs opacity-75">$0.003/min</span>}
+          Cloud
+          {isVoxtralApi && <span className="text-xs opacity-75">$0.003/min</span>}
         </button>
       </div>
 
@@ -91,9 +105,9 @@ function SettingsPanel({
         <div>
           <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
             <FileAudio className="w-4 h-4" />
-            {isVoxtral ? 'Cloud Model' : 'Model Size'}
+            {isVoxtralApi ? 'Cloud Model' : isVoxtralLocal ? 'Local Model' : 'Model Size'}
           </label>
-          {isVoxtral ? (
+          {isVoxtralApi ? (
             <select
               value={modelSize}
               onChange={(e) => handleChange('modelSize', e.target.value)}
@@ -101,6 +115,19 @@ function SettingsPanel({
               className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-violet-400 disabled:opacity-50"
             >
               {Object.entries(VOXTRAL_MODELS).map(([id, { label, description }]) => (
+                <option key={id} value={id}>
+                  {label} - {description}
+                </option>
+              ))}
+            </select>
+          ) : isVoxtralLocal ? (
+            <select
+              value={modelSize}
+              onChange={(e) => handleChange('modelSize', e.target.value)}
+              disabled={disabled}
+              className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-teal-400 disabled:opacity-50"
+            >
+              {Object.entries(VOXTRAL_LOCAL_MODELS).map(([id, { label, description }]) => (
                 <option key={id} value={id}>
                   {label} - {description}
                 </option>
@@ -124,7 +151,7 @@ function SettingsPanel({
               })}
             </select>
           )}
-          {!isVoxtral && modelSize === 'parakeet' && language !== 'en' && language !== 'auto' && (
+          {isWhisper && modelSize === 'parakeet' && language !== 'en' && language !== 'auto' && (
             <p className="text-xs text-amber-400 mt-1">Parakeet requires English. Please select English or Auto-detect.</p>
           )}
         </div>
@@ -148,7 +175,7 @@ function SettingsPanel({
               }
 
               // Reset Parakeet model if switching to non-English
-              if (!isVoxtral && modelSize === 'parakeet' && newLang !== 'en' && newLang !== 'auto') {
+              if (isWhisper && modelSize === 'parakeet' && newLang !== 'en' && newLang !== 'auto') {
                 updates.modelSize = 'large-v3-turbo';
               }
 
@@ -167,7 +194,7 @@ function SettingsPanel({
         </div>
 
         {/* Translate to English Toggle */}
-        {language !== 'en' && !isVoxtral && (
+        {language !== 'en' && !isVoxtralApi && (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
               <Globe className="w-4 h-4" />
@@ -178,7 +205,7 @@ function SettingsPanel({
               disabled={disabled}
               className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
                 translateToEnglish
-                  ? 'bg-emerald-500 text-white'
+                  ? 'bg-blue-500 text-white'
                   : 'bg-slate-700 text-slate-300 border border-slate-600'
               }`}
             >
@@ -189,7 +216,7 @@ function SettingsPanel({
         )}
 
         {/* Speaker Diarization — different display for Voxtral vs Whisper */}
-        {isVoxtral ? (
+        {isVoxtralApi ? (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
               <Users className="w-4 h-4" />
@@ -221,8 +248,8 @@ function SettingsPanel({
           </div>
         )}
 
-        {/* Number of Speakers — only for Whisper with diarization */}
-        {!isVoxtral && enableDiarization && (
+        {/* Number of Speakers — only for local engines with diarization */}
+        {!isVoxtralApi && enableDiarization && (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
               <Users className="w-4 h-4" />
@@ -245,8 +272,8 @@ function SettingsPanel({
           </div>
         )}
 
-        {/* Context Terms — Voxtral only */}
-        {isVoxtral && (
+        {/* Context Terms — Voxtral Cloud only */}
+        {isVoxtralApi && (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
               <BookOpen className="w-4 h-4" />
@@ -260,7 +287,30 @@ function SettingsPanel({
               placeholder="e.g. FastAPI, MLX, Voxtral"
               className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-400 disabled:opacity-50"
             />
-            <p className="text-xs text-slate-500 mt-1">Comma-separated domain terms for better accuracy (max 100)</p>
+            <p className="text-xs text-slate-400 mt-1">Comma-separated domain terms for better accuracy (max 100)</p>
+          </div>
+        )}
+
+        {/* Two-Pass Mode — Voxtral Cloud only, when language is set */}
+        {isVoxtralApi && language !== 'auto' && (
+          <div>
+            <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+              <Layers className="w-4 h-4" />
+              Two-Pass Mode
+            </label>
+            <button
+              onClick={() => handleChange('twoPass', !twoPass)}
+              disabled={disabled}
+              className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                twoPass
+                  ? 'bg-violet-500 text-white'
+                  : 'bg-slate-700 text-slate-300 border border-slate-600'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              {twoPass ? 'Enabled (2x cost)' : 'Disabled'}
+            </button>
+            <p className="text-xs text-slate-400 mt-1">Timestamps + language accuracy via two API passes</p>
           </div>
         )}
 
@@ -275,7 +325,7 @@ function SettingsPanel({
             disabled={disabled}
             className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
               wordTimestamps
-                ? 'bg-purple-500 text-white'
+                ? 'bg-blue-500 text-white'
                 : 'bg-slate-700 text-slate-300 border border-slate-600'
             }`}
           >
@@ -295,7 +345,7 @@ function SettingsPanel({
             disabled={disabled}
             className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
               enableNoiseReduction
-                ? 'bg-green-500 text-white'
+                ? 'bg-blue-500 text-white'
                 : 'bg-slate-700 text-slate-300 border border-slate-600'
             }`}
           >
@@ -305,7 +355,7 @@ function SettingsPanel({
         </div>
 
         {/* Speed Priority Toggle — only for Whisper */}
-        {!isVoxtral && (
+        {isWhisper && (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
               <Clock className="w-4 h-4" />
@@ -316,7 +366,7 @@ function SettingsPanel({
               disabled={disabled}
               className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
                 speedPriority
-                  ? 'bg-orange-500 text-white'
+                  ? 'bg-blue-500 text-white'
                   : 'bg-slate-700 text-slate-300 border border-slate-600'
               }`}
             >

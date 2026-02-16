@@ -37,6 +37,12 @@ export const ENGINES = {
     type: 'local',
     cost: null,
   },
+  'voxtral-local': {
+    label: 'Voxtral Local',
+    description: 'Best accuracy (~4% WER), on-device, 13 languages',
+    type: 'local',
+    cost: null,
+  },
   'voxtral-api': {
     label: 'Voxtral (Cloud)',
     description: 'Best accuracy (~4% WER), built-in diarization',
@@ -62,11 +68,18 @@ export const VOXTRAL_MODELS = {
   'voxtral-mini': { label: 'Voxtral Mini', description: 'Best accuracy, built-in diarization ($0.003/min)' },
 };
 
+// Voxtral local models (via mlx-audio on Apple Silicon)
+export const VOXTRAL_LOCAL_MODELS = {
+  'voxtral-mini-3b': { label: 'Voxtral Mini 3B', description: 'Best accuracy (~4% WER), 13 languages (~9.4GB)' },
+  'voxtral-mini-3b-4bit': { label: 'Voxtral Mini 3B (4-bit)', description: 'Best accuracy (~4% WER), lower memory (~3.2GB)' },
+};
+
 // Export formats
 export const EXPORT_FORMATS = {
   txt: { label: 'Plain Text', ext: '.txt' },
   md: { label: 'Markdown', ext: '.md' },
   srt: { label: 'SRT Subtitles', ext: '.srt' },
+  vtt: { label: 'WebVTT Subtitles', ext: '.vtt' },
   pdf: { label: 'PDF Document', ext: '.pdf' },
   docx: { label: 'Word Document', ext: '.docx' },
   json: { label: 'JSON', ext: '.json' },
@@ -94,6 +107,7 @@ export function getSourceType(filename) {
   if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
   if (ext === 'pdf') return 'pdf';
   if (['pptx', 'ppt'].includes(ext)) return 'pptx';
+  if (ext === 'docx') return 'docx';
 
   return 'unknown';
 }
@@ -132,7 +146,8 @@ export async function submitTranscription(file, options = {}) {
     word_timestamps: options.wordTimestamps ?? false,
     translate_to_english: options.translateToEnglish ?? false,
     speed_priority: options.speedPriority ?? false,
-    engine: options.engine || 'whisper',
+    engine: options.engine || 'voxtral-local',
+    two_pass: options.twoPass ?? false,
   });
 
   if (options.numSpeakers) {
@@ -181,7 +196,8 @@ export async function submitYouTubeTranscription(url, options = {}) {
     model_size: options.modelSize || 'large-v3-turbo',
     word_timestamps: options.wordTimestamps ?? false,
     speed_priority: options.speedPriority ?? false,
-    engine: options.engine || 'whisper',
+    engine: options.engine || 'voxtral-local',
+    two_pass: options.twoPass ?? false,
   });
 
   if (options.numSpeakers) {
@@ -276,7 +292,8 @@ export async function submitBatchTranscription(files, options = {}) {
     word_timestamps: options.wordTimestamps ?? false,
     translate_to_english: options.translateToEnglish ?? false,
     speed_priority: options.speedPriority ?? false,
-    engine: options.engine || 'whisper',
+    engine: options.engine || 'voxtral-local',
+    two_pass: options.twoPass ?? false,
   });
 
   if (options.numSpeakers) {

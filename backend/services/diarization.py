@@ -29,9 +29,11 @@ def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_fil
 
         from pyannote.audio import Pipeline
 
+        # HF_TOKEN is already set in os.environ (line 19) — pyannote reads it
+        # from there. Passing use_auth_token= causes errors with newer
+        # huggingface_hub which removed that parameter from hf_hub_download().
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
         )
 
         if torch.backends.mps.is_available():
@@ -65,8 +67,25 @@ def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_fil
 
     except Exception as e:
         import traceback
+        error_msg = str(e)
+        tb = traceback.format_exc()
+
+        # Detect common pyannote/HF auth issues and provide actionable messages
+        if "401" in error_msg or "Unauthorized" in error_msg or "Invalid credentials" in error_msg:
+            error_msg = (
+                f"Hugging Face authentication failed: {error_msg}. "
+                "Check that your HF_TOKEN is valid and has not expired."
+            )
+        elif "403" in error_msg or "gated" in error_msg.lower() or "access" in error_msg.lower():
+            error_msg = (
+                f"Pyannote model license not accepted: {error_msg}. "
+                "You must accept the license agreements at: "
+                "https://huggingface.co/pyannote/speaker-diarization-3.1 and "
+                "https://huggingface.co/pyannote/segmentation-3.0"
+            )
+
         with open(output_file, 'w') as f:
-            json.dump({"status": "error", "error": str(e), "traceback": traceback.format_exc()}, f)
+            json.dump({"status": "error", "error": error_msg, "traceback": tb}, f)
 
 
 def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
@@ -74,7 +93,10 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
 
     if not hf_token:
-        logger.warning("HF_TOKEN not set, diarization will fail")
+        logger.warning(
+            "Diarization skipped: HF_TOKEN environment variable is not set. "
+            "Set HF_TOKEN to your Hugging Face access token to enable speaker diarization."
+        )
         return []
 
     _tf = tempfile.NamedTemporaryFile(suffix="_diarization.json", delete=False)
@@ -117,7 +139,8 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
                 logger.info("Diarization complete: %d speaker segments found", len(speakers))
                 return speakers
             else:
-                logger.error("Diarization subprocess error: %s", result.get('error'))
+                error_msg = result.get('error', 'Unknown error')
+                logger.warning("Diarization skipped: %s", error_msg)
                 if result.get('traceback'):
                     logger.debug("Diarization traceback:\n%s", result.get('traceback'))
                 return []
@@ -139,6 +162,43 @@ def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = No
 def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
     """Run speaker diarization on audio file."""
     return run_diarization_subprocess(audio_path, num_speakers)
+
+
+def stitch_speaker_turns(segments: List[dict], max_gap_ms: float = 600) -> List[dict]:
+    """Merge adjacent segments with the same speaker when the gap is small.
+
+    Never changes the outer timestamps of a merged segment (uses first start,
+    last end).  Only merges text fields.
+
+    Args:
+        segments: List of segment dicts with start, end, text, and optionally speaker.
+        max_gap_ms: Maximum gap in milliseconds between segments to merge.
+
+    Returns:
+        New list of (possibly merged) segments.
+    """
+    if not segments:
+        return []
+
+    merged = [dict(segments[0])]  # shallow copy first segment
+
+    for seg in segments[1:]:
+        prev = merged[-1]
+        same_speaker = (
+            prev.get("speaker")
+            and seg.get("speaker")
+            and prev["speaker"] == seg["speaker"]
+        )
+        gap_ms = (seg.get("start", 0) - prev.get("end", 0)) * 1000
+
+        if same_speaker and gap_ms < max_gap_ms:
+            # Merge: extend previous segment
+            prev["end"] = seg["end"]
+            prev["text"] = prev["text"] + " " + seg.get("text", "")
+        else:
+            merged.append(dict(seg))
+
+    return merged
 
 
 def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> List[dict]:

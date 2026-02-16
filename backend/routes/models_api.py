@@ -6,9 +6,9 @@ import os
 import time
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODEL, VOXTRAL_MODELS
+from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODEL, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS
 from services.model_manager import get_model_manager, ModelName
 import state
 
@@ -30,10 +30,19 @@ async def root():
 
 
 @router.get("/health")
-async def health():
-    """Detailed health check with model functionality verification."""
+async def health(request: Request):
+    """Detailed health check with model functionality verification.
+
+    Returns minimal info when unauthenticated (API_KEY is set but not provided).
+    Full details are returned when authenticated or when API_KEY is not configured.
+    """
     is_ready = state.whisper_model_ready
     status = "healthy" if is_ready else "degraded"
+
+    # If API_KEY is configured but request is unauthenticated, return minimal info
+    authenticated = getattr(request.state, "authenticated", True)
+    if not authenticated:
+        return {"status": status}
 
     uptime_seconds = None
     if state.startup_time:
@@ -57,8 +66,10 @@ async def health():
         "voxtral_available": state._voxtral_available,
         "engines": {
             "whisper": {"available": state.whisper_model_ready, "type": "local"},
+            "voxtral-local": {"available": state._voxtral_local_available, "type": "local"},
             "voxtral-api": {"available": state._voxtral_available, "type": "cloud"},
         },
+        "refinement_available": state.refinement_available,
         "active_jobs": state.job_store.get_active_count(),
         "total_jobs": len(state.job_store),
         "uptime_seconds": uptime_seconds,
@@ -83,6 +94,15 @@ async def list_models():
             "engine": "whisper",
         })
 
+    if state._voxtral_local_available:
+        for key, val in VOXTRAL_LOCAL_MODELS.items():
+            models.append({
+                "id": key,
+                "path": val["path"],
+                "description": val["description"],
+                "engine": "voxtral-local",
+            })
+
     if state._voxtral_available:
         for key, val in VOXTRAL_MODELS.items():
             models.append({
@@ -96,7 +116,37 @@ async def list_models():
         "models": models,
         "default": "large-v3-turbo",
         "parakeet_available": state._parakeet_available,
+        "voxtral_local_available": state._voxtral_local_available,
         "voxtral_available": state._voxtral_available,
+        "engine_capabilities": {
+            "whisper": {
+                "context_bias": False,
+                "timestamps": True,
+                "word_timestamps": True,
+                "diarization": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
+                "translation": True,
+                "noise_reduction": True,
+                "two_pass": False,
+            },
+            "voxtral-local": {
+                "context_bias": False,
+                "timestamps": True,
+                "word_timestamps": False,
+                "diarization": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
+                "translation": False,
+                "noise_reduction": True,
+                "two_pass": False,
+            },
+            "voxtral-api": {
+                "context_bias": True,
+                "timestamps": True,
+                "word_timestamps": True,
+                "diarization": True,
+                "translation": False,
+                "noise_reduction": True,
+                "two_pass": True,
+            },
+        },
     }
 
 
