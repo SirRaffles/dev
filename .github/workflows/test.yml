@@ -23,8 +23,11 @@ jobs:
         run: |
           pip install fastapi uvicorn python-multipart pydantic httpx \
                     pytest pytest-asyncio pytest-timeout reportlab python-docx markdown \
-                    Pillow imagehash
+                    Pillow imagehash numpy scipy noisereduce yt-dlp \
+                    opencv-python-headless scenedetect
 
       - name: Run tests
         working-directory: backend
+        env:
+          TESTING: "1"
         run: python -m pytest tests/ -v --timeout=60
