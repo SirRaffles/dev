@@ -13,18 +13,22 @@ WATCH_EXTENSIONS = {".m4a"}
 
 # Backend API
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-API_TIMEOUT = 300  # seconds for API calls (large files need more time)
+API_TIMEOUT = 600  # seconds for API calls (large files up to ~80MB need more time)
 POLL_INTERVAL = 5  # seconds between status polls
 MAX_POLL_TIME = 3600  # 1 hour max transcription time (for long recordings)
 
 # Transcription settings
+# Using Whisper for watcher (reliable for long recordings, ~10% WER)
+# Voxtral Local has better accuracy but OOM issues on 80+ min files on 24GB M3
 TRANSCRIPTION_SETTINGS = {
     "language": "auto",
-    "enable_diarization": True,
+    "enable_diarization": False,
     "enable_noise_reduction": False,
     "model_size": "large-v3-turbo",
     "word_timestamps": False,
     "translate_to_english": False,
+    "engine": "whisper",
+    "output_mode": "readable",
 }
 
 # iCloud sync detection
@@ -40,6 +44,10 @@ RETRY_BACKOFF_MULTIPLIER = 2
 # State persistence
 STATE_FILE = Path(os.path.expanduser("~/.jpr_watcher_state.json"))
 LOG_FILE = Path(os.path.expanduser("~/.jpr_watcher.log"))
+
+# Refinement settings
+ENABLE_REFINEMENT = os.environ.get("ENABLE_REFINEMENT", "true").lower() == "true"
+REFINEMENT_TIMEOUT = 300  # 5 min max wait for refinement
 
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")

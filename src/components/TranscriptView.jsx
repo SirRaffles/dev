@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check } from 'lucide-react';
+import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2 } from 'lucide-react';
 import { LANGUAGES, updateSegments, updateSpeakers } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 
@@ -18,17 +18,23 @@ function TranscriptView({
   const [showSpeakers, setShowSpeakers] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [editedSegments, setEditedSegments] = useState({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   // Speaker renaming
   const [speakerNames, setSpeakerNames] = useState({});
   const [editingSpeaker, setEditingSpeaker] = useState(null);
   const [tempSpeakerName, setTempSpeakerName] = useState('');
+  const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
+  const [speakerError, setSpeakerError] = useState(null);
 
   // Search & replace
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [isReplacing, setIsReplacing] = useState(false);
+  const [replaceError, setReplaceError] = useState(null);
 
   const segmentRefs = useRef({});
 
@@ -70,11 +76,18 @@ function TranscriptView({
   };
 
   const saveEdits = async () => {
-    if (!jobId || Object.keys(editedSegments).length === 0) {
+    const changeCount = Object.keys(editedSegments).length;
+    if (!jobId || changeCount === 0) {
       setIsEditing(false);
       return;
     }
 
+    if (changeCount > 1 && !window.confirm(`Save ${changeCount} changes? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
     try {
       const updatedSegments = result.segments.map((segment, index) => ({
         ...segment,
@@ -91,7 +104,9 @@ function TranscriptView({
       setIsEditing(false);
       setEditedSegments({});
     } catch (err) {
-      console.error('Save error:', err);
+      setSaveError(err.message || 'Failed to save changes');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -109,6 +124,8 @@ function TranscriptView({
   const saveSpeakerName = async () => {
     if (!editingSpeaker || !tempSpeakerName.trim() || !jobId) return;
 
+    setIsSavingSpeaker(true);
+    setSpeakerError(null);
     try {
       const mapping = { [editingSpeaker]: tempSpeakerName.trim() };
       const data = await updateSpeakers(jobId, mapping);
@@ -117,7 +134,9 @@ function TranscriptView({
       onResultUpdate?.({ ...result, segments: data.segments, speakers: data.speakers });
       cancelEditingSpeaker();
     } catch (err) {
-      console.error('Rename error:', err);
+      setSpeakerError(err.message || 'Failed to rename speaker');
+    } finally {
+      setIsSavingSpeaker(false);
     }
   };
 
@@ -141,6 +160,9 @@ function TranscriptView({
   const replaceInSegment = async (index) => {
     if (!searchQuery || !result?.segments) return;
 
+    setIsReplacing(true);
+    setReplaceError(null);
+
     const segment = result.segments[index];
     const newText = segment.text.replace(new RegExp(escapeRegExp(searchQuery), 'gi'), replaceText);
 
@@ -156,12 +178,31 @@ function TranscriptView({
       onResultUpdate?.({ ...result, segments: updatedSegments });
       performSearch();
     } catch (err) {
-      console.error('Replace error:', err);
+      setReplaceError(err.message || 'Failed to replace text');
+    } finally {
+      setIsReplacing(false);
     }
   };
 
   const replaceAll = async () => {
     if (!searchQuery || !result?.segments) return;
+
+    // Count total occurrences across all segments
+    const regex = new RegExp(escapeRegExp(searchQuery), 'gi');
+    let totalOccurrences = 0;
+    result.segments.forEach((segment) => {
+      const matches = segment.text.match(regex);
+      if (matches) totalOccurrences += matches.length;
+    });
+
+    if (totalOccurrences === 0) return;
+
+    if (!window.confirm(`Replace ${totalOccurrences} occurrence${totalOccurrences !== 1 ? 's' : ''} of "${searchQuery}" with "${replaceText}"?`)) {
+      return;
+    }
+
+    setIsReplacing(true);
+    setReplaceError(null);
 
     const updatedSegments = result.segments.map((segment) => ({
       ...segment,
@@ -175,7 +216,9 @@ function TranscriptView({
       setSearchQuery('');
       setReplaceText('');
     } catch (err) {
-      console.error('Replace all error:', err);
+      setReplaceError(err.message || 'Failed to replace all');
+    } finally {
+      setIsReplacing(false);
     }
   };
 
@@ -237,20 +280,24 @@ function TranscriptView({
                       onChange={(e) => setTempSpeakerName(e.target.value)}
                       className="w-24 bg-slate-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
                       autoFocus
+                      disabled={isSavingSpeaker}
                       onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
                     />
                     <button
                       onClick={saveSpeakerName}
-                      className="p-1 text-green-400 hover:text-green-300"
+                      disabled={isSavingSpeaker}
+                      className="p-1 text-green-400 hover:text-green-300 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Check className="w-4 h-4" />
+                      {isSavingSpeaker ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                     </button>
                     <button
                       onClick={cancelEditingSpeaker}
-                      className="p-1 text-red-400 hover:text-red-300"
+                      disabled={isSavingSpeaker}
+                      className="p-1 text-red-400 hover:text-red-300 disabled:opacity-50"
                     >
                       <X className="w-4 h-4" />
                     </button>
+                    {speakerError && <span className="text-red-400 text-xs ml-1">{speakerError}</span>}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 bg-purple-500/20 text-purple-300 rounded-lg px-3 py-1">
@@ -274,14 +321,15 @@ function TranscriptView({
         {isEditing ? (
           <button
             onClick={saveEdits}
-            className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+            disabled={isSaving}
+            className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save className="w-4 h-4" />
-            Save
+            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {isSaving ? 'Saving...' : 'Save'}
           </button>
         ) : (
           <button
-            onClick={() => setIsEditing(true)}
+            onClick={() => { setIsEditing(true); setSaveError(null); }}
             className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
           >
             <Edit2 className="w-4 h-4" />
@@ -297,6 +345,9 @@ function TranscriptView({
           <Search className="w-4 h-4" />
           Search & Replace
         </button>
+        {saveError && (
+          <span className="text-red-400 text-sm">{saveError}</span>
+        )}
       </div>
 
       {/* Search & Replace Panel */}
@@ -328,7 +379,8 @@ function TranscriptView({
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={performSearch}
-              className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg text-white transition-colors"
+              disabled={isReplacing}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Search className="w-4 h-4" />
               Find
@@ -340,21 +392,25 @@ function TranscriptView({
                 </span>
                 <button
                   onClick={replaceAll}
-                  className="flex items-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 rounded-lg text-white transition-colors"
+                  disabled={isReplacing}
+                  className="flex items-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 rounded-lg text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Replace className="w-4 h-4" />
-                  Replace All
+                  {isReplacing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Replace className="w-4 h-4" />}
+                  {isReplacing ? 'Replacing...' : 'Replace All'}
                 </button>
               </>
             )}
             {searchQuery && (
               <button
-                onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); }}
+                onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); setReplaceError(null); }}
                 className="flex items-center gap-1 px-2 py-2 text-slate-400 hover:text-slate-300 transition-colors"
               >
                 <X className="w-4 h-4" />
                 Clear
               </button>
+            )}
+            {replaceError && (
+              <span className="text-red-400 text-sm">{replaceError}</span>
             )}
           </div>
         </div>
@@ -385,7 +441,7 @@ function TranscriptView({
       </div>
 
       {/* Transcription Text */}
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
         {(showTimestamps || showSpeakers) && result.segments ? (
           <div className="space-y-3">
             {result.segments.map((segment, index) => {
@@ -393,13 +449,16 @@ function TranscriptView({
               const isEdited = editedSegments[index] !== undefined;
 
               return (
-                <div
-                  key={`seg-${segment.start}-${segment.end}`}
-                  ref={el => segmentRefs.current[index] = el}
-                  className={`flex gap-3 p-2 rounded transition-all ${
-                    isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
-                  } ${isEdited ? 'bg-yellow-500/10' : ''}`}
-                >
+                <React.Fragment key={`seg-${segment.start}-${segment.end}`}>
+                  {segment.paragraph_break && index > 0 && (
+                    <div className="border-t border-slate-700 my-2" />
+                  )}
+                  <div
+                    ref={el => segmentRefs.current[index] = el}
+                    className={`flex gap-3 p-2 rounded transition-all ${
+                      isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
+                    } ${isEdited ? 'bg-yellow-500/10' : ''}`}
+                  >
                   {showTimestamps && (
                     <button
                       onClick={() => handleSeek(segment.start)}
@@ -414,11 +473,11 @@ function TranscriptView({
                     </span>
                   )}
                   {isEditing ? (
-                    <input
-                      type="text"
+                    <textarea
+                      rows={2}
                       value={editedSegments[index] !== undefined ? editedSegments[index] : segment.text}
                       onChange={(e) => handleEditSegment(index, e.target.value)}
-                      className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400"
+                      className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400 resize-y"
                     />
                   ) : (
                     <p className={`text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
@@ -426,14 +485,16 @@ function TranscriptView({
                       {searchResults.includes(index) && replaceText && (
                         <button
                           onClick={() => replaceInSegment(index)}
-                          className="ml-2 text-xs px-2 py-0.5 bg-orange-500 hover:bg-orange-600 rounded text-white transition-colors"
+                          disabled={isReplacing}
+                          className="ml-2 text-xs px-2 py-0.5 bg-orange-500 hover:bg-orange-600 rounded text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Replace
                         </button>
                       )}
                     </p>
                   )}
-                </div>
+                  </div>
+                </React.Fragment>
               );
             })}
           </div>

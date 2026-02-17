@@ -51,8 +51,11 @@ async def transcribe_file(
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
     two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
+    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
+    if output_mode not in ("verbatim", "readable"):
+        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
@@ -137,6 +140,7 @@ async def transcribe_file(
             engine=engine,
             context_terms=parsed_context_terms,
             two_pass=two_pass and engine == "voxtral-api",
+            output_mode=output_mode,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -164,8 +168,12 @@ async def transcribe_youtube(
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral"),
     two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
+    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
+    if output_mode not in ("verbatim", "readable"):
+        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
+
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
@@ -208,10 +216,27 @@ async def transcribe_youtube(
         transcript = get_youtube_transcript(video_id, request.language)
 
         if transcript:
+            segments = transcript["segments"]
+
+            # Apply readable-mode postprocessing to captions
+            if output_mode == "readable":
+                from services.postprocess import (
+                    normalize_segments, apply_readable_mode, merge_caption_segments,
+                )
+                normalize_segments(segments)
+                # Merge caption display-lines into full sentences with paragraph breaks
+                segments = merge_caption_segments(segments)
+                # Apply text transforms (filler removal, currency, sentence boundaries)
+                # but skip gap-based paragraph detection (merge already added paragraph flags)
+                apply_readable_mode(segments, detect_paragraphs=False)
+                transcript["text"] = " ".join(
+                    seg["text"].strip() for seg in segments if seg.get("text")
+                )
+
             job.status = "completed"
             job.progress = 100
             job.progress_message = "Complete (YouTube captions)"
-            job.segments = transcript["segments"]
+            job.segments = segments
             job.result = transcript["text"]
             job.language = transcript["language"]
             job.language_probability = 1.0
@@ -256,6 +281,7 @@ async def transcribe_youtube(
             engine=engine,
             context_terms=parsed_context_terms,
             two_pass=two_pass and engine == "voxtral-api",
+            output_mode=output_mode,
         )
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
@@ -285,8 +311,12 @@ async def transcribe_batch(
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Context terms for Voxtral"),
     two_pass: bool = Query(False, description="Two-pass mode (voxtral-api only, 2x cost)"),
+    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
+    if output_mode not in ("verbatim", "readable"):
+        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
+
     if engine == "voxtral-api":
         if not state._voxtral_available:
             raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
@@ -376,6 +406,7 @@ async def transcribe_batch(
                 engine=engine,
                 context_terms=parsed_context_terms,
                 two_pass=two_pass and engine == "voxtral-api",
+                output_mode=output_mode,
             )
 
             background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)

@@ -22,6 +22,7 @@ function SettingsPanel({
     engine = 'voxtral-local',
     contextTerms = '',
     twoPass = false,
+    outputMode = 'verbatim',
   } = settings;
 
   const handleChange = (key, value) => {
@@ -98,6 +99,39 @@ function SettingsPanel({
           {isVoxtralApi && <span className="text-xs opacity-75">$0.003/min</span>}
         </button>
       </div>
+
+      {/* Output Mode Toggle */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => handleChange('outputMode', 'verbatim')}
+          disabled={disabled}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
+            outputMode === 'verbatim'
+              ? 'bg-blue-500 text-white'
+              : 'bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600'
+          }`}
+        >
+          <FileAudio className="w-4 h-4" />
+          Verbatim
+        </button>
+        <button
+          onClick={() => handleChange('outputMode', 'readable')}
+          disabled={disabled}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
+            outputMode === 'readable'
+              ? 'bg-teal-500 text-white'
+              : 'bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          Readable
+        </button>
+      </div>
+      {outputMode === 'readable' && (
+        <p className="text-xs text-slate-400 -mt-2">
+          Removes filler words, adds sentence breaks and paragraphs, formats numbers and currency.
+        </p>
+      )}
 
       {/* Settings Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

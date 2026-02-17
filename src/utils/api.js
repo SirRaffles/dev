@@ -3,6 +3,17 @@ const isLocalDev = window.location.hostname === 'localhost' || window.location.h
 export const API_URL = process.env.REACT_APP_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
 const API_KEY = process.env.REACT_APP_API_KEY || '';
 
+// Wake-on-LAN proxy status (NAS deployment only)
+export async function checkWakeStatus() {
+  try {
+    const response = await fetch(`${API_URL}/api/wake-status`, { headers: authHeaders() });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 // Helper to build headers with optional API key
 function authHeaders(extra = {}) {
   const headers = { ...extra };
@@ -148,6 +159,7 @@ export async function submitTranscription(file, options = {}) {
     speed_priority: options.speedPriority ?? false,
     engine: options.engine || 'voxtral-local',
     two_pass: options.twoPass ?? false,
+    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
@@ -198,6 +210,7 @@ export async function submitYouTubeTranscription(url, options = {}) {
     speed_priority: options.speedPriority ?? false,
     engine: options.engine || 'voxtral-local',
     two_pass: options.twoPass ?? false,
+    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
@@ -294,6 +307,7 @@ export async function submitBatchTranscription(files, options = {}) {
     speed_priority: options.speedPriority ?? false,
     engine: options.engine || 'voxtral-local',
     two_pass: options.twoPass ?? false,
+    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {

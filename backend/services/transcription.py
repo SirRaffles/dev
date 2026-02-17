@@ -12,7 +12,7 @@ from config import MLX_MODELS, PARAKEET_MODEL, VOXTRAL_LOCAL_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
 from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
-from services.postprocess import normalize_segments
+from services.postprocess import normalize_segments, apply_readable_mode
 import state
 
 logger = logging.getLogger(__name__)
@@ -416,6 +416,14 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
         # Apply text normalization (whitespace, punctuation, stutter removal)
         normalize_segments(transcription_segments)
+
+        # Apply readable-mode postprocessing if requested
+        if settings.output_mode == "readable":
+            apply_readable_mode(transcription_segments)
+            # Reconstruct full_text from cleaned segments
+            full_text = " ".join(
+                seg["text"].strip() for seg in transcription_segments if seg.get("text")
+            )
 
         job.progress = 90
         job.progress_message = "Finalizing..."

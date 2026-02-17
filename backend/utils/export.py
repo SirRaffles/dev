@@ -36,6 +36,10 @@ def generate_txt(job: TranscriptionJob, include_timestamps: bool = True, include
     lines = []
 
     for segment in job.segments:
+        # Insert blank line for paragraph breaks
+        if segment.get("paragraph_break") and lines:
+            lines.append("")
+
         parts = []
 
         if include_timestamps:
@@ -70,6 +74,8 @@ def generate_markdown(job: TranscriptionJob) -> str:
         if speaker and speaker != current_speaker:
             lines.append(f"\n### {speaker}\n")
             current_speaker = speaker
+        elif segment.get("paragraph_break"):
+            lines.append("")
 
         timestamp = format_timestamp(segment["start"])
         lines.append(f"**[{timestamp}]** {segment['text']}\n")
@@ -154,6 +160,9 @@ def generate_pdf(job: TranscriptionJob) -> bytes:
     for segment in job.segments:
         speaker = segment.get("speaker")
 
+        if segment.get("paragraph_break"):
+            story.append(Spacer(1, 18))
+
         if speaker and speaker != current_speaker:
             story.append(Spacer(1, 12))
             story.append(Paragraph(speaker, speaker_style))
@@ -187,6 +196,9 @@ def generate_docx(job: TranscriptionJob) -> bytes:
 
     for segment in job.segments:
         speaker = segment.get("speaker")
+
+        if segment.get("paragraph_break"):
+            doc.add_paragraph()
 
         if speaker and speaker != current_speaker:
             doc.add_heading(speaker, level=2)

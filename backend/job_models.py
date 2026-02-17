@@ -270,6 +270,7 @@ class TranscriptionSettings(BaseModel):
     engine: str = "voxtral-local"
     context_terms: Optional[List[str]] = None
     two_pass: bool = False
+    output_mode: str = "verbatim"  # "verbatim" or "readable"
 
 
 class RefinementStore:

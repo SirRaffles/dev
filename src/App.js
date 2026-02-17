@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
+import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, Info, RefreshCw, Moon } from 'lucide-react';
 
 // Components (eagerly loaded - needed immediately)
 import Header from './components/Header';
@@ -9,21 +9,38 @@ import SettingsPanel from './components/SettingsPanel';
 import ProgressBar from './components/ProgressBar';
 import ExportMenu from './components/ExportMenu';
 
+// Hooks
+import useProcessingState from './hooks/useProcessingState';
+import useAudioPlayback from './hooks/useAudioPlayback';
+
+// Utils
+import { API_URL, checkWakeStatus } from './utils/api';
+
 // Components (lazily loaded - only needed when results are shown)
 const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
 const TranscriptView = lazy(() => import('./components/TranscriptView'));
 const DocumentView = lazy(() => import('./components/DocumentView'));
 const VisualElementsPanel = lazy(() => import('./components/VisualElementsPanel'));
 
-// Hooks
-import useProcessingState from './hooks/useProcessingState';
-import useAudioPlayback from './hooks/useAudioPlayback';
-
-// Utils
-import { API_URL } from './utils/api';
-
 const InputMode = { FILE: 'file', YOUTUBE: 'youtube' };
 const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' };
+
+function WakeProgressBar({ startTime }) {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      setWidth(Math.min(100, (elapsed / 90) * 100));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+  return (
+    <div
+      className="bg-amber-400 h-full rounded-full transition-all duration-1000"
+      style={{ width: `${width}%` }}
+    />
+  );
+}
 
 function App() {
   // Input state
@@ -34,7 +51,7 @@ function App() {
 
   // Settings
   const [settings, setSettings] = useState({
-    modelSize: 'large-v3-turbo',
+    modelSize: 'voxtral-mini-3b',
     language: 'auto',
     translateToEnglish: false,
     enableDiarization: true,
@@ -42,12 +59,27 @@ function App() {
     wordTimestamps: false,
     enableNoiseReduction: false,
     speedPriority: false,
-    engine: 'whisper',
+    engine: 'voxtral-local',
     contextTerms: '',
+    outputMode: 'verbatim',
   });
 
   const [voxtralAvailable, setVoxtralAvailable] = useState(false);
+  const [voxtralLocalAvailable, setVoxtralLocalAvailable] = useState(false);
+  const [backendError, setBackendError] = useState(null);
+  const [fallbackNotice, setFallbackNotice] = useState(null);
+
+  // Wake-on-LAN state (NAS proxy deployment)
+  const [macState, setMacState] = useState(null); // null = direct, 'awake', 'sleeping', 'waking'
+  const [wakeStartTime, setWakeStartTime] = useState(null);
+  const pendingSubmitRef = useRef(false);
   const [viewMode, setViewMode] = useState(ViewMode.TRANSCRIPT);
+  const [dismissedError, setDismissedError] = useState(false);
+  const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
+
+  // Refs for tab keyboard navigation
+  const inputTabsRef = useRef(null);
+  const viewTabsRef = useRef(null);
 
   // Custom hooks
   const { transcription, multiModal, isDocumentMode, sourceType, active, resetAll, updateResult } =
@@ -55,13 +87,83 @@ function App() {
   const { audioUrl, currentTime, audioRef, setFileAudio, clearAudio, seekToTime, handleTimeUpdate } =
     useAudioPlayback();
 
-  // Check Voxtral availability on mount
+  // Reset dismissed error when a new error occurs
   useEffect(() => {
-    fetch(`${API_URL}/health`)
-      .then(res => res.json())
-      .then(data => { if (data.voxtral_available) setVoxtralAvailable(true); })
-      .catch(() => {});
+    if (active.error) setDismissedError(false);
+  }, [active.error]);
+
+  // Keyboard navigation for tablists
+  const handleTabKeyDown = useCallback((e, tablistRef) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const tabs = Array.from(tablistRef.current.querySelectorAll('[role="tab"]'));
+    const currentIndex = tabs.indexOf(document.activeElement);
+    if (currentIndex === -1) return;
+    e.preventDefault();
+    const nextIndex = e.key === 'ArrowRight'
+      ? (currentIndex + 1) % tabs.length
+      : (currentIndex - 1 + tabs.length) % tabs.length;
+    tabs[nextIndex].focus();
+    tabs[nextIndex].click();
   }, []);
+
+  // Fetch engine availability from backend /health
+  const refreshEngines = useCallback(() => {
+    return fetch(`${API_URL}/health`)
+      .then(res => res.json())
+      .then(data => {
+        setBackendError(null);
+        if (data.voxtral_available) setVoxtralAvailable(true);
+        if (data.engines?.['voxtral-local']?.available) {
+          setVoxtralLocalAvailable(true);
+        } else {
+          setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
+          setFallbackNotice('Voxtral Local unavailable \u2014 using Whisper engine');
+        }
+      })
+      .catch(() => {
+        setBackendError('Cannot connect to transcription backend. Please check that the server is running.');
+        setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
+      });
+  }, []);
+
+  // Check engine availability on mount (with wake-proxy awareness)
+  useEffect(() => {
+    checkWakeStatus().then(proxyData => {
+      if (proxyData) {
+        // Behind the wake proxy (NAS deployment)
+        setMacState(proxyData.mac_state);
+        if (proxyData.mac_state === 'awake' && proxyData.model_loaded) {
+          refreshEngines();
+        } else {
+          // Mac not awake — set fallback settings, no error banner
+          setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
+        }
+      } else {
+        // No proxy — direct connection (Mac local)
+        refreshEngines();
+      }
+    });
+  }, [refreshEngines]);
+
+  // Poll wake status while Mac is waking; auto-submit when awake
+  useEffect(() => {
+    if (macState !== 'waking') return;
+    const interval = setInterval(async () => {
+      const status = await checkWakeStatus();
+      if (!status) return;
+      setMacState(status.mac_state);
+      if (status.mac_state === 'awake' && status.model_loaded) {
+        clearInterval(interval);
+        await refreshEngines();
+        // Auto-submit the queued request
+        if (pendingSubmitRef.current) {
+          pendingSubmitRef.current = false;
+          startProcessing();
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [macState, refreshEngines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handlers
   const handleFileSelect = (selectedFile) => {
@@ -88,6 +190,21 @@ function App() {
   };
 
   const startProcessing = async () => {
+    // Auto-wake: if Mac is sleeping, trigger wake and queue the submit
+    if (macState === 'sleeping') {
+      pendingSubmitRef.current = true;
+      setWakeStartTime(Date.now());
+      setMacState('waking');
+      // Fire a request to the proxy to trigger WoL
+      fetch(`${API_URL}/health`).catch(() => {});
+      return;
+    }
+    // Don't submit if still waking (will auto-submit when awake)
+    if (macState === 'waking') {
+      pendingSubmitRef.current = true;
+      return;
+    }
+
     const options = {
       language: settings.language,
       enableDiarization: settings.enableDiarization,
@@ -99,6 +216,7 @@ function App() {
       speedPriority: settings.speedPriority,
       engine: settings.engine,
       contextTerms: settings.contextTerms,
+      outputMode: settings.outputMode,
     };
 
     if (files.length > 1) {
@@ -137,16 +255,69 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className={`${viewMode === ViewMode.VISUAL ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 py-8 transition-all`}>
         <Header />
+
+        {/* Backend Error Banner */}
+        {backendError && (
+          <div role="alert" className="bg-amber-500/10 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0" aria-hidden="true" />
+            <span className="text-amber-300 text-sm">{backendError}</span>
+          </div>
+        )}
+
+        {/* Engine Fallback Notice */}
+        {fallbackNotice && (
+          <div className="bg-blue-500/10 border border-blue-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <Info className="w-5 h-5 text-blue-400 flex-shrink-0" aria-hidden="true" />
+            <span className="text-blue-300 text-sm flex-1">{fallbackNotice}</span>
+            <button
+              onClick={() => setFallbackNotice(null)}
+              className="text-blue-400 hover:text-blue-300 transition-colors"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Mac Sleeping Banner */}
+        {macState === 'sleeping' && (
+          <div className="bg-indigo-500/10 border border-indigo-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <Moon className="w-5 h-5 text-indigo-400 flex-shrink-0" aria-hidden="true" />
+            <span className="text-indigo-300 text-sm">
+              Mac is sleeping — it will wake automatically when you start a transcription.
+            </span>
+          </div>
+        )}
+
+        {/* Mac Waking Banner */}
+        {macState === 'waking' && (
+          <div className="bg-amber-500/10 border border-amber-500/50 rounded-xl p-4 mb-6">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-amber-400 animate-spin flex-shrink-0" aria-hidden="true" />
+              <span className="text-amber-300 text-sm">
+                Waking Mac and loading AI models... (~90 seconds)
+              </span>
+            </div>
+            {wakeStartTime && (
+              <div className="mt-2 bg-amber-500/20 rounded-full h-1.5 overflow-hidden">
+                <WakeProgressBar startTime={wakeStartTime} />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Input Section */}
         <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
           {/* Mode Tabs */}
-          <div className="flex gap-2 mb-6" role="tablist" aria-label="Input source">
+          <div className="flex gap-2 mb-6" role="tablist" aria-label="Input source" ref={inputTabsRef} onKeyDown={(e) => handleTabKeyDown(e, inputTabsRef)}>
             <button
+              id="tab-file"
               role="tab"
               aria-selected={inputMode === InputMode.FILE}
+              aria-controls="panel-file"
+              tabIndex={inputMode === InputMode.FILE ? 0 : -1}
               onClick={() => setInputMode(InputMode.FILE)}
               disabled={active.isProcessing}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
@@ -159,8 +330,11 @@ function App() {
               Upload File
             </button>
             <button
+              id="tab-youtube"
               role="tab"
               aria-selected={inputMode === InputMode.YOUTUBE}
+              aria-controls="panel-youtube"
+              tabIndex={inputMode === InputMode.YOUTUBE ? 0 : -1}
               onClick={() => setInputMode(InputMode.YOUTUBE)}
               disabled={active.isProcessing}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
@@ -175,24 +349,28 @@ function App() {
           </div>
 
           {inputMode === InputMode.FILE && (
-            <FileInput
-              file={file}
-              files={files}
-              onFileSelect={handleFileSelect}
-              onFilesSelect={handleFilesSelect}
-              onClear={clearSelection}
-              disabled={active.isProcessing}
-              showDocumentSupport={true}
-            />
+            <div role="tabpanel" id="panel-file" aria-labelledby="tab-file">
+              <FileInput
+                file={file}
+                files={files}
+                onFileSelect={handleFileSelect}
+                onFilesSelect={handleFilesSelect}
+                onClear={clearSelection}
+                disabled={active.isProcessing}
+                showDocumentSupport={true}
+              />
+            </div>
           )}
 
           {inputMode === InputMode.YOUTUBE && (
-            <YouTubeInput
-              url={youtubeUrl}
-              onUrlChange={(url) => { setYoutubeUrl(url); transcription.reset(); }}
-              onClear={clearSelection}
-              disabled={active.isProcessing}
-            />
+            <div role="tabpanel" id="panel-youtube" aria-labelledby="tab-youtube">
+              <YouTubeInput
+                url={youtubeUrl}
+                onUrlChange={(url) => { setYoutubeUrl(url); transcription.reset(); }}
+                onClear={clearSelection}
+                disabled={active.isProcessing}
+              />
+            </div>
           )}
 
           <SettingsPanel
@@ -201,22 +379,43 @@ function App() {
             showForDocuments={isDocumentMode}
             disabled={active.isProcessing}
             voxtralAvailable={voxtralAvailable}
+            voxtralLocalAvailable={voxtralLocalAvailable}
           />
 
           {/* Start Button */}
           <button
             onClick={startProcessing}
-            disabled={!canStart || active.isProcessing}
+            disabled={!canStart || active.isProcessing || (backendError && !macState) || macState === 'waking'}
+            title={
+              macState === 'waking' ? 'Mac is waking up...'
+              : macState === 'sleeping' ? 'Click to wake Mac and start transcription'
+              : backendError && !macState ? 'Backend is unavailable'
+              : !canStart ? 'Select a file or enter a YouTube URL first'
+              : active.isProcessing ? 'Processing in progress'
+              : undefined
+            }
             className={`w-full mt-6 py-4 rounded-xl font-semibold text-lg transition-all ${
-              canStart && !active.isProcessing
-                ? 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
+              canStart && !active.isProcessing && !(backendError && !macState) && macState !== 'waking'
+                ? macState === 'sleeping'
+                  ? 'bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white'
+                  : 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
                 : 'bg-slate-700 text-slate-400 cursor-not-allowed'
             }`}
           >
-            {active.isProcessing ? (
+            {macState === 'waking' ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Waking Mac...
+              </span>
+            ) : active.isProcessing ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="w-5 h-5 animate-spin" />
                 {isDocumentMode ? 'Processing...' : 'Transcribing...'} {active.progress}%
+              </span>
+            ) : macState === 'sleeping' ? (
+              <span className="flex items-center justify-center gap-2">
+                <Moon className="w-5 h-5" />
+                {isDocumentMode ? 'Wake Mac & Process' : 'Wake Mac & Transcribe'}
               </span>
             ) : isDocumentMode ? (
               'Process Document'
@@ -239,13 +438,28 @@ function App() {
         )}
 
         {/* Error Display */}
-        {active.error && (
+        {active.error && !dismissedError && (
           <div role="alert" className="bg-red-500/10 border border-red-500/50 rounded-2xl p-6 mb-8">
             <div className="flex items-center gap-3 text-red-400">
-              <AlertCircle className="w-5 h-5" aria-hidden="true" />
-              <span className="font-medium">Error</span>
+              <AlertCircle className="w-5 h-5 flex-shrink-0" aria-hidden="true" />
+              <span className="font-medium flex-1">Error</span>
+              <button
+                onClick={() => setDismissedError(true)}
+                className="text-red-400 hover:text-red-300 transition-colors"
+                aria-label="Dismiss error"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
             <p className="mt-2 text-red-300">{active.error}</p>
+            <button
+              onClick={startProcessing}
+              disabled={!canStart}
+              className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg font-medium bg-red-500/20 text-red-300 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className="w-4 h-4" aria-hidden="true" />
+              Retry
+            </button>
           </div>
         )}
 
@@ -269,11 +483,14 @@ function App() {
 
             {/* View Mode Tabs */}
             {availableViewModes.length > 1 && (
-              <div className="flex gap-2 mb-6" role="tablist" aria-label="Result view">
+              <div className="flex gap-2 mb-6" role="tablist" aria-label="Result view" ref={viewTabsRef} onKeyDown={(e) => handleTabKeyDown(e, viewTabsRef)}>
                 {availableViewModes.includes(ViewMode.TRANSCRIPT) && (
                   <button
+                    id="tab-transcript"
                     role="tab"
                     aria-selected={viewMode === ViewMode.TRANSCRIPT}
+                    aria-controls="panel-transcript"
+                    tabIndex={viewMode === ViewMode.TRANSCRIPT ? 0 : -1}
                     onClick={() => setViewMode(ViewMode.TRANSCRIPT)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.TRANSCRIPT
@@ -287,8 +504,11 @@ function App() {
                 )}
                 {availableViewModes.includes(ViewMode.DOCUMENT) && (
                   <button
+                    id="tab-document"
                     role="tab"
                     aria-selected={viewMode === ViewMode.DOCUMENT}
+                    aria-controls="panel-document"
+                    tabIndex={viewMode === ViewMode.DOCUMENT ? 0 : -1}
                     onClick={() => setViewMode(ViewMode.DOCUMENT)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.DOCUMENT
@@ -302,8 +522,11 @@ function App() {
                 )}
                 {availableViewModes.includes(ViewMode.VISUAL) && (
                   <button
+                    id="tab-visual"
                     role="tab"
                     aria-selected={viewMode === ViewMode.VISUAL}
+                    aria-controls="panel-visual"
+                    tabIndex={viewMode === ViewMode.VISUAL ? 0 : -1}
                     onClick={() => setViewMode(ViewMode.VISUAL)}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.VISUAL
@@ -318,7 +541,37 @@ function App() {
               </div>
             )}
 
-            <Suspense fallback={<div className="text-center py-4 text-slate-400"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></div>}>
+            {/* Batch Results Selector */}
+            {transcription.batchResults.length > 1 && (
+              <div className="flex items-center gap-3 mb-4">
+                <label htmlFor="batch-select" className="text-sm text-slate-400">Batch result:</label>
+                <select
+                  id="batch-select"
+                  value={selectedBatchIndex}
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    setSelectedBatchIndex(idx);
+                    transcription.selectBatchResult(idx);
+                  }}
+                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {transcription.batchResults.map((br, i) => (
+                    <option key={br.job_id} value={i}>
+                      File {i + 1} — {br.job_id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <Suspense fallback={
+              <div className="space-y-4 py-4">
+                <div className="h-4 w-3/4 bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-full bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-5/6 bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-2/3 bg-slate-700 rounded animate-pulse" />
+              </div>
+            }>
               {audioUrl && !isDocumentMode && (
                 <AudioPlayer
                   ref={audioRef}
@@ -329,30 +582,36 @@ function App() {
               )}
 
               {viewMode === ViewMode.TRANSCRIPT && active.result.segments && (
-                <TranscriptView
-                  result={active.result}
-                  jobId={active.jobId}
-                  onResultUpdate={updateResult}
-                  currentTime={currentTime}
-                  onSeekToTime={seekToTime}
-                />
+                <div role="tabpanel" id="panel-transcript" aria-labelledby="tab-transcript">
+                  <TranscriptView
+                    result={active.result}
+                    jobId={active.jobId}
+                    onResultUpdate={updateResult}
+                    currentTime={currentTime}
+                    onSeekToTime={seekToTime}
+                  />
+                </div>
               )}
 
               {viewMode === ViewMode.DOCUMENT && (
-                <DocumentView
-                  documentMarkdown={active.result.document_markdown}
-                  documentSections={active.result.document_sections}
-                  speakerNotes={active.result.speaker_notes}
-                  sourceType={sourceType}
-                  pageCount={active.result.page_count}
-                  slideCount={active.result.slide_count}
-                />
+                <div role="tabpanel" id="panel-document" aria-labelledby="tab-document">
+                  <DocumentView
+                    documentMarkdown={active.result.document_markdown}
+                    documentSections={active.result.document_sections}
+                    speakerNotes={active.result.speaker_notes}
+                    sourceType={sourceType}
+                    pageCount={active.result.page_count}
+                    slideCount={active.result.slide_count}
+                  />
+                </div>
               )}
 
               {viewMode === ViewMode.VISUAL && (
-                <VisualElementsPanel
-                  visualElements={active.result.visual_elements || []}
-                />
+                <div role="tabpanel" id="panel-visual" aria-labelledby="tab-visual">
+                  <VisualElementsPanel
+                    visualElements={active.result.visual_elements || []}
+                  />
+                </div>
               )}
             </Suspense>
 
