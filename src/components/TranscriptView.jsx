@@ -337,7 +337,16 @@ function TranscriptView({
           </button>
         )}
         <button
-          onClick={() => setShowSearchPanel(!showSearchPanel)}
+          onClick={() => {
+            const next = !showSearchPanel;
+            setShowSearchPanel(next);
+            if (!next) {
+              setSearchQuery('');
+              setReplaceText('');
+              setSearchResults([]);
+              setReplaceError(null);
+            }
+          }}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
             showSearchPanel ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
           }`}
