@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Stop all Whisper Transcription services
+# Stop all Davrine Transcription services
 #
 # Usage: ./scripts/stop-all.sh
 #
@@ -10,7 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${YELLOW}Stopping Whisper Transcription services...${NC}"
+echo -e "${YELLOW}Stopping Davrine Transcription services...${NC}"
 
 # Kill backend (uvicorn)
 pkill -f "uvicorn main:app" 2>/dev/null && echo "Backend stopped" || echo "Backend not running"

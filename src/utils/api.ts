@@ -371,6 +371,20 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
   return response.json();
 }
 
+export async function retryJob(jobId: string): Promise<{ job_id: string; status: string; retried_from: string }> {
+  const response = await fetch(`${API_URL}/job/${jobId}/retry`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Retry failed');
+  }
+
+  return response.json();
+}
+
 export async function submitBatchTranscription(files: File[], options: TranscriptionOptions = {}): Promise<{ batch_id: string }> {
   const formData = new FormData();
   files.forEach(f => formData.append('files', f));

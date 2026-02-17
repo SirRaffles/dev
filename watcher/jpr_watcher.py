@@ -49,6 +49,9 @@ from config import (
 )
 from notifier import (
     notify_backend_offline,
+    notify_backend_online,
+    notify_circuit_breaker_open,
+    notify_new_file_detected,
     notify_transcription_completed,
     notify_transcription_failed,
     notify_transcription_started,
@@ -356,6 +359,7 @@ class JPREventHandler(FileSystemEventHandler):
         path = Path(event.src_path)
         if path.suffix.lower() in WATCH_EXTENSIONS:
             logger.info(f"New file detected: {path.name}")
+            notify_new_file_detected(path.name)
             self.queue.put(path)
 
     def on_modified(self, event):
@@ -392,7 +396,7 @@ def process_queue(
 
             if backend_available and not was_available:
                 logger.info("Backend is now available, resuming processing")
-                notify_backend_offline()  # Actually notify backend is back online
+                notify_backend_online()
             elif not backend_available and was_available:
                 logger.warning("Backend became unavailable, pausing processing")
                 notify_backend_offline()
@@ -404,6 +408,7 @@ def process_queue(
                 retry_in = client.circuit_breaker.time_until_retry()
                 if retry_in > 0:
                     logger.debug(f"Circuit breaker open, waiting {retry_in:.0f}s")
+                    notify_circuit_breaker_open(retry_in)
                     # Sleep for the shorter of retry_in or backend_wait_interval
                     time.sleep(min(retry_in, backend_wait_interval))
                     continue

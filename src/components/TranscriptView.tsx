@@ -1,10 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2 } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers } from '../utils/api';
+import { LANGUAGES, updateSegments, updateSpeakers, Segment } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 
 // Escape special regex characters to prevent ReDoS
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+interface TranscriptResult {
+  language?: string;
+  language_probability?: number;
+  speakers?: string[];
+  segments?: Segment[];
+  result?: string;
+}
+
+interface TranscriptViewProps {
+  result: TranscriptResult;
+  jobId: string;
+  onResultUpdate?: (result: TranscriptResult) => void;
+  currentTime?: number;
+  onSeekToTime?: (time: number) => void;
+  className?: string;
+}
 
 function TranscriptView({
   result,
@@ -13,30 +30,30 @@ function TranscriptView({
   currentTime = 0,
   onSeekToTime,
   className = '',
-}) {
+}: TranscriptViewProps) {
   const [showTimestamps, setShowTimestamps] = useState(true);
   const [showSpeakers, setShowSpeakers] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
-  const [editedSegments, setEditedSegments] = useState({});
+  const [editedSegments, setEditedSegments] = useState<Record<number, string>>({});
   const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Speaker renaming
-  const [speakerNames, setSpeakerNames] = useState({});
-  const [editingSpeaker, setEditingSpeaker] = useState(null);
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [tempSpeakerName, setTempSpeakerName] = useState('');
   const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
-  const [speakerError, setSpeakerError] = useState(null);
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
 
   // Search & replace
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
+  const [searchResults, setSearchResults] = useState<number[]>([]);
   const [isReplacing, setIsReplacing] = useState(false);
-  const [replaceError, setReplaceError] = useState(null);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
 
-  const segmentRefs = useRef({});
+  const segmentRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   // Get unique speakers from result
   const speakers = result?.speakers || [];
@@ -60,7 +77,7 @@ function TranscriptView({
     );
 
     if (currentSegment >= 0 && segmentRefs.current[currentSegment]) {
-      segmentRefs.current[currentSegment].scrollIntoView({
+      segmentRefs.current[currentSegment]!.scrollIntoView({
         behavior: 'smooth',
         block: 'center'
       });
@@ -68,7 +85,7 @@ function TranscriptView({
   }, [currentTime, result]);
 
   // Handle editing
-  const handleEditSegment = (index, newText) => {
+  const handleEditSegment = (index: number, newText: string) => {
     setEditedSegments(prev => ({
       ...prev,
       [index]: newText
@@ -89,7 +106,7 @@ function TranscriptView({
     setIsSaving(true);
     setSaveError(null);
     try {
-      const updatedSegments = result.segments.map((segment, index) => ({
+      const updatedSegments = result.segments!.map((segment, index) => ({
         ...segment,
         text: editedSegments[index] !== undefined ? editedSegments[index] : segment.text
       }));
@@ -103,7 +120,7 @@ function TranscriptView({
 
       setIsEditing(false);
       setEditedSegments({});
-    } catch (err) {
+    } catch (err: any) {
       setSaveError(err.message || 'Failed to save changes');
     } finally {
       setIsSaving(false);
@@ -111,7 +128,7 @@ function TranscriptView({
   };
 
   // Speaker renaming functions
-  const startEditingSpeaker = (speaker) => {
+  const startEditingSpeaker = (speaker: string) => {
     setEditingSpeaker(speaker);
     setTempSpeakerName(speakerNames[speaker] || speaker);
   };
@@ -133,7 +150,7 @@ function TranscriptView({
       setSpeakerNames(prev => ({ ...prev, [editingSpeaker]: tempSpeakerName.trim() }));
       onResultUpdate?.({ ...result, segments: data.segments, speakers: data.speakers });
       cancelEditingSpeaker();
-    } catch (err) {
+    } catch (err: any) {
       setSpeakerError(err.message || 'Failed to rename speaker');
     } finally {
       setIsSavingSpeaker(false);
@@ -147,7 +164,7 @@ function TranscriptView({
       return;
     }
 
-    const matches = [];
+    const matches: number[] = [];
     const query = searchQuery.toLowerCase();
     result.segments.forEach((segment, index) => {
       if (segment.text.toLowerCase().includes(query)) {
@@ -157,7 +174,7 @@ function TranscriptView({
     setSearchResults(matches);
   };
 
-  const replaceInSegment = async (index) => {
+  const replaceInSegment = async (index: number) => {
     if (!searchQuery || !result?.segments) return;
 
     setIsReplacing(true);
@@ -177,7 +194,7 @@ function TranscriptView({
       await updateSegments(jobId, updatedSegments);
       onResultUpdate?.({ ...result, segments: updatedSegments });
       performSearch();
-    } catch (err) {
+    } catch (err: any) {
       setReplaceError(err.message || 'Failed to replace text');
     } finally {
       setIsReplacing(false);
@@ -215,7 +232,7 @@ function TranscriptView({
       setSearchResults([]);
       setSearchQuery('');
       setReplaceText('');
-    } catch (err) {
+    } catch (err: any) {
       setReplaceError(err.message || 'Failed to replace all');
     } finally {
       setIsReplacing(false);
@@ -223,7 +240,7 @@ function TranscriptView({
   };
 
   // Highlight matching text
-  const highlightText = (text, index) => {
+  const highlightText = (text: string, index: number): React.ReactNode => {
     if (!searchQuery || !searchResults.includes(index)) return text;
 
     const regex = new RegExp(`(${escapeRegExp(searchQuery)})`, 'gi');
@@ -234,14 +251,14 @@ function TranscriptView({
     );
   };
 
-  const handleSeek = (time) => {
+  const handleSeek = (time: number) => {
     onSeekToTime?.(time);
   };
 
   return (
     <div className={className}>
       {/* Language & Speakers Info */}
-      <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg text-sm sm:text-base">
         {result.language && (
           <div className="flex items-center gap-2">
             <span className="text-slate-300">Language:</span>
@@ -463,21 +480,21 @@ function TranscriptView({
                     <div className="border-t border-slate-700 my-2" />
                   )}
                   <div
-                    ref={el => segmentRefs.current[index] = el}
-                    className={`flex gap-3 p-2 rounded transition-all ${
+                    ref={el => { segmentRefs.current[index] = el; }}
+                    className={`flex gap-2 sm:gap-3 p-2 rounded transition-all ${
                       isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
                     } ${isEdited ? 'bg-yellow-500/10' : ''}`}
                   >
                   {showTimestamps && (
                     <button
                       onClick={() => handleSeek(segment.start)}
-                      className="text-blue-400 hover:text-blue-300 font-mono text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors"
+                      className="text-blue-400 hover:text-blue-300 font-mono text-xs sm:text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors min-w-[44px] text-left"
                     >
                       [{formatTime(segment.start)}]
                     </button>
                   )}
                   {showSpeakers && segment.speaker && (
-                    <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
+                    <span className="text-purple-400 font-medium text-xs sm:text-sm whitespace-nowrap pt-1">
                       {speakerNames[segment.speaker] || segment.speaker}:
                     </span>
                   )}

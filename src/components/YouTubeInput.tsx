@@ -3,12 +3,19 @@ import { X } from 'lucide-react';
 
 const YOUTUBE_PATTERN = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/)|youtu\.be\/|music\.youtube\.com\/watch\?)/;
 
+interface YouTubeInputProps {
+  url: string;
+  onUrlChange: (url: string) => void;
+  onClear: () => void;
+  disabled?: boolean;
+}
+
 function YouTubeInput({
   url,
   onUrlChange,
   onClear,
   disabled = false,
-}) {
+}: YouTubeInputProps) {
   const isValid = useMemo(() => {
     if (!url) return null;
     return YOUTUBE_PATTERN.test(url);

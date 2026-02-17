@@ -1,13 +1,25 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
 
+interface BatchJob {
+  job_id: string;
+  progress: number;
+  status: string;
+}
+
+interface ProgressBarProps {
+  progress: number;
+  progressMessage?: string;
+  batchProgress?: BatchJob[];
+  sourceType?: string;
+}
+
 function ProgressBar({
   progress,
   progressMessage,
   batchProgress = [],
   sourceType = 'audio'
-}) {
-  // Get stage-specific message based on source type
+}: ProgressBarProps) {
   const getMessage = () => {
     if (progressMessage) return progressMessage;
 
@@ -47,7 +59,6 @@ function ProgressBar({
           : 'Quality-focused transcription may take a few minutes'}
       </p>
 
-      {/* Batch file progress */}
       {batchProgress.length > 1 && (
         <div className="mt-4 space-y-2">
           <p className="text-xs text-slate-400 uppercase tracking-wider">Individual files:</p>

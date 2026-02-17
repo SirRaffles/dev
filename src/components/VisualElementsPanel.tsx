@@ -2,8 +2,19 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Image, BarChart2, GitBranch, Code, FileText, X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import { API_URL } from '../utils/api';
 
+interface VisualElement {
+  element_id?: string;
+  type?: string;
+  image_path?: string;
+  description?: string;
+  text_content?: string;
+  page?: number;
+  slide?: number;
+  ocr_confidence?: number;
+}
+
 // Visual element type icons
-const TYPE_ICONS = {
+const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   slide: FileText,
   chart: BarChart2,
   diagram: GitBranch,
@@ -14,7 +25,7 @@ const TYPE_ICONS = {
 };
 
 // Visual element type colors
-const TYPE_COLORS = {
+const TYPE_COLORS: Record<string, string> = {
   slide: 'bg-blue-500',
   chart: 'bg-green-500',
   diagram: 'bg-purple-500',
@@ -25,8 +36,8 @@ const TYPE_COLORS = {
 };
 
 // Helper to get full image URL
-const getImageUrl = (imagePath) => {
-  if (!imagePath) return null;
+const getImageUrl = (imagePath: string): string => {
+  if (!imagePath) return '';
   // If it's already a full URL, return as-is
   if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
     return imagePath;
@@ -39,15 +50,20 @@ const getImageUrl = (imagePath) => {
   return `${API_URL}${imagePath}`;
 };
 
+interface VisualElementsPanelProps {
+  visualElements?: VisualElement[];
+  className?: string;
+}
+
 function VisualElementsPanel({
   visualElements = [],
   className = '',
-}) {
-  const [selectedElement, setSelectedElement] = useState(null);
-  const [lightboxIndex, setLightboxIndex] = useState(null);
-  const [imageErrors, setImageErrors] = useState(new Set());
-  const lightboxRef = useRef(null);
-  const previousFocusRef = useRef(null);
+}: VisualElementsPanelProps) {
+  const [selectedElement, setSelectedElement] = useState<VisualElement | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const closeLightbox = useCallback(() => {
     setLightboxIndex(null);
@@ -58,7 +74,7 @@ function VisualElementsPanel({
     }
   }, []);
 
-  const navigateLightbox = useCallback((direction) => {
+  const navigateLightbox = useCallback((direction: number) => {
     setLightboxIndex((prev) => {
       if (prev === null) return null;
       const newIndex = prev + direction;
@@ -71,7 +87,7 @@ function VisualElementsPanel({
   useEffect(() => {
     if (lightboxIndex === null) return;
 
-    const handleKeyDown = (e) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
         case 'Escape':
           closeLightbox();
@@ -85,7 +101,7 @@ function VisualElementsPanel({
         case 'Tab': {
           const container = lightboxRef.current;
           if (!container) break;
-          const focusable = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+          const focusable = container.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
           if (focusable.length === 0) break;
           const first = focusable[0];
           const last = focusable[focusable.length - 1];
@@ -126,21 +142,21 @@ function VisualElementsPanel({
     );
   }
 
-  const getIcon = (type) => {
-    const Icon = TYPE_ICONS[type] || TYPE_ICONS.default;
+  const getIcon = (type?: string) => {
+    const Icon = TYPE_ICONS[type || 'default'] || TYPE_ICONS.default;
     return Icon;
   };
 
-  const getColor = (type) => {
-    return TYPE_COLORS[type] || TYPE_COLORS.default;
+  const getColor = (type?: string) => {
+    return TYPE_COLORS[type || 'default'] || TYPE_COLORS.default;
   };
 
-  const openLightbox = (index) => {
-    previousFocusRef.current = document.activeElement;
+  const openLightbox = (index: number) => {
+    previousFocusRef.current = document.activeElement as HTMLElement;
     setLightboxIndex(index);
   };
 
-  const handleElementClick = (element, index) => {
+  const handleElementClick = (element: VisualElement, index: number) => {
     setSelectedElement(element);
 
     // If element has an image, open lightbox
@@ -281,7 +297,7 @@ function VisualElementsPanel({
           >
             {visualElements[lightboxIndex].image_path && (
               <img
-                src={getImageUrl(visualElements[lightboxIndex].image_path)}
+                src={getImageUrl(visualElements[lightboxIndex].image_path!)}
                 alt={visualElements[lightboxIndex].description || 'Visual element'}
                 className="max-w-full max-h-[60vh] object-contain rounded-lg"
               />

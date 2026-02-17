@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Whisper Transcription Frontend - Production Static Server
+# Davrine Transcription Frontend - Production Static Server
 # Serves the React build directory on port 3000
 #
 # Usage: ./scripts/start-frontend-prod.sh

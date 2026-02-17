@@ -9,6 +9,7 @@ import SettingsPanel from './components/SettingsPanel';
 import ProgressBar from './components/ProgressBar';
 import ExportMenu from './components/ExportMenu';
 import JobHistory from './components/JobHistory';
+import BatchProgress from './components/BatchProgress';
 
 // Hooks
 import useProcessingState from './hooks/useProcessingState';
@@ -26,10 +27,14 @@ const TranscriptView = lazy(() => import('./components/TranscriptView'));
 const DocumentView = lazy(() => import('./components/DocumentView'));
 const VisualElementsPanel = lazy(() => import('./components/VisualElementsPanel'));
 
-const InputMode = { FILE: 'file', YOUTUBE: 'youtube' };
-const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' };
+const InputMode = { FILE: 'file', YOUTUBE: 'youtube' } as const;
+const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' } as const;
 
-function WakeProgressBar({ startTime }) {
+interface WakeProgressBarProps {
+  startTime: number;
+}
+
+function WakeProgressBar({ startTime }: WakeProgressBarProps) {
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => {
@@ -48,10 +53,10 @@ function WakeProgressBar({ startTime }) {
 
 function App() {
   // Input state
-  const [inputMode, setInputMode] = useState(InputMode.FILE);
+  const [inputMode, setInputMode] = useState<string>(InputMode.FILE);
   const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [file, setFile] = useState(null);
-  const [files, setFiles] = useState([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
   // Settings
   const [settings, setSettings] = useState({
@@ -68,13 +73,13 @@ function App() {
     outputMode: 'verbatim',
   });
 
-  const [viewMode, setViewMode] = useState(ViewMode.TRANSCRIPT);
+  const [viewMode, setViewMode] = useState<string>(ViewMode.TRANSCRIPT);
   const [dismissedError, setDismissedError] = useState(false);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
 
   // Refs for tab keyboard navigation
-  const inputTabsRef = useRef(null);
-  const viewTabsRef = useRef(null);
+  const inputTabsRef = useRef<HTMLDivElement>(null);
+  const viewTabsRef = useRef<HTMLDivElement>(null);
 
   // Custom hooks
   const {
@@ -102,10 +107,11 @@ function App() {
   }, [active.error]);
 
   // Keyboard navigation for tablists
-  const handleTabKeyDown = useCallback((e, tablistRef) => {
+  const handleTabKeyDown = useCallback((e: React.KeyboardEvent, tablistRef: React.RefObject<HTMLDivElement | null>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    const tabs = Array.from(tablistRef.current.querySelectorAll('[role="tab"]'));
-    const currentIndex = tabs.indexOf(document.activeElement);
+    if (!tablistRef.current) return;
+    const tabs = Array.from(tablistRef.current.querySelectorAll('[role="tab"]')) as HTMLElement[];
+    const currentIndex = tabs.indexOf(document.activeElement as HTMLElement);
     if (currentIndex === -1) return;
     e.preventDefault();
     const nextIndex = e.key === 'ArrowRight'
@@ -140,14 +146,14 @@ function App() {
   }, [macState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handlers
-  const handleFileSelect = (selectedFile) => {
+  const handleFileSelect = (selectedFile: File) => {
     setFile(selectedFile);
     setFiles([]);
     setFileAudio(selectedFile);
     resetAll();
   };
 
-  const handleFilesSelect = (selectedFiles) => {
+  const handleFilesSelect = (selectedFiles: File[]) => {
     setFiles(selectedFiles);
     setFile(null);
     clearAudio();
@@ -163,7 +169,7 @@ function App() {
     setViewMode(ViewMode.TRANSCRIPT);
   };
 
-  const loadHistoryJob = async (jobId) => {
+  const loadHistoryJob = async (jobId: string) => {
     try {
       const resp = await fetch(`${API_URL}/job/${jobId}`);
       if (!resp.ok) return;
@@ -240,7 +246,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 text-slate-900 dark:text-white">
-      <div className={`${viewMode === ViewMode.VISUAL ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 py-8 transition-all`}>
+      <div className={`${viewMode === ViewMode.VISUAL ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-3 sm:px-4 py-4 sm:py-8 transition-all`}>
         <div className="relative">
           <Header />
           <button
@@ -303,9 +309,9 @@ function App() {
         )}
 
         {/* Input Section */}
-        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
+        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-8 border border-slate-700">
           {/* Mode Tabs */}
-          <div className="flex gap-2 mb-6" role="tablist" aria-label="Input source" ref={inputTabsRef} onKeyDown={(e) => handleTabKeyDown(e, inputTabsRef)}>
+          <div className="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Input source" ref={inputTabsRef} onKeyDown={(e) => handleTabKeyDown(e, inputTabsRef)}>
             <button
               id="tab-file"
               role="tab"
@@ -422,7 +428,10 @@ function App() {
 
           {/* Job History */}
           {!active.isProcessing && !active.result && (
-            <JobHistory onSelectJob={loadHistoryJob} />
+            <JobHistory
+              onSelectJob={loadHistoryJob}
+              onRetryJob={(newJobId) => transcription.trackJob(newJobId)}
+            />
           )}
         </div>
 
@@ -433,6 +442,14 @@ function App() {
             progressMessage={active.progressMessage}
             sourceType={sourceType}
             batchProgress={transcription.batchProgress}
+          />
+        )}
+
+        {/* Batch Progress (shown while batch is active, separate from single-file ProgressBar) */}
+        {transcription.batchId && files.length > 1 && (
+          <BatchProgress
+            batchId={transcription.batchId}
+            onSelectJob={loadHistoryJob}
           />
         )}
 
@@ -464,7 +481,7 @@ function App() {
 
         {/* Results */}
         {active.result && (
-          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-700">
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div className="flex items-center gap-3">
                 <CheckCircle className="w-6 h-6 text-green-400" />
@@ -482,7 +499,7 @@ function App() {
 
             {/* View Mode Tabs */}
             {availableViewModes.length > 1 && (
-              <div className="flex gap-2 mb-6" role="tablist" aria-label="Result view" ref={viewTabsRef} onKeyDown={(e) => handleTabKeyDown(e, viewTabsRef)}>
+              <div className="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Result view" ref={viewTabsRef} onKeyDown={(e) => handleTabKeyDown(e, viewTabsRef)}>
                 {availableViewModes.includes(ViewMode.TRANSCRIPT) && (
                   <button
                     id="tab-transcript"
@@ -554,7 +571,7 @@ function App() {
                   }}
                   className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  {transcription.batchResults.map((br, i) => (
+                  {transcription.batchResults.map((br: any, i: number) => (
                     <option key={br.job_id} value={i}>
                       File {i + 1} — {br.job_id.slice(0, 8)}
                     </option>

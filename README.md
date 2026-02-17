@@ -1,4 +1,4 @@
-# Whisper Transcription App
+# Davrine Transcription App
 
 High-quality audio and video transcription powered by OpenAI Whisper Large-V3 via faster-whisper, with speaker diarization and multiple export formats.
 

@@ -3,7 +3,7 @@ import { Download, FileText, FileType, Copy, Check, Loader2 } from 'lucide-react
 import { EXPORT_FORMATS, exportTranscript } from '../utils/api';
 
 // Add icons to export formats for display
-const FORMAT_ICONS = {
+const FORMAT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   txt: FileText,
   md: FileType,
   srt: FileText,
@@ -12,27 +12,35 @@ const FORMAT_ICONS = {
   json: FileText,
 };
 
+interface ExportMenuProps {
+  jobId: string;
+  result: { result?: string } | null;
+  isMultiModal?: boolean;
+  filename?: string;
+  className?: string;
+}
+
 function ExportMenu({
   jobId,
   result,
   isMultiModal = false,
   filename = 'transcript',
   className = '',
-}) {
+}: ExportMenuProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [exportingFormat, setExportingFormat] = useState(null);
-  const menuRef = useRef(null);
-  const menuItemsRef = useRef([]);
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuItemsRef = useRef<(HTMLButtonElement | null)[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(-1);
 
   const formatEntries = Object.entries(EXPORT_FORMATS);
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setShowMenu(false);
         setFocusedIndex(-1);
       }
@@ -49,7 +57,7 @@ function ExportMenu({
     }
   }, [showMenu]);
 
-  const handleMenuKeyDown = useCallback((e) => {
+  const handleMenuKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!showMenu) return;
 
     switch (e.key) {
@@ -96,7 +104,7 @@ function ExportMenu({
     }
   };
 
-  const downloadTranscript = async (format) => {
+  const downloadTranscript = async (format: string) => {
     if (!jobId || isExporting) return;
 
     setIsExporting(true);

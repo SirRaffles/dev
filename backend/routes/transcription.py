@@ -3,6 +3,7 @@ Transcription API routes: file upload, YouTube, batch, job management, export.
 """
 
 import io
+import json
 import os
 import uuid
 import shutil
@@ -120,7 +121,6 @@ async def transcribe_file(
 
     job_id = str(uuid.uuid4())
     job = TranscriptionJob(job_id)
-    state.jobs[job_id] = job
 
     file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
     if file_ext not in ALLOWED_EXTENSIONS:
@@ -184,6 +184,7 @@ async def transcribe_file(
             output_mode=output_mode,
         )
 
+        state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
         return {"job_id": job_id, "status": "processing", "model": effective_model, "engine": engine}
@@ -246,7 +247,7 @@ async def transcribe_youtube(
 
     job_id = str(uuid.uuid4())
     job = TranscriptionJob(job_id)
-    state.jobs[job_id] = job
+    state.jobs.create(job, youtube_url=request.url)
 
     video_id = extract_video_id(request.url)
 
@@ -324,6 +325,15 @@ async def transcribe_youtube(
             two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
+
+        # Persist settings for retry capability
+        with state.jobs._lock:
+            with state.jobs._get_connection() as conn:
+                conn.execute(
+                    "UPDATE jobs SET settings=? WHERE job_id=?",
+                    (json.dumps(settings.model_dump()), job_id)
+                )
+                conn.commit()
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
@@ -649,6 +659,66 @@ async def delete_job(job_id: str):
 
     del state.jobs[job_id]
     return {"status": "deleted"}
+
+
+@router.post("/job/{job_id}/retry")
+async def retry_job(job_id: str, background_tasks: BackgroundTasks):
+    """Retry a failed transcription job with the same settings."""
+    meta = state.jobs.get_job_meta(job_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    original_job = state.jobs.get(job_id)
+    if original_job and original_job.status not in ("failed",):
+        raise HTTPException(status_code=400, detail="Only failed jobs can be retried")
+
+    stored_settings = meta.get("settings")
+    youtube_url = meta.get("youtube_url")
+    file_path = meta.get("file_path")
+
+    if stored_settings is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Original job settings not available. Please re-submit."
+        )
+
+    settings = TranscriptionSettings(**stored_settings)
+    new_job_id = str(uuid.uuid4())
+    new_job = TranscriptionJob(new_job_id)
+
+    if youtube_url:
+        # Re-download and transcribe YouTube
+        temp_dir = tempfile.mkdtemp()
+        new_job.status = "downloading"
+        new_job.progress_message = "Downloading audio from YouTube..."
+        state.jobs.create(new_job, youtube_url=youtube_url, settings=stored_settings)
+        try:
+            loop = asyncio.get_event_loop()
+            audio_path = await loop.run_in_executor(
+                None,
+                download_youtube_audio,
+                youtube_url,
+                temp_dir
+            )
+            background_tasks.add_task(transcribe_audio, new_job_id, audio_path, settings)
+            return {"job_id": new_job_id, "status": "processing", "retried_from": job_id}
+        except Exception as e:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            new_job.status = "failed"
+            new_job.error = str(e)
+            state.jobs.update(new_job)
+            logger.error(f"Retry YouTube error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # File-based job: check if temp file still exists
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=410,
+                detail="Original file is no longer available. Please re-upload."
+            )
+        state.jobs.create(new_job, file_path=file_path, settings=stored_settings)
+        background_tasks.add_task(transcribe_audio, new_job_id, file_path, settings)
+        return {"job_id": new_job_id, "status": "processing", "retried_from": job_id}
 
 
 @router.put("/job/{job_id}/speakers")

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Whisper Transcription Frontend Startup Script
+# Davrine Transcription Frontend Startup Script
 # Runs the React development server
 #
 # Usage: ./scripts/start-frontend.sh [backend_url]
@@ -21,7 +21,7 @@ NC='\033[0m'
 BACKEND_URL="${1:-http://localhost:8000}"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Whisper Transcription Frontend${NC}"
+echo -e "${BLUE}  Davrine Transcription Frontend${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 cd "$PROJECT_DIR"

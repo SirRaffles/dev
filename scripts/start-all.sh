@@ -17,7 +17,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Whisper Transcription App${NC}"
+echo -e "${BLUE}  Davrine Transcription App${NC}"
 echo -e "${BLUE}  Full Local Development Mode${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""

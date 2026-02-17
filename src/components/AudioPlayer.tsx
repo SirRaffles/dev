@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperat
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 
 // Format timestamp for display
-const formatTime = (seconds) => {
+export const formatTime = (seconds: number): string => {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
@@ -14,18 +14,31 @@ const formatTime = (seconds) => {
   return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
 };
 
-const AudioPlayer = forwardRef(function AudioPlayer({
+export interface AudioPlayerHandle {
+  seekToTime: (time: number) => void;
+  play: () => void;
+  pause: () => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+}
+
+interface AudioPlayerProps {
+  audioUrl: string;
+  onTimeUpdate?: (time: number) => void;
+  className?: string;
+}
+
+const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPlayer({
   audioUrl,
   onTimeUpdate,
   className = ''
 }, ref) {
-  const audioRef = useRef(null);
-  const containerRef = useRef(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // Audio event handlers
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -57,7 +70,6 @@ const AudioPlayer = forwardRef(function AudioPlayer({
   const togglePlayPause = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
     if (isPlaying) {
       audio.pause();
     } else {
@@ -78,7 +90,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
     audio.currentTime = Math.min(duration, audio.currentTime + 5);
   }, [duration]);
 
-  const seekToTime = useCallback((time) => {
+  const seekToTime = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = time;
@@ -88,32 +100,25 @@ const AudioPlayer = forwardRef(function AudioPlayer({
     }
   }, [isPlaying]);
 
-  // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
     seekToTime,
     play: () => {
       const audio = audioRef.current;
-      if (audio) {
-        audio.play();
-        setIsPlaying(true);
-      }
+      if (audio) { audio.play(); setIsPlaying(true); }
     },
     pause: () => {
       const audio = audioRef.current;
-      if (audio) {
-        audio.pause();
-        setIsPlaying(false);
-      }
+      if (audio) { audio.pause(); setIsPlaying(false); }
     },
     getCurrentTime: () => currentTime,
     getDuration: () => duration,
   }), [seekToTime, currentTime, duration]);
 
-  const handleSeekChange = useCallback((e) => {
+  const handleSeekChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     seekToTime(parseFloat(e.target.value));
   }, [seekToTime]);
 
-  const handleKeyDown = useCallback((e) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === ' ' || e.code === 'Space') {
       e.preventDefault();
       togglePlayPause();
@@ -131,10 +136,10 @@ const AudioPlayer = forwardRef(function AudioPlayer({
     >
       <audio ref={audioRef} src={audioUrl} preload="metadata" />
 
-      <div className="flex items-center gap-4 mb-3">
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
         <button
           onClick={skipBackward}
-          className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+          className="p-2.5 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
           title="Skip back 5 seconds"
           aria-label="Skip back 5 seconds"
         >
@@ -142,7 +147,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
         </button>
         <button
           onClick={togglePlayPause}
-          className="p-3 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+          className="p-3 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
           title={isPlaying ? 'Pause' : 'Play'}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
@@ -150,20 +155,19 @@ const AudioPlayer = forwardRef(function AudioPlayer({
         </button>
         <button
           onClick={skipForward}
-          className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+          className="p-2.5 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
           title="Skip forward 5 seconds"
           aria-label="Skip forward 5 seconds"
         >
           <SkipForward className="w-5 h-5" />
         </button>
-        <div className="flex items-center gap-3 text-sm font-mono">
+        <div className="flex items-center gap-2 text-sm font-mono ml-1">
           <span>{formatTime(currentTime)}</span>
           <span className="text-slate-400">/</span>
           <span className="text-slate-400">{formatTime(duration)}</span>
         </div>
       </div>
 
-      {/* Seek bar - accessible range input with custom styling */}
       <input
         type="range"
         min={0}
@@ -194,5 +198,4 @@ const AudioPlayer = forwardRef(function AudioPlayer({
   );
 });
 
-export { formatTime };
 export default AudioPlayer;

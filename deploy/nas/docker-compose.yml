@@ -23,6 +23,7 @@ services:
     restart: unless-stopped
     ports:
       - "8150:80"
+      - "8151:443"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -31,6 +32,7 @@ services:
       - TZ=Europe/Paris
     volumes:
       - ./.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./ssl:/etc/nginx/ssl:ro
     deploy:
       resources:
         limits:

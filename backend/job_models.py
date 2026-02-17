@@ -75,6 +75,8 @@ class JobStore:
                     segments TEXT,
                     speakers TEXT,
                     file_path TEXT,
+                    settings TEXT,
+                    youtube_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -82,6 +84,12 @@ class JobStore:
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)
             ''')
+            # Migrate existing DB: add columns if missing
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+            if 'settings' not in existing:
+                conn.execute("ALTER TABLE jobs ADD COLUMN settings TEXT")
+            if 'youtube_url' not in existing:
+                conn.execute("ALTER TABLE jobs ADD COLUMN youtube_url TEXT")
             conn.commit()
         logger.info(f"Job store initialized at {self.db_path}")
 
@@ -108,7 +116,7 @@ class JobStore:
         job.speakers = json.loads(row[9]) if row[9] else []
         return job
 
-    def _job_to_row(self, job: TranscriptionJob, file_path: str = None) -> tuple:
+    def _job_to_row(self, job: TranscriptionJob, file_path: str = None, settings: dict = None, youtube_url: str = None) -> tuple:
         return (
             job.job_id,
             job.status,
@@ -121,6 +129,8 @@ class JobStore:
             json.dumps(job.segments) if job.segments else None,
             json.dumps(job.speakers) if job.speakers else None,
             file_path,
+            json.dumps(settings) if settings else None,
+            youtube_url,
         )
 
     def prune_completed(self, max_age_hours: int = 720):
@@ -147,7 +157,7 @@ class JobStore:
                         self._cache.pop(jid, None)
                 logger.info("Pruned %d completed/failed jobs older than %dh", pruned, max_age_hours)
 
-    def create(self, job: TranscriptionJob, file_path: str = None):
+    def create(self, job: TranscriptionJob, file_path: str = None, settings: dict = None, youtube_url: str = None):
         self.prune_completed()
         with self._lock:
             self._cache[job.job_id] = job
@@ -155,9 +165,9 @@ class JobStore:
                 conn.execute('''
                     INSERT INTO jobs (job_id, status, progress, progress_message,
                                      result, error, language, language_probability,
-                                     segments, speakers, file_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', self._job_to_row(job, file_path))
+                                     segments, speakers, file_path, settings, youtube_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', self._job_to_row(job, file_path, settings, youtube_url))
                 conn.commit()
 
     def get(self, job_id: str) -> Optional[TranscriptionJob]:
@@ -174,6 +184,22 @@ class JobStore:
                     self._cache[job_id] = job
                     return job
             return None
+
+    def get_job_meta(self, job_id: str) -> Optional[dict]:
+        """Return stored settings and youtube_url for a job (for retry)."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT file_path, settings, youtube_url FROM jobs WHERE job_id = ?", (job_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "file_path": row[0],
+                    "settings": json.loads(row[1]) if row[1] else None,
+                    "youtube_url": row[2],
+                }
 
     def update(self, job: TranscriptionJob):
         with self._lock:

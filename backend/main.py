@@ -44,6 +44,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 multiprocessing.set_start_method('spawn', force=True)
 
 import state
+from migrations import run_migrations
 from services.transcription import get_mlx_model_path
 from routes.transcription import router as transcription_router
 from routes.multimodal import router as multimodal_router
@@ -56,6 +57,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Configure models on startup."""
+    # Run DB migrations before anything else touches the database
+    _db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
+    run_migrations(_db_path)
+
     # Record startup time for health monitoring
     state.startup_time = time.time()
 

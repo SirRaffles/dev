@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Whisper Transcription Backend Startup Script
+# Davrine Transcription Backend Startup Script
 # Runs the FastAPI backend with Whisper on your MacBook M3
 #
 # Usage: ./scripts/start-backend.sh
@@ -21,7 +21,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Whisper Transcription Backend${NC}"
+echo -e "${BLUE}  Davrine Transcription Backend${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Check for HuggingFace token

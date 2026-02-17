@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Health monitor for Whisper Transcription App services.
+# Health monitor for Davrine Transcription App services.
 # Checks backend, frontend, and NAS proxy. Sends macOS notifications on failure.
 #
 # Usage: Run via launchd (com.whisper.health-monitor) every 5 minutes.

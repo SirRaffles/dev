@@ -1,6 +1,23 @@
 import React, { useState } from 'react';
 import { FileText, ChevronDown, ChevronRight, BookOpen, StickyNote } from 'lucide-react';
 
+interface DocumentSection {
+  type: string;
+  content: string;
+  level?: number;
+  page?: number;
+  slide?: number;
+}
+
+interface DocumentViewProps {
+  documentMarkdown?: string;
+  documentSections?: DocumentSection[];
+  speakerNotes?: DocumentSection[];
+  sourceType?: string;
+  pageCount?: number;
+  slideCount?: number;
+}
+
 function DocumentView({
   documentMarkdown,
   documentSections = [],
@@ -8,11 +25,11 @@ function DocumentView({
   sourceType = 'pdf',
   pageCount,
   slideCount,
-}) {
-  const [expandedSections, setExpandedSections] = useState({});
+}: DocumentViewProps) {
+  const [expandedSections, setExpandedSections] = useState<Record<number, boolean>>({});
   const [showSpeakerNotes, setShowSpeakerNotes] = useState(true);
 
-  const toggleSection = (index) => {
+  const toggleSection = (index: number) => {
     setExpandedSections(prev => ({
       ...prev,
       [index]: !prev[index]
@@ -20,7 +37,7 @@ function DocumentView({
   };
 
   // Group sections by page/slide
-  const groupedSections = documentSections.reduce((acc, section) => {
+  const groupedSections = documentSections.reduce<Record<string, DocumentSection[]>>((acc, section) => {
     const key = sourceType === 'pptx'
       ? `Slide ${section.slide || 'N/A'}`
       : `Page ${section.page || 'N/A'}`;
@@ -36,7 +53,7 @@ function DocumentView({
   const notes = documentSections.filter(s => s.type === 'note');
   const contentSections = documentSections.filter(s => s.type !== 'note');
 
-  const renderSection = (section, index) => {
+  const renderSection = (section: DocumentSection, index: string | number) => {
     const isHeading = section.type === 'heading' || section.type === 'title';
     const isList = section.type === 'list';
     const isTable = section.type === 'table';

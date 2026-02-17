@@ -2,6 +2,31 @@ import React from 'react';
 import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen, Layers } from 'lucide-react';
 import { LANGUAGES, MODEL_SIZES, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS } from '../utils/api';
 
+interface Settings {
+  modelSize?: string;
+  language?: string;
+  translateToEnglish?: boolean;
+  enableDiarization?: boolean;
+  numSpeakers?: string;
+  wordTimestamps?: boolean;
+  enableNoiseReduction?: boolean;
+  speedPriority?: boolean;
+  engine?: string;
+  contextTerms?: string;
+  twoPass?: boolean;
+  outputMode?: string;
+  [key: string]: any;
+}
+
+interface SettingsPanelProps {
+  settings: Settings;
+  onSettingsChange?: (settings: Settings) => void;
+  showForDocuments?: boolean;
+  disabled?: boolean;
+  voxtralAvailable?: boolean;
+  voxtralLocalAvailable?: boolean;
+}
+
 function SettingsPanel({
   settings,
   onSettingsChange,
@@ -9,7 +34,7 @@ function SettingsPanel({
   disabled = false,
   voxtralAvailable = false,
   voxtralLocalAvailable = false,
-}) {
+}: SettingsPanelProps) {
   const {
     modelSize = 'large-v3-turbo',
     language = 'auto',
@@ -25,7 +50,7 @@ function SettingsPanel({
     outputMode = 'verbatim',
   } = settings;
 
-  const handleChange = (key, value) => {
+  const handleChange = (key: string, value: any) => {
     onSettingsChange?.({ ...settings, [key]: value });
   };
 
@@ -134,7 +159,7 @@ function SettingsPanel({
       )}
 
       {/* Settings Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Model Size Selection — different options per engine */}
         <div>
           <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
@@ -178,7 +203,7 @@ function SettingsPanel({
                 const isRestricted = languageRestriction && language !== languageRestriction && language !== 'auto';
                 const prefix = id === 'parakeet' ? '\u{1F680} ' : '';
                 return (
-                  <option key={id} value={id} disabled={isRestricted}>
+                  <option key={id} value={id} disabled={!!isRestricted}>
                     {prefix}{label} - {description}{isRestricted ? ' (English only)' : ''}
                   </option>
                 );
@@ -200,20 +225,16 @@ function SettingsPanel({
             value={language}
             onChange={(e) => {
               const newLang = e.target.value;
-              // Batch all changes into a single update to avoid race condition
-              const updates = { language: newLang };
+              const updates: Settings = { language: newLang };
 
-              // Reset translation toggle when switching to English
               if (newLang === 'en') {
                 updates.translateToEnglish = false;
               }
 
-              // Reset Parakeet model if switching to non-English
               if (isWhisper && modelSize === 'parakeet' && newLang !== 'en' && newLang !== 'auto') {
                 updates.modelSize = 'large-v3-turbo';
               }
 
-              // Single state update with all changes
               onSettingsChange?.({ ...settings, ...updates });
             }}
             disabled={disabled}

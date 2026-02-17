@@ -100,10 +100,42 @@ def notify_watcher_started(watch_path: str) -> bool:
     )
 
 
+def notify_new_file_detected(filename: str) -> bool:
+    """Notify that a new recording was detected (low priority, no sound)."""
+    return notify(
+        title="New Recording Detected",
+        message=f"Queued: {filename}",
+        sound=False,
+    )
+
+
 def notify_backend_offline() -> bool:
     """Notify that the backend is offline."""
     return notify(
         title="Transcription Backend Offline",
         message="Files will be queued for retry",
+        sound=True,
+    )
+
+
+def notify_backend_online() -> bool:
+    """Notify that the backend is back online."""
+    return notify(
+        title="Transcription Backend Online",
+        message="Resuming transcription",
+        sound=False,
+    )
+
+
+def notify_circuit_breaker_open(retry_in_seconds: float) -> bool:
+    """Notify that the circuit breaker has opened (backend unreachable)."""
+    retry_min = int(retry_in_seconds // 60)
+    if retry_min > 0:
+        retry_msg = f"Will retry in {retry_min}m"
+    else:
+        retry_msg = f"Will retry in {int(retry_in_seconds)}s"
+    return notify(
+        title="Backend Unreachable",
+        message=retry_msg,
         sound=True,
     )

@@ -8,22 +8,35 @@ import {
 } from '../utils/api';
 import { usePollingJob } from './usePollingJob';
 
-const fetchTranscriptionStatus = (id) => fetchJobStatus(id, false);
+const fetchTranscriptionStatus = (id: string) => fetchJobStatus(id, false);
+
+interface BatchProgressItem {
+  job_id: string;
+  status: string;
+  progress: number;
+  error?: string;
+}
+
+interface BatchResultItem {
+  job_id: string;
+  result: any;
+}
 
 export function useTranscription() {
   const job = usePollingJob(fetchTranscriptionStatus);
 
   // Batch-specific state (not shared with useMultiModal)
-  const [batchProgress, setBatchProgress] = useState([]);
-  const [batchResults, setBatchResults] = useState([]);
-  const batchPollRef = useRef(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgressItem[]>([]);
+  const [batchResults, setBatchResults] = useState<BatchResultItem[]>([]);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Poll batch job status
-  const pollBatchJobStatus = useCallback(async (batchId) => {
+  const pollBatchJobStatus = useCallback(async (batchId: string) => {
     try {
       const data = await fetchBatchStatus(batchId);
 
-      setBatchProgress(data.jobs.map(j => ({
+      setBatchProgress(data.jobs.map((j: any) => ({
         job_id: j.job_id,
         status: j.status,
         progress: j.progress,
@@ -36,8 +49,8 @@ export function useTranscription() {
       if (data.overall_status === 'completed') {
         // Fetch all completed job results for batch navigation
         if (data.jobs.length > 0) {
-          const allResults = await Promise.all(
-            data.jobs.map(async (j) => {
+          const allResults: BatchResultItem[] = await Promise.all(
+            data.jobs.map(async (j: any) => {
               try {
                 const resultData = await fetchJobStatus(j.job_id);
                 return { job_id: j.job_id, result: resultData };
@@ -82,7 +95,7 @@ export function useTranscription() {
   }, []);
 
   // Submit file for transcription
-  const transcribeFile = useCallback(async (file, options = {}) => {
+  const transcribeFile = useCallback(async (file: File, options: Record<string, any> = {}) => {
     job.reset();
     setBatchProgress([]);
 
@@ -90,13 +103,13 @@ export function useTranscription() {
       job.startJob(null, 'Starting...');
       const data = await submitTranscription(file, options);
       job.startJob(data.job_id, 'Processing...');
-    } catch (err) {
+    } catch (err: any) {
       job.failJob(err.message || 'Failed to start transcription');
     }
   }, [job]);
 
   // Submit YouTube URL for transcription
-  const transcribeYouTube = useCallback(async (url, options = {}) => {
+  const transcribeYouTube = useCallback(async (url: string, options: Record<string, any> = {}) => {
     job.reset();
     setBatchProgress([]);
 
@@ -112,13 +125,13 @@ export function useTranscription() {
       } else {
         job.startJob(data.job_id, 'Processing...');
       }
-    } catch (err) {
+    } catch (err: any) {
       job.failJob(err.message || 'Failed to start YouTube transcription');
     }
   }, [job]);
 
   // Submit multiple files for batch transcription
-  const transcribeBatch = useCallback(async (files, options = {}) => {
+  const transcribeBatch = useCallback(async (files: File[], options: Record<string, any> = {}) => {
     job.reset();
     setBatchProgress([]);
 
@@ -126,32 +139,42 @@ export function useTranscription() {
       job.startJob(null, 'Uploading files...');
       const data = await submitBatchTranscription(files, options);
 
-      setBatchProgress(data.job_ids.map(id => ({ job_id: id, progress: 0, status: 'pending' })));
+      setBatchProgress(data.job_ids.map((id: string) => ({ job_id: id, progress: 0, status: 'pending' })));
 
       // Start polling batch status (uses interval, not the single-job poller)
-      const batchId = data.batch_id;
+      const newBatchId = data.batch_id;
+      setBatchId(newBatchId);
       batchPollRef.current = setInterval(() => {
-        pollBatchJobStatus(batchId);
+        pollBatchJobStatus(newBatchId);
       }, 2000);
-      pollBatchJobStatus(batchId);
-    } catch (err) {
+      pollBatchJobStatus(newBatchId);
+    } catch (err: any) {
       job.failJob(err.message || 'Failed to start batch transcription');
     }
   }, [job, pollBatchJobStatus]);
 
   // Select a specific batch result to display
-  const selectBatchResult = useCallback((index) => {
+  const selectBatchResult = useCallback((index: number) => {
     if (batchResults[index]) {
       job.updateResult(batchResults[index].result);
       job.startJob(batchResults[index].job_id);
     }
   }, [batchResults, job]);
 
+  // Track an already-submitted job by ID (e.g. after retry)
+  const trackJob = useCallback((jobId: string) => {
+    job.reset();
+    setBatchProgress([]);
+    setBatchResults([]);
+    job.startJob(jobId, 'Retrying...');
+  }, [job]);
+
   // Reset (also clears batch state)
   const reset = useCallback(() => {
     job.reset();
     setBatchProgress([]);
     setBatchResults([]);
+    setBatchId(null);
     if (batchPollRef.current) {
       clearInterval(batchPollRef.current);
       batchPollRef.current = null;
@@ -165,12 +188,14 @@ export function useTranscription() {
     progressMessage: job.progressMessage,
     result: job.result,
     error: job.error,
+    batchId,
     batchProgress,
     batchResults,
     selectBatchResult,
     transcribeFile,
     transcribeYouTube,
     transcribeBatch,
+    trackJob,
     reset,
     updateResult: job.updateResult,
   };

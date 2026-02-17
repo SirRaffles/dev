@@ -11,6 +11,16 @@ const ACCEPTED_EXTENSIONS = [
   ...DOCUMENT_EXTENSIONS.map(e => `.${e}`),
 ].join(',');
 
+interface FileInputProps {
+  file: File | null;
+  files?: File[];
+  onFileSelect?: (file: File) => void;
+  onFilesSelect?: (files: File[]) => void;
+  onClear?: () => void;
+  disabled?: boolean;
+  showDocumentSupport?: boolean;
+}
+
 function FileInput({
   file,
   files = [],
@@ -19,11 +29,11 @@ function FileInput({
   onClear,
   disabled = false,
   showDocumentSupport = true,
-}) {
+}: FileInputProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDrop = useCallback((e) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
 
@@ -39,19 +49,19 @@ function FileInput({
     }
   }, [disabled, onFileSelect, onFilesSelect]);
 
-  const handleDragOver = useCallback((e) => {
+  const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     if (!disabled) {
       setIsDragging(true);
     }
   }, [disabled]);
 
-  const handleDragLeave = useCallback((e) => {
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
   }, []);
 
-  const handleFileSelect = useCallback((e) => {
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length > 0) {
       if (selectedFiles.length === 1) {
@@ -68,7 +78,7 @@ function FileInput({
     }
   };
 
-  const handleRemoveFile = (index) => {
+  const handleRemoveFile = (index: number) => {
     if (files.length > 1) {
       const newFiles = files.filter((_, i) => i !== index);
       if (newFiles.length === 1) {
@@ -81,7 +91,7 @@ function FileInput({
     }
   };
 
-  const getFileIcon = (filename) => {
+  const getFileIcon = (filename: string) => {
     const type = getFileType(filename);
     switch (type) {
       case 'audio':
@@ -113,7 +123,7 @@ function FileInput({
       tabIndex={disabled ? -1 : 0}
       aria-label={file ? `Selected file: ${file.name}. Click to change.` : 'Click or drag and drop files to upload'}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
-      className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all ${
+      className={`relative border-2 border-dashed rounded-xl p-4 sm:p-8 text-center transition-all ${
         disabled
           ? 'border-slate-700 bg-slate-800/50 cursor-not-allowed'
           : isDragging
@@ -135,16 +145,16 @@ function FileInput({
       />
 
       {file ? (
-        <div className="flex items-center justify-center gap-3">
+        <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
           {getFileIcon(file.name)}
-          <CheckCircle className="w-6 h-6 text-green-400" />
-          <span className="text-lg">{file.name}</span>
+          <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0" />
+          <span className="text-base sm:text-lg truncate max-w-[60vw] sm:max-w-none">{file.name}</span>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClear?.();
             }}
-            className="ml-2 p-1 rounded-full hover:bg-slate-600"
+            className="flex-shrink-0 ml-1 p-1 rounded-full hover:bg-slate-600"
             aria-label="Remove selected file"
           >
             <X className="w-4 h-4" />
