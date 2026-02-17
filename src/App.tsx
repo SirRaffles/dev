@@ -309,7 +309,7 @@ function App() {
         )}
 
         {/* Input Section */}
-        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-8 border border-slate-700">
+        <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-8 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
           {/* Mode Tabs */}
           <div className="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Input source" ref={inputTabsRef} onKeyDown={(e) => handleTabKeyDown(e, inputTabsRef)}>
             <button
@@ -323,7 +323,7 @@ function App() {
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                 inputMode === InputMode.FILE
                   ? 'bg-blue-500 text-white'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
               } disabled:opacity-50`}
             >
               <Upload className="w-4 h-4" aria-hidden="true" />
@@ -340,7 +340,7 @@ function App() {
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                 inputMode === InputMode.YOUTUBE
                   ? 'bg-blue-500 text-white'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
               } disabled:opacity-50`}
             >
               <Link className="w-4 h-4" aria-hidden="true" />
@@ -399,7 +399,7 @@ function App() {
                 ? macState === 'sleeping'
                   ? 'bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white'
                   : 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
-                : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-700'
             }`}
           >
             {macState === 'waking' ? (
@@ -481,7 +481,7 @@ function App() {
 
         {/* Results */}
         {active.result && (
-          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-700">
+          <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div className="flex items-center gap-3">
                 <CheckCircle className="w-6 h-6 text-green-400" />
@@ -511,7 +511,7 @@ function App() {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.TRANSCRIPT
                         ? 'bg-blue-500 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
                     }`}
                   >
                     <FileText className="w-4 h-4" aria-hidden="true" />
@@ -529,7 +529,7 @@ function App() {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.DOCUMENT
                         ? 'bg-blue-500 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
                     }`}
                   >
                     <FileText className="w-4 h-4" aria-hidden="true" />
@@ -547,7 +547,7 @@ function App() {
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                       viewMode === ViewMode.VISUAL
                         ? 'bg-purple-500 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
                     }`}
                   >
                     <Image className="w-4 h-4" aria-hidden="true" />
@@ -569,7 +569,7 @@ function App() {
                     setSelectedBatchIndex(idx);
                     transcription.selectBatchResult(idx);
                   }}
-                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                 >
                   {transcription.batchResults.map((br: any, i: number) => (
                     <option key={br.job_id} value={i}>
@@ -582,10 +582,10 @@ function App() {
 
             <Suspense fallback={
               <div className="space-y-4 py-4">
-                <div className="h-4 w-3/4 bg-slate-700 rounded animate-pulse" />
-                <div className="h-4 w-full bg-slate-700 rounded animate-pulse" />
-                <div className="h-4 w-5/6 bg-slate-700 rounded animate-pulse" />
-                <div className="h-4 w-2/3 bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-3/4 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-full bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-5/6 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-2/3 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
               </div>
             }>
               {audioUrl && !isDocumentMode && (
@@ -633,7 +633,7 @@ function App() {
 
             <button
               onClick={clearSelection}
-              className="w-full mt-6 py-3 rounded-lg font-medium bg-slate-700 hover:bg-slate-600 transition-colors"
+              className="w-full mt-6 py-3 rounded-lg font-medium bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
             >
               {isDocumentMode ? 'Process Another Document' : 'Start New Transcription'}
             </button>

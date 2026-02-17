@@ -81,14 +81,14 @@ export default function BatchProgress({ batchId, onSelectJob }: BatchProgressPro
   const progressPct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
 
   return (
-    <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-8 border border-slate-700/50">
+    <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-8 border border-slate-200 dark:border-slate-700/50 shadow-sm dark:shadow-none">
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <Layers className="w-5 h-5 text-purple-400 flex-shrink-0" aria-hidden="true" />
-        <span className="font-medium text-slate-200">
+        <span className="font-medium text-slate-700 dark:text-slate-200">
           Batch Progress
         </span>
-        <span className="ml-auto text-sm text-slate-400">
+        <span className="ml-auto text-sm text-slate-500 dark:text-slate-400">
           {doneCount} / {total} files
           {failed > 0 && (
             <span className="ml-2 text-red-400">({failed} failed)</span>
@@ -98,7 +98,7 @@ export default function BatchProgress({ batchId, onSelectJob }: BatchProgressPro
 
       {/* Overall progress bar */}
       <div
-        className="w-full bg-slate-700 rounded-full h-2 mb-4"
+        className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 mb-4"
         role="progressbar"
         aria-valuenow={progressPct}
         aria-valuemin={0}
@@ -121,12 +121,12 @@ export default function BatchProgress({ batchId, onSelectJob }: BatchProgressPro
               disabled={job.status !== 'completed'}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors border border-transparent
                 ${job.status === 'completed'
-                  ? 'hover:bg-slate-700/50 hover:border-slate-600/50 cursor-pointer'
+                  ? 'hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:border-slate-300/50 dark:hover:border-slate-600/50 cursor-pointer'
                   : 'cursor-default'
                 }`}
             >
               {STATUS_ICONS[job.status] || <FileText className="w-4 h-4 text-slate-500" />}
-              <span className="flex-1 text-sm text-slate-200 truncate">
+              <span className="flex-1 text-sm text-slate-700 dark:text-slate-200 truncate">
                 {basename(job.file_path) || job.job_id.slice(0, 8)}
               </span>
               <span className={`text-xs px-2 py-0.5 rounded-full ${

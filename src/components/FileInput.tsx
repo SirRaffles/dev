@@ -125,12 +125,12 @@ function FileInput({
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
       className={`relative border-2 border-dashed rounded-xl p-4 sm:p-8 text-center transition-all ${
         disabled
-          ? 'border-slate-700 bg-slate-800/50 cursor-not-allowed'
+          ? 'border-slate-300 bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50 cursor-not-allowed'
           : isDragging
           ? 'border-blue-400 bg-blue-500/10 cursor-pointer'
           : file
           ? 'border-green-400 bg-green-500/10 cursor-pointer'
-          : 'border-slate-600 hover:border-slate-500 hover:bg-slate-700/30 cursor-pointer'
+          : 'border-slate-300 hover:border-slate-400 hover:bg-slate-100 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700/30 cursor-pointer'
       }`}
     >
       <input
@@ -154,7 +154,7 @@ function FileInput({
               e.stopPropagation();
               onClear?.();
             }}
-            className="flex-shrink-0 ml-1 p-1 rounded-full hover:bg-slate-600"
+            className="flex-shrink-0 ml-1 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600"
             aria-label="Remove selected file"
           >
             <X className="w-4 h-4" />
@@ -169,21 +169,21 @@ function FileInput({
             </div>
             <button
               onClick={onClear}
-              className="p-1 rounded-full hover:bg-slate-600"
+              className="p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="max-h-40 overflow-y-auto space-y-2">
             {files.map((f, idx) => (
-              <div key={idx} className="flex items-center justify-between bg-slate-700 rounded p-2">
+              <div key={idx} className="flex items-center justify-between bg-slate-100 dark:bg-slate-700 rounded p-2">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   {getFileIcon(f.name)}
                   <span className="text-sm truncate">{f.name}</span>
                 </div>
                 <button
                   onClick={() => handleRemoveFile(idx)}
-                  className="ml-2 p-1 rounded hover:bg-slate-600"
+                  className="ml-2 p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-600"
                   aria-label={"Remove " + f.name}
                 >
                   <X className="w-3 h-3" />

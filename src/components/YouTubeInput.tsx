@@ -22,7 +22,7 @@ function YouTubeInput({
   }, [url]);
 
   const borderClass = isValid === null
-    ? 'border-slate-600 focus:border-blue-400 focus:ring-blue-400'
+    ? 'border-slate-300 dark:border-slate-600 focus:border-blue-400 focus:ring-blue-400'
     : isValid
       ? 'border-green-500 focus:border-green-400 focus:ring-green-400'
       : 'border-red-500 focus:border-red-400 focus:ring-red-400';
@@ -39,7 +39,7 @@ function YouTubeInput({
         placeholder="https://www.youtube.com/watch?v=..."
         aria-label="YouTube video URL"
         aria-invalid={isValid === false ? 'true' : undefined}
-        className={`w-full px-4 py-4 bg-slate-700 border rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-1 disabled:opacity-50 ${borderClass}`}
+        className={`w-full px-4 py-4 bg-white dark:bg-slate-700 border rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 disabled:opacity-50 ${borderClass}`}
       />
       {isValid === false && (
         <p className="text-xs text-red-400 mt-1">
@@ -50,7 +50,7 @@ function YouTubeInput({
         <button
           onClick={onClear}
           aria-label="Clear URL"
-          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-slate-600"
+          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600"
         >
           <X className="w-4 h-4" aria-hidden="true" />
         </button>

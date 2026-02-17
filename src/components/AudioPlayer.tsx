@@ -129,7 +129,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function Aud
 
   return (
     <div
-      className={`bg-slate-700/50 rounded-xl p-4 ${className}`}
+      className={`bg-slate-100 dark:bg-slate-700/50 rounded-xl p-4 ${className}`}
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
@@ -139,7 +139,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function Aud
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         <button
           onClick={skipBackward}
-          className="p-2.5 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+          className="p-2.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-600 dark:hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
           title="Skip back 5 seconds"
           aria-label="Skip back 5 seconds"
         >
@@ -155,7 +155,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function Aud
         </button>
         <button
           onClick={skipForward}
-          className="p-2.5 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+          className="p-2.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-600 dark:hover:bg-slate-500 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
           title="Skip forward 5 seconds"
           aria-label="Skip forward 5 seconds"
         >
@@ -176,7 +176,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function Aud
         value={currentTime}
         onChange={handleSeekChange}
         aria-label="Seek audio position"
-        className="w-full h-2 rounded-full appearance-none cursor-pointer bg-slate-600
+        className="w-full h-2 rounded-full appearance-none cursor-pointer bg-slate-300 dark:bg-slate-600
           [&::-webkit-slider-thumb]:appearance-none
           [&::-webkit-slider-thumb]:w-4
           [&::-webkit-slider-thumb]:h-4

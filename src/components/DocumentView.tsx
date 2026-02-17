@@ -60,10 +60,10 @@ function DocumentView({
 
     if (isHeading) {
       const headingClass = section.level === 1
-        ? 'text-xl font-bold text-white'
+        ? 'text-xl font-bold text-slate-900 dark:text-white'
         : section.level === 2
-        ? 'text-lg font-semibold text-slate-200'
-        : 'text-base font-medium text-slate-300';
+        ? 'text-lg font-semibold text-slate-700 dark:text-slate-200'
+        : 'text-base font-medium text-slate-600 dark:text-slate-300';
 
       return (
         <div key={index} className={`mb-3 ${headingClass}`}>
@@ -74,7 +74,7 @@ function DocumentView({
 
     if (isList) {
       return (
-        <div key={index} className="mb-2 pl-4 text-slate-300">
+        <div key={index} className="mb-2 pl-4 text-slate-600 dark:text-slate-300">
           <span className="text-blue-400 mr-2">•</span>
           {section.content}
         </div>
@@ -83,14 +83,14 @@ function DocumentView({
 
     if (isTable) {
       return (
-        <div key={index} className="mb-4 p-3 bg-slate-700/50 rounded-lg font-mono text-sm overflow-x-auto">
-          <pre className="text-slate-300">{section.content}</pre>
+        <div key={index} className="mb-4 p-3 bg-slate-100 dark:bg-slate-700/50 rounded-lg font-mono text-sm overflow-x-auto">
+          <pre className="text-slate-600 dark:text-slate-300">{section.content}</pre>
         </div>
       );
     }
 
     return (
-      <p key={index} className="mb-3 text-slate-300 leading-relaxed">
+      <p key={index} className="mb-3 text-slate-600 dark:text-slate-300 leading-relaxed">
         {section.content}
       </p>
     );
@@ -99,9 +99,9 @@ function DocumentView({
   // If we have raw markdown but no sections, render the markdown
   if (documentMarkdown && contentSections.length === 0) {
     return (
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
-        <div className="prose prose-invert prose-sm max-w-none">
-          <pre className="whitespace-pre-wrap text-slate-300 font-sans text-sm leading-relaxed">
+      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
+        <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+          <pre className="whitespace-pre-wrap text-slate-600 dark:text-slate-300 font-sans text-sm leading-relaxed">
             {documentMarkdown}
           </pre>
         </div>
@@ -112,16 +112,16 @@ function DocumentView({
   return (
     <div className="space-y-4">
       {/* Document info */}
-      <div className="flex items-center gap-4 p-3 bg-slate-700/50 rounded-lg">
+      <div className="flex items-center gap-4 p-3 bg-slate-100 dark:bg-slate-700/50 rounded-lg">
         <FileText className="w-5 h-5 text-orange-400" />
         <div className="flex items-center gap-4 text-sm">
           {sourceType === 'pptx' && slideCount && (
-            <span className="text-slate-300">
+            <span className="text-slate-600 dark:text-slate-300">
               <span className="text-slate-500">Slides:</span> {slideCount}
             </span>
           )}
           {sourceType === 'pdf' && pageCount && (
-            <span className="text-slate-300">
+            <span className="text-slate-600 dark:text-slate-300">
               <span className="text-slate-500">Pages:</span> {pageCount}
             </span>
           )}
@@ -132,7 +132,7 @@ function DocumentView({
             className={`ml-auto flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
               showSpeakerNotes
                 ? 'bg-amber-500 text-white'
-                : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
+                : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-600 dark:text-slate-300 dark:hover:bg-slate-500'
             }`}
           >
             <StickyNote className="w-4 h-4" />
@@ -142,7 +142,7 @@ function DocumentView({
       </div>
 
       {/* Main content */}
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
+      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
         {Object.entries(groupedSections).length > 0 ? (
           Object.entries(groupedSections).map(([groupName, sections], groupIndex) => (
             <div key={groupIndex} className="mb-6">
@@ -160,7 +160,7 @@ function DocumentView({
               </button>
 
               {expandedSections[groupIndex] !== false && (
-                <div className="pl-6 border-l-2 border-slate-700">
+                <div className="pl-6 border-l-2 border-slate-200 dark:border-slate-700">
                   {sections.filter(s => s.type !== 'note').map((section, index) =>
                     renderSection(section, `${groupIndex}-${index}`)
                   )}

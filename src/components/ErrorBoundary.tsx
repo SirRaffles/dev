@@ -31,11 +31,11 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-center p-8">
-          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-8 border border-slate-700 max-w-lg w-full text-center">
+        <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 text-slate-900 dark:text-white flex items-center justify-center p-8">
+          <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-8 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none max-w-lg w-full text-center">
             <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
             <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
-            <p className="text-slate-400 mb-6 text-sm">
+            <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
               {this.state.error?.message || 'An unexpected error occurred.'}
             </p>
             <button

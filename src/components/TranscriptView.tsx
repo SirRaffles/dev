@@ -258,10 +258,10 @@ function TranscriptView({
   return (
     <div className={className}>
       {/* Language & Speakers Info */}
-      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mb-6 p-3 bg-slate-700/50 rounded-lg text-sm sm:text-base">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mb-6 p-3 bg-slate-100 dark:bg-slate-700/50 rounded-lg text-sm sm:text-base">
         {result.language && (
           <div className="flex items-center gap-2">
-            <span className="text-slate-300">Language:</span>
+            <span className="text-slate-500 dark:text-slate-300">Language:</span>
             <span className="font-medium">{LANGUAGES[result.language] || result.language.toUpperCase()}</span>
             {result.language_probability && (
               <span className="text-slate-400 text-sm">
@@ -273,7 +273,7 @@ function TranscriptView({
         {speakers.length > 0 && (
           <div className="flex items-center gap-2">
             <Users className="w-4 h-4 text-purple-400" />
-            <span className="text-slate-300">Speakers:</span>
+            <span className="text-slate-500 dark:text-slate-300">Speakers:</span>
             <span className="font-medium">{speakers.length}</span>
           </div>
         )}
@@ -281,8 +281,8 @@ function TranscriptView({
 
       {/* Speaker Renaming */}
       {speakers.length > 0 && (
-        <div className="mb-6 p-4 bg-slate-700/30 rounded-xl">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+        <div className="mb-6 p-4 bg-slate-100 dark:bg-slate-700/30 rounded-xl">
+          <h3 className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-3 flex items-center gap-2">
             <Edit3 className="w-4 h-4" />
             Rename Speakers
           </h3>
@@ -290,12 +290,12 @@ function TranscriptView({
             {speakers.map((speaker) => (
               <div key={speaker} className="flex items-center gap-1">
                 {editingSpeaker === speaker ? (
-                  <div className="flex items-center gap-1 bg-slate-600 rounded-lg px-2 py-1">
+                  <div className="flex items-center gap-1 bg-slate-200 dark:bg-slate-600 rounded-lg px-2 py-1">
                     <input
                       type="text"
                       value={tempSpeakerName}
                       onChange={(e) => setTempSpeakerName(e.target.value)}
-                      className="w-24 bg-slate-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="w-24 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
                       autoFocus
                       disabled={isSavingSpeaker}
                       onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
@@ -347,7 +347,7 @@ function TranscriptView({
         ) : (
           <button
             onClick={() => { setIsEditing(true); setSaveError(null); }}
-            className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 rounded-lg transition-colors"
           >
             <Edit2 className="w-4 h-4" />
             Edit
@@ -365,7 +365,7 @@ function TranscriptView({
             }
           }}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-            showSearchPanel ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            showSearchPanel ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
           }`}
         >
           <Search className="w-4 h-4" />
@@ -378,27 +378,27 @@ function TranscriptView({
 
       {/* Search & Replace Panel */}
       {showSearchPanel && (
-        <div className="mb-4 p-4 bg-slate-700/30 rounded-xl">
+        <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-700/30 rounded-xl">
           <div className="flex flex-wrap gap-3 mb-3">
             <div className="flex-1 min-w-[200px]">
-              <label className="text-xs text-slate-400 mb-1 block">Search</label>
+              <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Search</label>
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && performSearch()}
                 placeholder="Search text..."
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 dark:bg-slate-700 dark:border-slate-600 dark:text-white focus:outline-none focus:border-blue-400"
               />
             </div>
             <div className="flex-1 min-w-[200px]">
-              <label className="text-xs text-slate-400 mb-1 block">Replace with</label>
+              <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Replace with</label>
               <input
                 type="text"
                 value={replaceText}
                 onChange={(e) => setReplaceText(e.target.value)}
                 placeholder="Replacement text..."
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 dark:bg-slate-700 dark:border-slate-600 dark:text-white focus:outline-none focus:border-blue-400"
               />
             </div>
           </div>
@@ -447,7 +447,7 @@ function TranscriptView({
         <button
           onClick={() => setShowTimestamps(!showTimestamps)}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-            showTimestamps ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300'
+            showTimestamps ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
           }`}
         >
           <Clock className="w-4 h-4" />
@@ -457,7 +457,7 @@ function TranscriptView({
           <button
             onClick={() => setShowSpeakers(!showSpeakers)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-              showSpeakers ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300'
+              showSpeakers ? 'bg-purple-500 text-white' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
             }`}
           >
             <Users className="w-4 h-4" />
@@ -467,7 +467,7 @@ function TranscriptView({
       </div>
 
       {/* Transcription Text */}
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
+      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
         {(showTimestamps || showSpeakers) && result.segments ? (
           <div className="space-y-3">
             {result.segments.map((segment, index) => {
@@ -477,7 +477,7 @@ function TranscriptView({
               return (
                 <React.Fragment key={`seg-${segment.start}-${segment.end}`}>
                   {segment.paragraph_break && index > 0 && (
-                    <div className="border-t border-slate-700 my-2" />
+                    <div className="border-t border-slate-200 dark:border-slate-700 my-2" />
                   )}
                   <div
                     ref={el => { segmentRefs.current[index] = el; }}
@@ -503,10 +503,10 @@ function TranscriptView({
                       rows={2}
                       value={editedSegments[index] !== undefined ? editedSegments[index] : segment.text}
                       onChange={(e) => handleEditSegment(index, e.target.value)}
-                      className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400 resize-y"
+                      className="flex-1 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 px-2 py-1 rounded border border-slate-300 dark:border-slate-600 focus:outline-none focus:border-blue-400 resize-y"
                     />
                   ) : (
-                    <p className={`text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
+                    <p className={`text-slate-800 dark:text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
                       {highlightText(editedSegments[index] !== undefined ? editedSegments[index] : segment.text, index)}
                       {searchResults.includes(index) && replaceText && (
                         <button
@@ -525,7 +525,7 @@ function TranscriptView({
             })}
           </div>
         ) : (
-          <p className="text-slate-200 leading-relaxed whitespace-pre-wrap">
+          <p className="text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-wrap">
             {result.result}
           </p>
         )}

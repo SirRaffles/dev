@@ -94,7 +94,7 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
     <div className="mt-6">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-slate-400 hover:text-slate-200 transition-colors text-sm font-medium"
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors text-sm font-medium"
       >
         <Clock className="w-4 h-4" />
         Recent Transcriptions {total > 0 && `(${total})`}
@@ -102,13 +102,13 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
       </button>
 
       {expanded && (
-        <div className="mt-3 bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50">
+        <div className="mt-3 bg-white/80 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 overflow-hidden shadow-sm dark:shadow-none">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-slate-700/50">
             <span className="text-xs text-slate-500">{total} total jobs</span>
             <button
               onClick={fetchJobs}
               disabled={loading}
-              className="text-slate-500 hover:text-slate-300 transition-colors"
+              className="text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 transition-colors"
               title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -126,7 +126,7 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
           )}
 
           {retryError && (
-            <div className="px-4 py-2 text-xs text-red-400 bg-red-500/10 border-b border-slate-700/30">
+            <div className="px-4 py-2 text-xs text-red-400 bg-red-500/10 border-b border-slate-200 dark:border-slate-700/30">
               {retryError}
             </div>
           )}
@@ -135,7 +135,7 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
             {jobs.map((job) => (
               <div
                 key={job.job_id}
-                className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-700/50 transition-colors border-b border-slate-700/30 last:border-0"
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors border-b border-slate-200 dark:border-slate-700/30 last:border-0"
               >
                 <button
                   onClick={() => onSelectJob(job.job_id)}
@@ -143,7 +143,7 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
                 >
                   {STATUS_ICONS[job.status] || <FileText className="w-4 h-4 text-slate-500" />}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-slate-200 truncate">
+                    <p className="text-sm text-slate-700 dark:text-slate-200 truncate">
                       {job.file_path || job.job_id.slice(0, 8)}
                     </p>
                     <p className="text-xs text-slate-500">
