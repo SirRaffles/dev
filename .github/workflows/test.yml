@@ -22,7 +22,7 @@ jobs:
       - name: Install test dependencies
         run: |
           pip install fastapi uvicorn python-multipart pydantic httpx \
-                    pytest pytest-asyncio reportlab python-docx markdown \
+                    pytest pytest-asyncio pytest-timeout reportlab python-docx markdown \
                     Pillow imagehash
 
       - name: Run tests
