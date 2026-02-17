@@ -1,0 +1,15 @@
+// macOS resource forks
+._*
+.DS_Store
+
+// Build artifacts (already in .gitignore but redundant sync is wasteful)
+node_modules
+build
+dist
+.next
+__pycache__
+*.pyc
+.venv
+venv
+.env
+.env.local

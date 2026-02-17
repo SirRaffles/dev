@@ -212,6 +212,52 @@ class JobStore:
     def get_all(self) -> dict:
         return dict(self._cache)
 
+    def list_recent(self, limit: int = 50, offset: int = 0, status: str = None) -> List[dict]:
+        """List recent jobs from DB (not just cache). Returns lightweight summaries."""
+        with self._lock:
+            with self._get_connection() as conn:
+                if status:
+                    cursor = conn.execute(
+                        "SELECT job_id, status, progress, progress_message, language, "
+                        "created_at, updated_at, file_path "
+                        "FROM jobs WHERE status = ? "
+                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                        (status, limit, offset)
+                    )
+                else:
+                    cursor = conn.execute(
+                        "SELECT job_id, status, progress, progress_message, language, "
+                        "created_at, updated_at, file_path "
+                        "FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                        (limit, offset)
+                    )
+                rows = cursor.fetchall()
+                return [
+                    {
+                        "job_id": r[0],
+                        "status": r[1],
+                        "progress": r[2] or 0,
+                        "progress_message": r[3] or "",
+                        "language": r[4],
+                        "created_at": r[5],
+                        "updated_at": r[6],
+                        "file_path": os.path.basename(r[7]) if r[7] else None,
+                    }
+                    for r in rows
+                ]
+
+    def count(self, status: str = None) -> int:
+        """Count jobs, optionally filtered by status."""
+        with self._lock:
+            with self._get_connection() as conn:
+                if status:
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE status = ?", (status,)
+                    )
+                else:
+                    cursor = conn.execute("SELECT COUNT(*) FROM jobs")
+                return cursor.fetchone()[0]
+
     def get_active_count(self) -> int:
         return len([j for j in self._cache.values() if j.status == "processing"])
 

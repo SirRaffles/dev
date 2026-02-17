@@ -1,43 +1,60 @@
 """
 Speaker diarization services.
+
+Uses ModelManager singleton to keep pyannote loaded across jobs,
+avoiding ~30s model reload overhead per transcription.
 """
 
-import os
-import json
+import asyncio
 import logging
-import tempfile
-import multiprocessing
-import time
+import os
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
 
-def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_file: str, hf_token: str):
-    """Subprocess worker for diarization. Runs in separate process to avoid blocking main server."""
-    try:
-        os.environ["HF_TOKEN"] = hf_token
+def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
+    """Run speaker diarization using the in-process model singleton.
 
-        import torch
-        import torch.serialization
-
-        # PyTorch 2.6+ defaults to weights_only=True in torch.load, but
-        # pyannote model checkpoints contain custom classes that aren't in
-        # the safe-globals list. We trust HuggingFace-hosted pyannote models,
-        # so override the default in this isolated subprocess.
-        torch.serialization._default_to_weights_only = lambda pickle_module: False
-
-        from pyannote.audio import Pipeline
-
-        # HF_TOKEN is already set in os.environ (line 19) — pyannote reads it
-        # from there. Passing use_auth_token= causes errors with newer
-        # huggingface_hub which removed that parameter from hf_hub_download().
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
+    The pyannote pipeline is loaded once via ModelManager and reused
+    across jobs, saving ~30s of model loading per transcription.
+    """
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+    if not hf_token:
+        logger.warning(
+            "Diarization skipped: HF_TOKEN environment variable is not set. "
+            "Set HF_TOKEN to your Hugging Face access token to enable speaker diarization."
         )
+        return []
 
-        if torch.backends.mps.is_available():
-            pipeline.to(torch.device("mps"))
+    try:
+        from services.model_manager import get_model_manager, ModelName
+
+        manager = get_model_manager()
+
+        # Load pipeline if not already cached
+        if not manager.is_loaded(ModelName.DIARIZATION):
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're called from a thread (ThreadPoolExecutor), create a new loop
+                _loop = asyncio.new_event_loop()
+                try:
+                    loaded = _loop.run_until_complete(manager.load_diarization())
+                finally:
+                    _loop.close()
+            else:
+                loaded = loop.run_until_complete(manager.load_diarization())
+
+            if not loaded:
+                logger.warning("Diarization model failed to load")
+                return []
+
+        pipeline = manager.get_model(ModelName.DIARIZATION)
+        if pipeline is None:
+            logger.warning("Diarization pipeline not available")
+            return []
+
+        logger.info("Running diarization (in-process singleton)...")
 
         if num_speakers and num_speakers > 0:
             diarization = pipeline(audio_path, num_speakers=num_speakers)
@@ -45,7 +62,6 @@ def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_fil
             diarization = pipeline(audio_path)
 
         speakers = []
-
         if hasattr(diarization, 'speaker_diarization'):
             annotation = diarization.speaker_diarization
             for turn, _, speaker in annotation.itertracks(yield_label=True):
@@ -62,106 +78,24 @@ def _diarization_worker(audio_path: str, num_speakers: Optional[int], output_fil
                     "speaker": str(speaker)
                 })
 
-        with open(output_file, 'w') as f:
-            json.dump({"status": "success", "speakers": speakers}, f)
+        logger.info("Diarization complete: %d speaker segments found", len(speakers))
+        return speakers
 
     except Exception as e:
-        import traceback
+        # Detect common pyannote/HF auth issues
         error_msg = str(e)
-        tb = traceback.format_exc()
-
-        # Detect common pyannote/HF auth issues and provide actionable messages
-        if "401" in error_msg or "Unauthorized" in error_msg or "Invalid credentials" in error_msg:
-            error_msg = (
-                f"Hugging Face authentication failed: {error_msg}. "
-                "Check that your HF_TOKEN is valid and has not expired."
+        if "401" in error_msg or "Unauthorized" in error_msg:
+            logger.warning(
+                "Diarization failed (auth): %s — Check HF_TOKEN is valid.", error_msg
             )
-        elif "403" in error_msg or "gated" in error_msg.lower() or "access" in error_msg.lower():
-            error_msg = (
-                f"Pyannote model license not accepted: {error_msg}. "
-                "You must accept the license agreements at: "
-                "https://huggingface.co/pyannote/speaker-diarization-3.1 and "
-                "https://huggingface.co/pyannote/segmentation-3.0"
+        elif "403" in error_msg or "gated" in error_msg.lower():
+            logger.warning(
+                "Diarization failed (license): %s — Accept license at "
+                "https://huggingface.co/pyannote/speaker-diarization-3.1", error_msg
             )
-
-        with open(output_file, 'w') as f:
-            json.dump({"status": "error", "error": error_msg, "traceback": tb}, f)
-
-
-def run_diarization_subprocess(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
-    """Run speaker diarization in a separate subprocess to prevent blocking."""
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
-
-    if not hf_token:
-        logger.warning(
-            "Diarization skipped: HF_TOKEN environment variable is not set. "
-            "Set HF_TOKEN to your Hugging Face access token to enable speaker diarization."
-        )
-        return []
-
-    _tf = tempfile.NamedTemporaryFile(suffix="_diarization.json", delete=False)
-    output_file = _tf.name
-    _tf.close()
-
-    try:
-        process = multiprocessing.Process(
-            target=_diarization_worker,
-            args=(audio_path, num_speakers, output_file, hf_token)
-        )
-        process.start()
-
-        poll_interval = 5
-        max_wait = 7200
-        elapsed = 0
-
-        while process.is_alive() and elapsed < max_wait:
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-            if elapsed % 60 == 0:
-                logger.info("Diarization in progress... (%ds elapsed)", elapsed)
-
-        if process.is_alive():
-            logger.warning("Diarization timeout after %ds, terminating...", max_wait)
-            process.terminate()
-            process.join(timeout=10)
-            if process.is_alive():
-                process.kill()
-            return []
-
-        process.join(timeout=5)
-
-        if os.path.exists(output_file):
-            with open(output_file, 'r') as f:
-                result = json.load(f)
-
-            if result.get("status") == "success":
-                speakers = result.get("speakers", [])
-                logger.info("Diarization complete: %d speaker segments found", len(speakers))
-                return speakers
-            else:
-                error_msg = result.get('error', 'Unknown error')
-                logger.warning("Diarization skipped: %s", error_msg)
-                if result.get('traceback'):
-                    logger.debug("Diarization traceback:\n%s", result.get('traceback'))
-                return []
         else:
-            logger.error("Diarization subprocess did not produce output")
-            return []
-
-    except Exception as e:
-        logger.exception("Diarization subprocess failed: %s", e)
+            logger.exception("Diarization failed: %s", e)
         return []
-    finally:
-        if os.path.exists(output_file):
-            try:
-                os.remove(output_file)
-            except OSError:
-                pass
-
-
-def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List[dict]:
-    """Run speaker diarization on audio file."""
-    return run_diarization_subprocess(audio_path, num_speakers)
 
 
 def stitch_speaker_turns(segments: List[dict], max_gap_ms: float = 600) -> List[dict]:

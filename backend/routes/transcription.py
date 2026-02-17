@@ -527,6 +527,18 @@ async def get_batch_status(batch_id: str):
     }
 
 
+@router.get("/jobs")
+async def list_jobs(
+    limit: int = Query(50, ge=1, le=200, description="Max jobs to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    status: Optional[str] = Query(None, description="Filter by status: pending, processing, completed, failed"),
+):
+    """List recent transcription jobs with lightweight summaries."""
+    jobs = state.jobs.list_recent(limit=limit, offset=offset, status=status)
+    total = state.jobs.count(status=status)
+    return {"jobs": jobs, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/job/{job_id}")
 async def get_job_status(job_id: str):
     """Get the status and result of a transcription job."""

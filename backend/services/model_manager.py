@@ -270,7 +270,7 @@ class ModelManager:
             return False
 
     async def load_diarization(self) -> bool:
-        """Load pyannote diarization model."""
+        """Load pyannote diarization model (kept in memory across jobs)."""
         if self.is_loaded(ModelName.DIARIZATION):
             return True
 
@@ -280,20 +280,30 @@ class ModelManager:
 
         try:
             import os
-            from pyannote.audio import Pipeline
             import torch
+            import torch.serialization
 
-            hf_token = os.environ.get("HF_TOKEN")
+            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
             if not hf_token:
                 logger.warning("HF_TOKEN not set, diarization may fail")
+                return False
 
-            logger.info("Loading pyannote diarization pipeline")
+            # PyTorch 2.6+ defaults to weights_only=True but pyannote checkpoints
+            # contain custom classes. We trust HuggingFace-hosted pyannote models.
+            torch.serialization._default_to_weights_only = lambda pickle_module: False
 
-            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+            from pyannote.audio import Pipeline
+
+            logger.info("Loading pyannote diarization pipeline (singleton)")
+
+            # Set HF_TOKEN in env — pyannote reads it from there.
+            # Passing use_auth_token= can cause errors with newer huggingface_hub.
+            os.environ["HF_TOKEN"] = hf_token
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token,
             )
+
+            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
             pipeline.to(device)
 
             self._models[ModelName.DIARIZATION] = pipeline
@@ -304,6 +314,7 @@ class ModelManager:
                 "last_used": datetime.now(),
                 "load_count": self._model_status[ModelName.DIARIZATION]["load_count"] + 1,
             })
+            logger.info("Diarization pipeline loaded on %s", device)
             return True
 
         except Exception as e:

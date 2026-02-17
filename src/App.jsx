@@ -8,6 +8,7 @@ import YouTubeInput from './components/YouTubeInput';
 import SettingsPanel from './components/SettingsPanel';
 import ProgressBar from './components/ProgressBar';
 import ExportMenu from './components/ExportMenu';
+import JobHistory from './components/JobHistory';
 
 // Hooks
 import useProcessingState from './hooks/useProcessingState';
@@ -158,6 +159,21 @@ function App() {
     clearAudio();
     resetAll();
     setViewMode(ViewMode.TRANSCRIPT);
+  };
+
+  const loadHistoryJob = async (jobId) => {
+    try {
+      const resp = await fetch(`${API_URL}/job/${jobId}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && data.status === 'completed') {
+        clearSelection();
+        transcription.updateResult(data);
+        setViewMode(ViewMode.TRANSCRIPT);
+      }
+    } catch (err) {
+      console.error('Failed to load job:', err);
+    }
   };
 
   const startProcessing = async () => {
@@ -392,6 +408,11 @@ function App() {
               'Start Transcription'
             )}
           </button>
+
+          {/* Job History */}
+          {!active.isProcessing && !active.result && (
+            <JobHistory onSelectJob={loadHistoryJob} />
+          )}
         </div>
 
         {/* Progress Bar */}
