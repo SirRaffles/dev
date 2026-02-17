@@ -12,13 +12,25 @@ import time
 import logging
 import multiprocessing
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 
-# Configure logging
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Configure logging with rotation
+_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_log_datefmt = "%Y-%m-%d %H:%M:%S"
+_log_file = os.environ.get("LOG_FILE", os.path.expanduser("~/.whisper-backend.log"))
+
+_formatter = logging.Formatter(_log_format, datefmt=_log_datefmt)
+
+# Rotating file handler: 10MB per file, keep 3 backups
+_file_handler = RotatingFileHandler(_log_file, maxBytes=10 * 1024 * 1024, backupCount=3)
+_file_handler.setFormatter(_formatter)
+
+# Console handler (for interactive/development use)
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_formatter)
+
+logging.basicConfig(level=_log_level, handlers=[_file_handler, _console_handler])
 
 from pathlib import Path
 
@@ -173,6 +185,11 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         # but /health will check auth itself to decide response detail level.
         if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
             request.state.authenticated = _check_api_key(request)
+            return await call_next(request)
+        # Exempt localhost requests (local frontend on same machine)
+        client_ip = request.client.host if request.client else ""
+        if client_ip in ("127.0.0.1", "::1"):
+            request.state.authenticated = True
             return await call_next(request)
         if not _check_api_key(request):
             return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})

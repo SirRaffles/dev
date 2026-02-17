@@ -36,6 +36,39 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _validate_file_magic(file_path: str, expected_ext: str) -> bool:
+    """Validate file content matches expected type via magic bytes."""
+    MAGIC_SIGNATURES = {
+        # Audio formats
+        ".wav": [(0, b"RIFF")],
+        ".mp3": [(0, b"\xff\xfb"), (0, b"\xff\xf3"), (0, b"\xff\xf2"), (0, b"ID3")],
+        ".flac": [(0, b"fLaC")],
+        ".ogg": [(0, b"OggS")],
+        ".m4a": [(4, b"ftyp")],
+        ".aac": [(0, b"\xff\xf1"), (0, b"\xff\xf9")],
+        # Video formats
+        ".mp4": [(4, b"ftyp")],
+        ".mkv": [(0, b"\x1a\x45\xdf\xa3")],
+        ".avi": [(0, b"RIFF")],
+        ".webm": [(0, b"\x1a\x45\xdf\xa3")],
+        ".mov": [(4, b"ftyp")],
+    }
+
+    sigs = MAGIC_SIGNATURES.get(expected_ext)
+    if not sigs:
+        return True  # No known signature for this extension
+
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(12)
+        return any(
+            len(header) > offset and header[offset:offset + len(sig)] == sig
+            for offset, sig in sigs
+        )
+    except OSError:
+        return False
+
+
 @router.post("/transcribe/file", dependencies=[Depends(check_rate_limit)])
 async def transcribe_file(
     background_tasks: BackgroundTasks,
@@ -114,6 +147,14 @@ async def transcribe_file(
                         detail=f"File too large. Maximum size is {max_size // (1024 * 1024)}MB."
                     )
                 f.write(chunk)
+
+        # Validate magic bytes match declared file type
+        if not _validate_file_magic(input_path, file_ext):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"File content does not match declared type '{file_ext}'"
+            )
 
         if file_ext in ALLOWED_AUDIO_EXTENSIONS:
             converted_path = os.path.join(temp_dir, "audio.wav")

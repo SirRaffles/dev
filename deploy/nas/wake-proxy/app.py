@@ -17,8 +17,9 @@ from fastapi.responses import JSONResponse, Response
 from wakeonlan import send_magic_packet
 
 # Configuration
-MAC_BACKEND_URL = os.environ.get("MAC_BACKEND_URL", "http://192.168.50.155:8000")
+MAC_BACKEND_URL = os.environ.get("MAC_BACKEND_URL", "http://100.102.54.116:8000")
 MAC_MAC_ADDRESS = os.environ.get("MAC_MAC_ADDRESS", "16:60:3e:7b:01:32")
+MAC_API_KEY = os.environ.get("MAC_API_KEY", "")
 HEALTH_CHECK_INTERVAL = 15  # seconds
 WAKE_TIMEOUT = 180  # 3 minutes max wait for wake
 CONSECUTIVE_FAILURES_TO_SLEEP = 3
@@ -177,8 +178,11 @@ async def proxy_to_backend(request: Request, path: str):
     # Forward headers, removing hop-by-hop headers
     headers = {}
     for key, value in request.headers.items():
-        if key.lower() not in ("host", "transfer-encoding", "connection"):
+        if key.lower() not in ("host", "transfer-encoding", "connection", "authorization"):
             headers[key] = value
+    # Inject backend API key (NAS auth is handled by nginx Basic Auth)
+    if MAC_API_KEY:
+        headers["X-API-Key"] = MAC_API_KEY
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
