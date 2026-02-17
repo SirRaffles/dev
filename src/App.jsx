@@ -12,9 +12,11 @@ import ExportMenu from './components/ExportMenu';
 // Hooks
 import useProcessingState from './hooks/useProcessingState';
 import useAudioPlayback from './hooks/useAudioPlayback';
+import useWakeOnLan from './hooks/useWakeOnLan';
+import useEngineAvailability from './hooks/useEngineAvailability';
 
 // Utils
-import { API_URL, checkWakeStatus } from './utils/api';
+import { API_URL } from './utils/api';
 
 // Components (lazily loaded - only needed when results are shown)
 const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
@@ -64,15 +66,6 @@ function App() {
     outputMode: 'verbatim',
   });
 
-  const [voxtralAvailable, setVoxtralAvailable] = useState(false);
-  const [voxtralLocalAvailable, setVoxtralLocalAvailable] = useState(false);
-  const [backendError, setBackendError] = useState(null);
-  const [fallbackNotice, setFallbackNotice] = useState(null);
-
-  // Wake-on-LAN state (NAS proxy deployment)
-  const [macState, setMacState] = useState(null); // null = direct, 'awake', 'sleeping', 'waking'
-  const [wakeStartTime, setWakeStartTime] = useState(null);
-  const pendingSubmitRef = useRef(false);
   const [viewMode, setViewMode] = useState(ViewMode.TRANSCRIPT);
   const [dismissedError, setDismissedError] = useState(false);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
@@ -82,6 +75,19 @@ function App() {
   const viewTabsRef = useRef(null);
 
   // Custom hooks
+  const {
+    voxtralAvailable, voxtralLocalAvailable, backendError,
+    fallbackNotice, dismissFallbackNotice, refreshEngines,
+  } = useEngineAvailability();
+
+  const { macState, setMacState, wakeStartTime, detectProxy, triggerWake, queueSubmit, hasPendingSubmit } =
+    useWakeOnLan({
+      onAwake: async () => {
+        const fallback = await refreshEngines();
+        if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
+      },
+    });
+
   const { transcription, multiModal, isDocumentMode, sourceType, active, resetAll, updateResult } =
     useProcessingState(file);
   const { audioUrl, currentTime, audioRef, setFileAudio, clearAudio, seekToTime, handleTimeUpdate } =
@@ -106,64 +112,29 @@ function App() {
     tabs[nextIndex].click();
   }, []);
 
-  // Fetch engine availability from backend /health
-  const refreshEngines = useCallback(() => {
-    return fetch(`${API_URL}/health`)
-      .then(res => res.json())
-      .then(data => {
-        setBackendError(null);
-        if (data.voxtral_available) setVoxtralAvailable(true);
-        if (data.engines?.['voxtral-local']?.available) {
-          setVoxtralLocalAvailable(true);
-        } else {
-          setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
-          setFallbackNotice('Voxtral Local unavailable \u2014 using Whisper engine');
-        }
-      })
-      .catch(() => {
-        setBackendError('Cannot connect to transcription backend. Please check that the server is running.');
-        setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
-      });
-  }, []);
-
   // Check engine availability on mount (with wake-proxy awareness)
   useEffect(() => {
-    checkWakeStatus().then(proxyData => {
+    detectProxy().then(async (proxyData) => {
       if (proxyData) {
-        // Behind the wake proxy (NAS deployment)
-        setMacState(proxyData.mac_state);
         if (proxyData.mac_state === 'awake' && proxyData.model_loaded) {
-          refreshEngines();
+          const fallback = await refreshEngines();
+          if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
         } else {
-          // Mac not awake — set fallback settings, no error banner
           setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
         }
       } else {
-        // No proxy — direct connection (Mac local)
-        refreshEngines();
+        const fallback = await refreshEngines();
+        if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
       }
     });
-  }, [refreshEngines]);
+  }, [detectProxy, refreshEngines]);
 
-  // Poll wake status while Mac is waking; auto-submit when awake
+  // Auto-submit when Mac wakes with pending request
   useEffect(() => {
-    if (macState !== 'waking') return;
-    const interval = setInterval(async () => {
-      const status = await checkWakeStatus();
-      if (!status) return;
-      setMacState(status.mac_state);
-      if (status.mac_state === 'awake' && status.model_loaded) {
-        clearInterval(interval);
-        await refreshEngines();
-        // Auto-submit the queued request
-        if (pendingSubmitRef.current) {
-          pendingSubmitRef.current = false;
-          startProcessing();
-        }
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [macState, refreshEngines]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (macState === 'awake' && hasPendingSubmit()) {
+      startProcessing();
+    }
+  }, [macState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handlers
   const handleFileSelect = (selectedFile) => {
@@ -192,16 +163,12 @@ function App() {
   const startProcessing = async () => {
     // Auto-wake: if Mac is sleeping, trigger wake and queue the submit
     if (macState === 'sleeping') {
-      pendingSubmitRef.current = true;
-      setWakeStartTime(Date.now());
-      setMacState('waking');
-      // Fire a request to the proxy to trigger WoL
-      fetch(`${API_URL}/health`).catch(() => {});
+      triggerWake(API_URL);
       return;
     }
     // Don't submit if still waking (will auto-submit when awake)
     if (macState === 'waking') {
-      pendingSubmitRef.current = true;
+      queueSubmit();
       return;
     }
 
@@ -272,7 +239,7 @@ function App() {
             <Info className="w-5 h-5 text-blue-400 flex-shrink-0" aria-hidden="true" />
             <span className="text-blue-300 text-sm flex-1">{fallbackNotice}</span>
             <button
-              onClick={() => setFallbackNotice(null)}
+              onClick={dismissFallbackNotice}
               className="text-blue-400 hover:text-blue-300 transition-colors"
               aria-label="Dismiss notice"
             >

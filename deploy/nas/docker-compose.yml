@@ -18,7 +18,7 @@ services:
       dockerfile: deploy/nas/Dockerfile
       args:
         # Empty = same-origin (nginx proxies API to wake-proxy)
-        - REACT_APP_API_URL=
+        - VITE_API_URL=
     container_name: whisper-transcription
     restart: unless-stopped
     ports:
@@ -29,6 +29,13 @@ services:
       - whisper-proxy
     environment:
       - TZ=Europe/Paris
+    volumes:
+      - ./.htpasswd:/etc/nginx/.htpasswd:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/nginx-health"]
       interval: 30s
@@ -43,6 +50,12 @@ services:
     # Host network required for WoL UDP broadcast packets
     network_mode: "host"
     environment:
-      - MAC_BACKEND_URL=${MAC_BACKEND_URL:-http://192.168.50.155:8000}
+      - MAC_BACKEND_URL=${MAC_BACKEND_URL:-http://100.102.54.116:8000}
       - MAC_MAC_ADDRESS=${MAC_MAC_ADDRESS:-16:60:3e:7b:01:32}
+      - MAC_API_KEY=${MAC_API_KEY:-7yDTlT9CSIuRF9qlLRqphtk3RqSjuOrpUS5ery0wQns}
       - TZ=Europe/Paris
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"

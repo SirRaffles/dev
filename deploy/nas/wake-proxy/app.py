@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
@@ -26,9 +27,6 @@ CONSECUTIVE_FAILURES_TO_SLEEP = 3
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("wake-proxy")
-
-app = FastAPI(title="Whisper Wake Proxy")
-
 
 class MacState:
     """Tracks the Mac's current state."""
@@ -102,13 +100,18 @@ async def health_check_loop():
         await asyncio.sleep(HEALTH_CHECK_INTERVAL)
 
 
-@app.on_event("startup")
-async def startup():
-    # Do an initial health check
+@asynccontextmanager
+async def lifespan(app):
+    # Startup: initial health check and background task
     await check_backend_health()
     logger.info("Initial Mac state: %s (backend_url=%s, mac=%s)", mac_state.state, MAC_BACKEND_URL, MAC_MAC_ADDRESS)
-    # Start background health checker
-    asyncio.create_task(health_check_loop())
+    task = asyncio.create_task(health_check_loop())
+    yield
+    # Shutdown: cancel background task
+    task.cancel()
+
+
+app = FastAPI(title="Whisper Wake Proxy", lifespan=lifespan)
 
 
 @app.get("/api/wake-status")

@@ -17,12 +17,14 @@ RUN npm ci
 # Copy source code
 COPY public ./public
 COPY src ./src
-COPY tailwind.config.js ./
-COPY postcss.config.js ./
+COPY index.html ./
+COPY vite.config.js ./
+COPY tailwind.config.cjs ./
+COPY postcss.config.cjs ./
 
-# Build argument for backend URL
-ARG REACT_APP_API_URL=http://localhost:8000
-ENV REACT_APP_API_URL=$REACT_APP_API_URL
+# Build argument for backend URL (empty = same-origin)
+ARG VITE_API_URL=
+ENV VITE_API_URL=$VITE_API_URL
 
 # Build the app
 RUN npm run build

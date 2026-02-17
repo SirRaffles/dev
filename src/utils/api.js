@@ -1,7 +1,7 @@
 // API configuration
 const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-export const API_URL = process.env.REACT_APP_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
-const API_KEY = process.env.REACT_APP_API_KEY || '';
+export const API_URL = import.meta.env.VITE_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
+const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 // Wake-on-LAN proxy status (NAS deployment only)
 export async function checkWakeStatus() {
