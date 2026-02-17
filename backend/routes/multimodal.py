@@ -3,6 +3,7 @@ Multi-modal processing API routes: PDF, PPTX, video processing.
 """
 
 import io
+import os
 import shutil
 import tempfile
 import logging
@@ -33,6 +34,24 @@ import state
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_max_upload_bytes = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
+
+
+async def _save_upload(file: UploadFile, dest: Path):
+    """Stream uploaded file to disk with size limit."""
+    file_size = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            file_size += len(chunk)
+            if file_size > _max_upload_bytes:
+                f.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Maximum size is {_max_upload_bytes // (1024 * 1024)}MB.",
+                )
+            f.write(chunk)
 
 
 async def _process_multimodal_job(job: MultiModalJob, file_path: Path, processor):
@@ -87,9 +106,7 @@ async def process_multimodal(
     input_path = temp_dir / f"input{file_ext}"
 
     try:
-        contents = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(contents)
+        await _save_upload(file, input_path)
 
         job.source_filename = str(input_path)
 
@@ -149,9 +166,7 @@ async def process_pdf(
     input_path = temp_dir / "input.pdf"
 
     try:
-        contents = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(contents)
+        await _save_upload(file, input_path)
 
         job.source_filename = str(input_path)
 
@@ -202,9 +217,7 @@ async def process_pptx(
     input_path = temp_dir / f"input{ext}"
 
     try:
-        contents = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(contents)
+        await _save_upload(file, input_path)
 
         job.source_filename = str(input_path)
 
@@ -266,9 +279,7 @@ async def process_video_multimodal(
     input_path = temp_dir / f"input{ext}"
 
     try:
-        contents = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(contents)
+        await _save_upload(file, input_path)
 
         job.source_filename = str(input_path)
 
@@ -386,12 +397,14 @@ async def get_visual_element_image(job_id: str, element_id: str):
     if not element.image_path:
         raise HTTPException(status_code=404, detail="Element has no image")
 
-    image_path = Path(element.image_path).resolve()
+    if not job.image_dir:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    if job.image_dir:
-        allowed_dir = Path(job.image_dir).resolve()
-        if not str(image_path).startswith(str(allowed_dir)):
-            raise HTTPException(status_code=403, detail="Access denied")
+    image_path = Path(element.image_path).resolve()
+    allowed_dir = Path(job.image_dir).resolve()
+
+    if not image_path.is_relative_to(allowed_dir):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found")

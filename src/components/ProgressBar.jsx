@@ -11,7 +11,7 @@ function ProgressBar({
   const getMessage = () => {
     if (progressMessage) return progressMessage;
 
-    if (sourceType === 'pdf' || sourceType === 'pptx') {
+    if (sourceType === 'pdf' || sourceType === 'pptx' || sourceType === 'docx') {
       if (progress < 20) return 'Extracting text...';
       if (progress < 40) return 'Processing images...';
       if (progress < 70) return 'Analyzing visual content...';
@@ -42,7 +42,7 @@ function ProgressBar({
         />
       </div>
       <p className="text-sm text-slate-400 mt-2">
-        {sourceType === 'pdf' || sourceType === 'pptx'
+        {sourceType === 'pdf' || sourceType === 'pptx' || sourceType === 'docx'
           ? 'Document processing may take a few moments'
           : 'Quality-focused transcription may take a few minutes'}
       </p>
@@ -50,11 +50,17 @@ function ProgressBar({
       {/* Batch file progress */}
       {batchProgress.length > 1 && (
         <div className="mt-4 space-y-2">
-          <p className="text-xs text-slate-500 uppercase tracking-wider">Individual files:</p>
+          <p className="text-xs text-slate-400 uppercase tracking-wider">Individual files:</p>
           {batchProgress.map((job, idx) => (
             <div key={job.job_id} className="flex items-center gap-2">
               <span className="text-xs text-slate-400 w-6">{idx + 1}.</span>
-              <div className="flex-1 bg-slate-600 rounded-full h-2">
+              <div
+                className="flex-1 bg-slate-600 rounded-full h-2"
+                role="progressbar"
+                aria-valuenow={job.progress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
                 <div
                   className={`h-2 rounded-full transition-all duration-300 ${
                     job.status === 'completed' ? 'bg-green-500' :

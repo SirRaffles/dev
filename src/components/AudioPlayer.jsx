@@ -20,6 +20,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
   className = ''
 }, ref) {
   const audioRef = useRef(null);
+  const containerRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -108,17 +109,26 @@ const AudioPlayer = forwardRef(function AudioPlayer({
     getDuration: () => duration,
   }), [seekToTime, currentTime, duration]);
 
-  const handleSeekClick = useCallback((e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    seekToTime(percentage * duration);
-  }, [duration, seekToTime]);
+  const handleSeekChange = useCallback((e) => {
+    seekToTime(parseFloat(e.target.value));
+  }, [seekToTime]);
+
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      togglePlayPause();
+    }
+  }, [togglePlayPause]);
 
   if (!audioUrl) return null;
 
   return (
-    <div className={`bg-slate-700/50 rounded-xl p-4 ${className}`}>
+    <div
+      className={`bg-slate-700/50 rounded-xl p-4 ${className}`}
+      ref={containerRef}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
       <audio ref={audioRef} src={audioUrl} preload="metadata" />
 
       <div className="flex items-center gap-4 mb-3">
@@ -126,6 +136,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
           onClick={skipBackward}
           className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
           title="Skip back 5 seconds"
+          aria-label="Skip back 5 seconds"
         >
           <SkipBack className="w-5 h-5" />
         </button>
@@ -133,6 +144,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
           onClick={togglePlayPause}
           className="p-3 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
           title={isPlaying ? 'Pause' : 'Play'}
+          aria-label={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
         </button>
@@ -140,6 +152,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({
           onClick={skipForward}
           className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
           title="Skip forward 5 seconds"
+          aria-label="Skip forward 5 seconds"
         >
           <SkipForward className="w-5 h-5" />
         </button>
@@ -150,16 +163,33 @@ const AudioPlayer = forwardRef(function AudioPlayer({
         </div>
       </div>
 
-      {/* Seek bar */}
-      <div
-        className="relative h-2 bg-slate-600 rounded-full overflow-hidden cursor-pointer"
-        onClick={handleSeekClick}
-      >
-        <div
-          className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all"
-          style={{ width: `${(currentTime / duration) * 100 || 0}%` }}
-        />
-      </div>
+      {/* Seek bar - accessible range input with custom styling */}
+      <input
+        type="range"
+        min={0}
+        max={duration || 0}
+        step={0.1}
+        value={currentTime}
+        onChange={handleSeekChange}
+        aria-label="Seek audio position"
+        className="w-full h-2 rounded-full appearance-none cursor-pointer bg-slate-600
+          [&::-webkit-slider-thumb]:appearance-none
+          [&::-webkit-slider-thumb]:w-4
+          [&::-webkit-slider-thumb]:h-4
+          [&::-webkit-slider-thumb]:rounded-full
+          [&::-webkit-slider-thumb]:bg-blue-500
+          [&::-webkit-slider-thumb]:hover:bg-blue-400
+          [&::-webkit-slider-thumb]:shadow-md
+          [&::-moz-range-thumb]:w-4
+          [&::-moz-range-thumb]:h-4
+          [&::-moz-range-thumb]:rounded-full
+          [&::-moz-range-thumb]:bg-blue-500
+          [&::-moz-range-thumb]:border-0
+          [&::-moz-range-thumb]:hover:bg-blue-400
+          [&::-webkit-slider-runnable-track]:rounded-full
+          [&::-moz-range-track]:rounded-full
+          accent-blue-500"
+      />
     </div>
   );
 });

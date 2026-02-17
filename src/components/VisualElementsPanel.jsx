@@ -45,34 +45,9 @@ function VisualElementsPanel({
 }) {
   const [selectedElement, setSelectedElement] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [imageErrors, setImageErrors] = useState(new Set());
   const lightboxRef = useRef(null);
   const previousFocusRef = useRef(null);
-
-  if (visualElements.length === 0) {
-    return (
-      <div className={`bg-slate-900/50 rounded-xl p-6 text-center ${className}`}>
-        <Image className="w-12 h-12 mx-auto mb-3 text-slate-500 opacity-50" />
-        <p className="text-slate-500">No visual elements extracted</p>
-        <p className="text-sm text-slate-600">
-          Charts, diagrams, and images will appear here when detected
-        </p>
-      </div>
-    );
-  }
-
-  const getIcon = (type) => {
-    const Icon = TYPE_ICONS[type] || TYPE_ICONS.default;
-    return Icon;
-  };
-
-  const getColor = (type) => {
-    return TYPE_COLORS[type] || TYPE_COLORS.default;
-  };
-
-  const openLightbox = (index) => {
-    previousFocusRef.current = document.activeElement;
-    setLightboxIndex(index);
-  };
 
   const closeLightbox = useCallback(() => {
     setLightboxIndex(null);
@@ -107,6 +82,26 @@ function VisualElementsPanel({
         case 'ArrowRight':
           navigateLightbox(1);
           break;
+        case 'Tab': {
+          const container = lightboxRef.current;
+          if (!container) break;
+          const focusable = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+          if (focusable.length === 0) break;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === first) {
+              e.preventDefault();
+              last.focus();
+            }
+          } else {
+            if (document.activeElement === last) {
+              e.preventDefault();
+              first.focus();
+            }
+          }
+          break;
+        }
         default:
           break;
       }
@@ -118,6 +113,32 @@ function VisualElementsPanel({
 
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [lightboxIndex, closeLightbox, navigateLightbox]);
+
+  if (visualElements.length === 0) {
+    return (
+      <div className={`bg-slate-900/50 rounded-xl p-6 text-center ${className}`}>
+        <Image className="w-12 h-12 mx-auto mb-3 text-slate-500 opacity-50" />
+        <p className="text-slate-500">No visual elements extracted</p>
+        <p className="text-sm text-slate-600">
+          Charts, diagrams, and images will appear here when detected
+        </p>
+      </div>
+    );
+  }
+
+  const getIcon = (type) => {
+    const Icon = TYPE_ICONS[type] || TYPE_ICONS.default;
+    return Icon;
+  };
+
+  const getColor = (type) => {
+    return TYPE_COLORS[type] || TYPE_COLORS.default;
+  };
+
+  const openLightbox = (index) => {
+    previousFocusRef.current = document.activeElement;
+    setLightboxIndex(index);
+  };
 
   const handleElementClick = (element, index) => {
     setSelectedElement(element);
@@ -131,7 +152,7 @@ function VisualElementsPanel({
   return (
     <div className={className}>
       {/* Element grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" role="list" aria-label="Visual elements">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" role="list" aria-label="Visual elements">
         {visualElements.map((element, index) => {
           const Icon = getIcon(element.type);
           const colorClass = getColor(element.type);
@@ -153,18 +174,18 @@ function VisualElementsPanel({
               {/* Image preview or placeholder */}
               {element.image_path ? (
                 <div className="aspect-video bg-slate-900 flex items-center justify-center">
-                  <img
-                    src={getImageUrl(element.image_path)}
-                    alt={element.description || 'Visual element'}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      e.target.nextSibling.style.display = 'flex';
-                    }}
-                  />
-                  <div className="hidden items-center justify-center text-slate-500">
-                    <Icon className="w-8 h-8" />
-                  </div>
+                  {imageErrors.has(index) ? (
+                    <Icon className="w-8 h-8 text-slate-500" />
+                  ) : (
+                    <img
+                      src={getImageUrl(element.image_path)}
+                      alt={element.description || 'Visual element'}
+                      className="w-full h-full object-cover"
+                      onError={() => {
+                        setImageErrors((prev) => new Set(prev).add(index));
+                      }}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="aspect-video bg-slate-900 flex items-center justify-center">

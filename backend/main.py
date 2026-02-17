@@ -7,6 +7,7 @@ Optimized for Apple Silicon (M3) with GPU acceleration via Metal.
 """
 
 import os
+import hmac
 import time
 import logging
 import multiprocessing
@@ -19,9 +20,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Must be set before any multiprocessing usage
@@ -32,6 +36,7 @@ from services.transcription import get_mlx_model_path
 from routes.transcription import router as transcription_router
 from routes.multimodal import router as multimodal_router
 from routes.models_api import router as models_router
+from routes.refinement import router as refinement_router
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,19 @@ async def lifespan(app: FastAPI):
         logger.warning("Get your token at: https://huggingface.co/settings/tokens")
         logger.warning("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
 
+    # Check for refinement availability
+    if state.refinement_available:
+        logger.info("Transcript refinement: Available (claude CLI found)")
+    else:
+        logger.info("Transcript refinement: Not available (claude CLI not found)")
+
+    # Check for Voxtral Local availability (via mlx-audio)
+    if state._voxtral_local_available:
+        logger.info("Voxtral Local: Available (mlx-audio installed)")
+        logger.info("Note: Voxtral model will be downloaded on first use if not cached")
+    else:
+        logger.info("Voxtral Local: Not available (install mlx-audio for local Voxtral transcription)")
+
     # Check for Voxtral API availability
     mistral_api_key = os.environ.get("MISTRAL_API_KEY")
     if mistral_api_key:
@@ -116,32 +134,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Security headers middleware
+_enforce_https = os.environ.get("ENFORCE_HTTPS", "").lower() == "true"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if _enforce_https:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # API key authentication middleware
 _api_key = os.environ.get("API_KEY")
 
 
+def _check_api_key(request: Request) -> bool:
+    """Check if the request carries a valid API key (timing-safe)."""
+    key = request.headers.get("X-API-Key") or ""
+    if not _api_key:
+        return True
+    return hmac.compare_digest(key, _api_key)
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if not _api_key:
-            return await call_next(request)
-        if request.url.path in ("/health", "/docs", "/openapi.json"):
-            return await call_next(request)
         if request.method == "OPTIONS":
             return await call_next(request)
-        key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-        if key != _api_key:
+        # Allow /health, /docs, /openapi.json through without blocking,
+        # but /health will check auth itself to decide response detail level.
+        if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
+            request.state.authenticated = _check_api_key(request)
+            return await call_next(request)
+        if not _check_api_key(request):
             return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+        request.state.authenticated = True
         return await call_next(request)
 
 
+app.add_middleware(APIKeyMiddleware)
 if _api_key:
-    app.add_middleware(APIKeyMiddleware)
     logger.info("API key authentication enabled")
+else:
+    logger.warning("WARNING: API_KEY not set — all endpoints are unauthenticated. Set API_KEY env var for production use.")
 
 # Include route modules
 app.include_router(models_router)
 app.include_router(transcription_router)
 app.include_router(multimodal_router)
+app.include_router(refinement_router)
+
+
+# Serve frontend build from static/ when running in single-container mode.
+# Must be mounted AFTER all API routers so /api paths take priority.
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static-frontend")
 
 
 if __name__ == "__main__":

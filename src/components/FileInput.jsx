@@ -145,6 +145,7 @@ function FileInput({
               onClear?.();
             }}
             className="ml-2 p-1 rounded-full hover:bg-slate-600"
+            aria-label="Remove selected file"
           >
             <X className="w-4 h-4" />
           </button>
@@ -173,6 +174,7 @@ function FileInput({
                 <button
                   onClick={() => handleRemoveFile(idx)}
                   className="ml-2 p-1 rounded hover:bg-slate-600"
+                  aria-label={"Remove " + f.name}
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -186,7 +188,7 @@ function FileInput({
           <p className="text-lg mb-2">
             Drag & drop your file here
           </p>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-400">
             {getSupportedFormatsText()}
           </p>
         </>

@@ -48,6 +48,23 @@ VOXTRAL_MODELS = {
     },
 }
 
+# Voxtral local models (via mlx-audio on Apple Silicon)
+VOXTRAL_LOCAL_MODELS = {
+    "voxtral-mini-3b": {
+        "path": "mlx-community/Voxtral-Mini-3B-2507-bf16",
+        "description": "Best accuracy (~4% WER), 13 languages (~9.4GB)",
+    },
+    "voxtral-mini-3b-4bit": {
+        "path": "mzbac/voxtral-mini-3b-4bit-mixed",
+        "description": "Best accuracy (~4% WER), lower memory (~3.2GB)",
+    },
+}
+
+# Voxtral local supported languages (13 languages)
+VOXTRAL_LOCAL_LANGUAGES = {
+    "auto", "en", "fr", "de", "es", "it", "pt", "nl", "ru", "zh", "ja", "ko", "ar", "hi",
+}
+
 # Allowed file extensions for transcription upload
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".webm", ".mov"}

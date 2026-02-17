@@ -35,11 +35,13 @@ from api_client import (
     TranscriptionError,
 )
 from config import (
+    ENABLE_REFINEMENT,
     ICLOUD_PATH,
     LOG_BACKUP_COUNT,
     LOG_FILE,
     LOG_LEVEL,
     LOG_MAX_BYTES,
+    REFINEMENT_TIMEOUT,
     SYNC_CHECK_INTERVAL,
     SYNC_STABILITY_DELAY,
     SYNC_TIMEOUT,
@@ -231,11 +233,13 @@ def process_file(
     if transcript_path.exists():
         logger.info(f"Transcript already exists: {transcript_path.name}")
         state.mark_completed(file_path, transcript_path)
+        state.remove_from_retry_queue(file_path)
         return True
 
     # Skip if already processed
     if state.is_processed(file_path):
         logger.debug(f"Already processed: {filename}")
+        state.remove_from_retry_queue(file_path)
         return True
 
     # Skip if currently processing
@@ -283,6 +287,31 @@ def process_file(
         # Save transcript next to audio file
         transcript_path.write_text(transcript_text, encoding="utf-8")
         logger.info(f"Saved transcript: {transcript_path.name}")
+
+        # Auto-refine if enabled (non-blocking — failures never prevent base pipeline)
+        if ENABLE_REFINEMENT:
+            try:
+                refined_path = file_path.with_suffix(".refined.txt")
+                logger.info(f"Starting refinement for: {filename}")
+
+                # Submit refinement
+                if client.submit_refinement(job_id):
+                    # Poll until complete
+                    refinement_result = client.poll_refinement(job_id)
+                    if refinement_result:
+                        # Download refined text
+                        refined_text = client.get_refined_transcript_text(job_id)
+                        if refined_text:
+                            refined_path.write_text(refined_text, encoding="utf-8")
+                            logger.info(f"Saved refined transcript: {refined_path.name}")
+                        else:
+                            logger.warning(f"Refinement completed but could not download text for: {filename}")
+                    else:
+                        logger.warning(f"Refinement did not complete for: {filename}")
+                else:
+                    logger.info(f"Refinement not available, skipping for: {filename}")
+            except Exception as e:
+                logger.warning(f"Refinement failed for {filename} (non-blocking): {e}")
 
         # Update state
         state.mark_completed(file_path, transcript_path)
@@ -407,12 +436,17 @@ def process_queue(
         except Empty:
             # Check for pending retries only if backend is available
             if backend_available:
-                for retry in state.get_pending_retries():
+                retries = state.get_pending_retries()
+                for retry in retries:
+                    if shutdown_event.is_set():
+                        break
                     file_path = Path(retry["file_path"])
-                    if file_path.exists():
-                        logger.info(f"Retrying: {file_path.name} (attempt {retry['attempt']})")
-                        process_file(file_path, client, state, retry["attempt"])
-                    else:
+                    if not file_path.exists():
+                        state.remove_from_retry_queue(file_path)
+                        continue
+                    logger.info(f"Retrying: {file_path.name} (attempt {retry['attempt']})")
+                    success = process_file(file_path, client, state, retry["attempt"])
+                    if success:
                         state.remove_from_retry_queue(file_path)
 
             processed_this_cycle.clear()

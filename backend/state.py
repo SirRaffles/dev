@@ -9,7 +9,7 @@ import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
-from job_models import JobStore
+from job_models import JobStore, RefinementStore
 
 
 class BoundedDict:
@@ -65,8 +65,10 @@ class BoundedDict:
             return len(self._data)
 
 
-# Thread pool for MLX-Whisper transcription tasks
-# IMPORTANT: max_workers=1 to prevent Metal GPU race conditions on macOS 26.x
+# Thread pool for transcription tasks
+# max_workers=1: serialize all transcription jobs to prevent Metal GPU OOM.
+# Diarization (pyannote) + transcription (Whisper/Voxtral) together use most
+# of the 24GB unified memory on M3. Concurrent jobs cause crashes.
 transcription_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
 
 # Global model state
@@ -77,6 +79,18 @@ diarization_pipeline = None
 # Voxtral cloud transcription state
 _voxtral_available = False
 _voxtral_service = None
+
+# Voxtral local transcription state (via mlx-audio)
+_voxtral_local_available = False
+_voxtral_local_model = None
+_voxtral_local_model_name = None
+
+# Check if mlx-audio is available for local Voxtral
+try:
+    from mlx_audio.stt.utils import load as _mlx_audio_load
+    _voxtral_local_available = True
+except ImportError:
+    pass
 
 # Parakeet state
 _parakeet_available = False
@@ -89,6 +103,20 @@ try:
         _parakeet_available = True
 except ImportError:
     pass
+
+# Refinement state
+refinement_available = False
+refinement_service = None
+refinement_store = None
+
+# Check if claude CLI is available for refinement
+import shutil as _shutil
+_claude_path = _shutil.which("claude")
+if _claude_path:
+    from services.refinement import RefinementService
+    refinement_service = RefinementService(_claude_path)
+    refinement_store = RefinementStore()
+    refinement_available = True
 
 # Application startup time for uptime tracking
 startup_time = None

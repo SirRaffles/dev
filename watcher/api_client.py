@@ -17,6 +17,7 @@ from config import (
     BACKEND_URL,
     MAX_POLL_TIME,
     POLL_INTERVAL,
+    REFINEMENT_TIMEOUT,
     TRANSCRIPTION_SETTINGS,
 )
 
@@ -280,6 +281,85 @@ class TranscriptionClient:
         except ConnectionError as e:
             self.circuit_breaker.record_failure()
             raise BackendUnavailableError(f"Connection error: {e}")
+
+    def submit_refinement(self, job_id: str) -> bool:
+        """
+        Submit a completed job for transcript refinement.
+
+        Returns True if refinement was started, False otherwise.
+        """
+        try:
+            response = self.session.post(
+                f"{self.base_url}/refine/job/{job_id}",
+                timeout=API_TIMEOUT,
+            )
+            if response.status_code == 503:
+                logger.info("Refinement not available on backend")
+                return False
+            response.raise_for_status()
+            data = response.json()
+            logger.info("Refinement started for job %s: %s", job_id, data.get("message", ""))
+            return True
+        except Exception as e:
+            logger.warning("Failed to submit refinement for job %s: %s", job_id, e)
+            return False
+
+    def poll_refinement(self, job_id: str) -> Optional[dict]:
+        """
+        Poll refinement status until complete or timeout.
+
+        Returns refinement result dict, or None on failure/timeout.
+        """
+        start_time = time.time()
+        poll_interval = 5
+
+        while time.time() - start_time < REFINEMENT_TIMEOUT:
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/refine/job/{job_id}",
+                    timeout=API_TIMEOUT,
+                )
+                if response.status_code == 404:
+                    logger.warning("Refinement not found for job %s", job_id)
+                    return None
+                response.raise_for_status()
+                data = response.json()
+                status = data.get("status", "")
+
+                if status == "completed":
+                    logger.info("Refinement completed for job %s", job_id)
+                    return data
+                elif status == "failed":
+                    logger.warning("Refinement failed for job %s: %s", job_id, data.get("error", ""))
+                    return None
+
+                time.sleep(poll_interval)
+            except Exception as e:
+                logger.warning("Error polling refinement for job %s: %s", job_id, e)
+                time.sleep(poll_interval)
+
+        logger.warning("Refinement timeout for job %s after %ds", job_id, REFINEMENT_TIMEOUT)
+        return None
+
+    def get_refined_transcript_text(self, job_id: str) -> Optional[str]:
+        """
+        Download the refined transcript as plain text.
+
+        Returns the refined transcript text, or None on failure.
+        """
+        try:
+            response = self.session.get(
+                f"{self.base_url}/refine/job/{job_id}/export",
+                params={"format": "txt"},
+                timeout=API_TIMEOUT,
+            )
+            if response.status_code != 200:
+                logger.warning("Failed to get refined transcript for job %s: %s", job_id, response.status_code)
+                return None
+            return response.text
+        except Exception as e:
+            logger.warning("Error getting refined transcript for job %s: %s", job_id, e)
+            return None
 
     def transcribe_file(
         self,

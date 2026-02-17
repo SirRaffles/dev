@@ -3,23 +3,27 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.whisper.jpr-watcher</string>
+    <string>com.whisper.frontend</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/davidmarchesseau/Development/whisper-transcription-app/scripts/start-watcher-with-health-check.sh</string>
-        <string>--scan-existing</string>
+        <string>/opt/homebrew/opt/node@18/bin/npx</string>
+        <string>serve</string>
+        <string>-s</string>
+        <string>build</string>
+        <string>-l</string>
+        <string>3000</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/davidmarchesseau/Development/whisper-transcription-app/watcher</string>
+    <string>/Users/davidmarchesseau/Development/whisper-transcription-app</string>
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HF_TOKEN</key>
-        <string>__HF_TOKEN_PLACEHOLDER__</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/node@18/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/davidmarchesseau</string>
     </dict>
 
     <!-- Start automatically on login -->
@@ -36,17 +40,12 @@
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Users/davidmarchesseau/.jpr_watcher.log</string>
+    <string>/Users/davidmarchesseau/.whisper-frontend.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/davidmarchesseau/.jpr_watcher.error.log</string>
+    <string>/Users/davidmarchesseau/.whisper-frontend.error.log</string>
 
-    <!-- Run as background process -->
     <key>ProcessType</key>
     <string>Background</string>
-
-    <!-- Nice priority (lower CPU priority) -->
-    <key>Nice</key>
-    <integer>5</integer>
 </dict>
 </plist>

@@ -183,10 +183,18 @@ class StateManager:
 
         self.state["processed_files"][key] = entry
 
-        # Add to retry queue if not max attempts
+        # Add to retry queue if not max attempts, otherwise permanently fail
         from config import RETRY_MAX_ATTEMPTS
         if attempt < RETRY_MAX_ATTEMPTS:
             self._add_to_retry_queue(file_path, attempt + 1)
+        else:
+            # Max retries exhausted — remove from retry queue and mark permanently failed
+            self.state["pending_retries"] = [
+                r for r in self.state["pending_retries"]
+                if r["file_path"] != key
+            ]
+            entry["status"] = "permanently_failed"
+            logger.warning(f"Max retries exhausted for {file_path.name}, marking permanently failed")
 
         self._save_state()
         logger.warning(f"Marked as failed: {file_path.name} - {error}")

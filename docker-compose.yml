@@ -1,30 +1,27 @@
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+  transcription-app:
+    build: .
     ports:
       - "8000:8000"
     environment:
-      - WHISPER_MODEL_SIZE=large-v3
-      - HF_TOKEN=${HF_TOKEN}
+      # Optional: protect all API endpoints with a shared secret
+      - API_KEY=${API_KEY:-}
+      # HuggingFace token — required for speaker diarization (pyannote)
+      # Get yours at https://huggingface.co/settings/tokens
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Mistral API key — enables Voxtral cloud transcription
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      # Comma-separated allowed CORS origins (default: localhost dev ports)
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8000}
+      # Set to "true" to add HSTS header (use behind a TLS-terminating proxy)
+      - ENFORCE_HTTPS=${ENFORCE_HTTPS:-false}
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-large-v3}
     volumes:
-      - whisper-cache:/app/.cache/huggingface
+      # Persist downloaded models across container restarts
+      - model-cache:/app/.cache/huggingface
       - torch-cache:/app/.cache/torch
     restart: unless-stopped
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-    environment:
-      - REACT_APP_API_URL=http://localhost:8000
-    restart: unless-stopped
-
 volumes:
-  whisper-cache:
+  model-cache:
   torch-cache:

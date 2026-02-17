@@ -1,13 +1,14 @@
 #
-# Whisper Transcription Frontend - NAS Deployment
+# Whisper Transcription App - NAS Deployment with Wake-on-LAN
 #
-# Deploy on your Ugreen DXP 4800 Plus NAS
-# The backend runs on your MacBook M3 for optimal performance
+# Deploy on your Ugreen DXP 4800 Plus NAS.
+# The backend runs on your MacBook M3 for GPU-accelerated transcription.
+# The wake proxy auto-wakes the Mac via WoL when it's sleeping.
 #
 # Usage:
 #   1. Copy this folder to your NAS
-#   2. Set BACKEND_URL to your MacBook's IP
-#   3. Run: docker-compose up -d
+#   2. Run: ./setup.sh <macbook-ip> [macbook-mac-address]
+#   3. Or manually: create .env and run docker-compose up -d
 #
 
 services:
@@ -16,28 +17,32 @@ services:
       context: ../..
       dockerfile: deploy/nas/Dockerfile
       args:
-        # Set this to your MacBook's IP address
-        - REACT_APP_API_URL=${BACKEND_URL:-http://localhost:8000}
+        # Empty = same-origin (nginx proxies API to wake-proxy)
+        - REACT_APP_API_URL=
     container_name: whisper-transcription
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "8150:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - whisper-proxy
     environment:
       - TZ=Europe/Paris
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/nginx-health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
 
-# Optional: Add Watchtower for automatic updates
-#  watchtower:
-#    image: containrrr/watchtower
-#    container_name: watchtower
-#    restart: unless-stopped
-#    volumes:
-#      - /var/run/docker.sock:/var/run/docker.sock
-#    command: --interval 86400 whisper-transcription
+  whisper-proxy:
+    build: ./wake-proxy
+    container_name: whisper-proxy
+    restart: unless-stopped
+    # Host network required for WoL UDP broadcast packets
+    network_mode: "host"
+    environment:
+      - MAC_BACKEND_URL=${MAC_BACKEND_URL:-http://192.168.50.155:8000}
+      - MAC_MAC_ADDRESS=${MAC_MAC_ADDRESS:-16:60:3e:7b:01:32}
+      - TZ=Europe/Paris

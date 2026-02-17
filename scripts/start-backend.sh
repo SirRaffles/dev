@@ -11,7 +11,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKEND_DIR="$PROJECT_DIR/backend"
-VENV_DIR="$BACKEND_DIR/.venv"
+VENV_DIR="$BACKEND_DIR/venv"
 
 # Colors for output
 RED='\033[0;31m'
@@ -95,4 +95,4 @@ echo ""
 
 # Start the server
 cd "$BACKEND_DIR"
-exec uvicorn main:app --host "${UVICORN_HOST:-127.0.0.1}" --port 8000
+exec uvicorn main:app --host "${UVICORN_HOST:-0.0.0.0}" --port 8000

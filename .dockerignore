@@ -1,26 +1,32 @@
-.git
-.gitignore
 node_modules
 build
+.git
+__pycache__
+*.pyc
 .env
-.env.*
-*.md
+venv
+.venv
+.DS_Store
+
+# Editor / IDE
 .vscode
 .idea
 
-# Python
-backend/.venv
+# Backend virtual envs (inside backend/)
 backend/venv
+backend/.venv
 backend/__pycache__
 backend/**/__pycache__
-backend/*.pyc
 backend/uv.lock
 
-# macOS
-.DS_Store
-**/.DS_Store
-
-# Watcher (not needed in containers)
+# Not needed in container
 watcher/
-deploy/
 scripts/
+
+# Exclude most of deploy/ but keep nginx.conf for NAS build
+deploy/launchd/
+deploy/nas/wake-proxy/
+deploy/nas/setup.sh
+deploy/nas/docker-compose.yml
+deploy/nas/Dockerfile
+deploy/nas/nginx-whisper.conf

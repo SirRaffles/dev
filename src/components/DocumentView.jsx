@@ -82,7 +82,7 @@ function DocumentView({
   // If we have raw markdown but no sections, render the markdown
   if (documentMarkdown && contentSections.length === 0) {
     return (
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
         <div className="prose prose-invert prose-sm max-w-none">
           <pre className="whitespace-pre-wrap text-slate-300 font-sans text-sm leading-relaxed">
             {documentMarkdown}
@@ -125,7 +125,7 @@ function DocumentView({
       </div>
 
       {/* Main content */}
-      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+      <div className="bg-slate-900/50 rounded-xl p-4 max-h-[60vh] min-h-[16rem] overflow-y-auto">
         {Object.entries(groupedSections).length > 0 ? (
           Object.entries(groupedSections).map(([groupName, sections], groupIndex) => (
             <div key={groupIndex} className="mb-6">
