@@ -3,8 +3,85 @@ const isLocalDev = window.location.hostname === 'localhost' || window.location.h
 export const API_URL = import.meta.env.VITE_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
-// Wake-on-LAN proxy status (NAS deployment only)
-export async function checkWakeStatus() {
+// --- Interfaces ---
+
+export interface WakeStatus {
+  mac_state: string;
+  model_loaded: boolean;
+}
+
+export interface HealthResponse {
+  status: string;
+  voxtral_available?: boolean;
+  engines?: Record<string, { available: boolean }>;
+}
+
+export interface JobStatus {
+  job_id: string;
+  status: string;
+  progress?: number;
+  result?: {
+    text?: string;
+    segments?: Segment[];
+    language?: string;
+  };
+  error?: string;
+  filename?: string;
+  created_at?: string;
+}
+
+export interface Segment {
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+}
+
+export interface BatchStatus {
+  batch_id: string;
+  status: string;
+  jobs: JobStatus[];
+  total: number;
+  completed: number;
+  failed: number;
+}
+
+export interface TranscriptionOptions {
+  language?: string;
+  enableDiarization?: boolean;
+  enableNoiseReduction?: boolean;
+  modelSize?: string;
+  wordTimestamps?: boolean;
+  translateToEnglish?: boolean;
+  speedPriority?: boolean;
+  engine?: string;
+  twoPass?: boolean;
+  outputMode?: string;
+  numSpeakers?: number;
+  contextTerms?: string;
+}
+
+export interface EngineInfo {
+  label: string;
+  description: string;
+  type: string;
+  cost: string | null;
+}
+
+export interface ModelInfo {
+  label: string;
+  description: string;
+  languageRestriction?: string;
+}
+
+export interface ExportFormatInfo {
+  label: string;
+  ext: string;
+}
+
+// --- Wake-on-LAN proxy status (NAS deployment only) ---
+
+export async function checkWakeStatus(): Promise<WakeStatus | null> {
   try {
     const response = await fetch(`${API_URL}/api/wake-status`, { headers: authHeaders() });
     if (!response.ok) return null;
@@ -15,14 +92,14 @@ export async function checkWakeStatus() {
 }
 
 // Helper to build headers with optional API key
-function authHeaders(extra = {}) {
-  const headers = { ...extra };
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
   if (API_KEY) headers['X-API-Key'] = API_KEY;
   return headers;
 }
 
 // Supported languages
-export const LANGUAGES = {
+export const LANGUAGES: Record<string, string> = {
   auto: 'Auto-detect',
   en: 'English',
   fr: 'French (Français)',
@@ -41,7 +118,7 @@ export const LANGUAGES = {
 };
 
 // Transcription engines
-export const ENGINES = {
+export const ENGINES: Record<string, EngineInfo> = {
   whisper: {
     label: 'Whisper (Local)',
     description: 'Free, on-device, GPU-accelerated via Metal',
@@ -63,7 +140,7 @@ export const ENGINES = {
 };
 
 // Available model sizes (matching backend MLX_MODELS)
-export const MODEL_SIZES = {
+export const MODEL_SIZES: Record<string, ModelInfo> = {
   'tiny': { label: 'Tiny', description: 'Fastest (~1min audio in ~10s)' },
   'base': { label: 'Base', description: 'Fast, good for real-time' },
   'small': { label: 'Small', description: 'Balanced speed/quality' },
@@ -75,18 +152,18 @@ export const MODEL_SIZES = {
 };
 
 // Voxtral cloud models
-export const VOXTRAL_MODELS = {
+export const VOXTRAL_MODELS: Record<string, ModelInfo> = {
   'voxtral-mini': { label: 'Voxtral Mini', description: 'Best accuracy, built-in diarization ($0.003/min)' },
 };
 
 // Voxtral local models (via mlx-audio on Apple Silicon)
-export const VOXTRAL_LOCAL_MODELS = {
+export const VOXTRAL_LOCAL_MODELS: Record<string, ModelInfo> = {
   'voxtral-mini-3b': { label: 'Voxtral Mini 3B', description: 'Best accuracy (~4% WER), 13 languages (~9.4GB)' },
   'voxtral-mini-3b-4bit': { label: 'Voxtral Mini 3B (4-bit)', description: 'Best accuracy (~4% WER), lower memory (~3.2GB)' },
 };
 
 // Export formats
-export const EXPORT_FORMATS = {
+export const EXPORT_FORMATS: Record<string, ExportFormatInfo> = {
   txt: { label: 'Plain Text', ext: '.txt' },
   md: { label: 'Markdown', ext: '.md' },
   srt: { label: 'SRT Subtitles', ext: '.srt' },
@@ -101,8 +178,8 @@ export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'];
 export const VIDEO_EXTENSIONS = ['mp4', 'mkv', 'avi', 'webm', 'mov'];
 export const DOCUMENT_EXTENSIONS = ['pdf', 'pptx', 'ppt', 'docx'];
 
-export function getFileType(filename) {
-  const ext = filename.split('.').pop().toLowerCase();
+export function getFileType(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
 
   if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
   if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
@@ -111,8 +188,8 @@ export function getFileType(filename) {
   return 'unknown';
 }
 
-export function getSourceType(filename) {
-  const ext = filename.split('.').pop().toLowerCase();
+export function getSourceType(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
 
   if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
   if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
@@ -123,17 +200,17 @@ export function getSourceType(filename) {
   return 'unknown';
 }
 
-export function isDocumentFile(filename) {
+export function isDocumentFile(filename: string): boolean {
   return getFileType(filename) === 'document';
 }
 
-export function isMediaFile(filename) {
+export function isMediaFile(filename: string): boolean {
   const type = getFileType(filename);
   return type === 'audio' || type === 'video';
 }
 
 // API helper functions
-export async function fetchJobStatus(jobId, isMultiModal = false) {
+export async function fetchJobStatus(jobId: string, isMultiModal = false): Promise<JobStatus> {
   const endpoint = isMultiModal
     ? `${API_URL}/process/job/${jobId}`
     : `${API_URL}/job/${jobId}`;
@@ -145,25 +222,25 @@ export async function fetchJobStatus(jobId, isMultiModal = false) {
   return response.json();
 }
 
-export async function submitTranscription(file, options = {}) {
+export async function submitTranscription(file: File, options: TranscriptionOptions = {}): Promise<{ job_id: string }> {
   const formData = new FormData();
   formData.append('file', file);
 
   const params = new URLSearchParams({
     language: options.language || 'auto',
-    enable_diarization: options.enableDiarization ?? true,
-    enable_noise_reduction: options.enableNoiseReduction ?? false,
+    enable_diarization: String(options.enableDiarization ?? true),
+    enable_noise_reduction: String(options.enableNoiseReduction ?? false),
     model_size: options.modelSize || 'voxtral-mini-3b',
-    word_timestamps: options.wordTimestamps ?? false,
-    translate_to_english: options.translateToEnglish ?? false,
-    speed_priority: options.speedPriority ?? false,
+    word_timestamps: String(options.wordTimestamps ?? false),
+    translate_to_english: String(options.translateToEnglish ?? false),
+    speed_priority: String(options.speedPriority ?? false),
     engine: options.engine || 'voxtral-local',
-    two_pass: options.twoPass ?? false,
+    two_pass: String(options.twoPass ?? false),
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
-    params.append('num_speakers', options.numSpeakers);
+    params.append('num_speakers', String(options.numSpeakers));
   }
 
   if (options.contextTerms) {
@@ -184,7 +261,7 @@ export async function submitTranscription(file, options = {}) {
   return response.json();
 }
 
-export async function submitMultiModalProcessing(file, options = {}) {
+export async function submitMultiModalProcessing(file: File, options: TranscriptionOptions = {}): Promise<{ job_id: string }> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -202,19 +279,19 @@ export async function submitMultiModalProcessing(file, options = {}) {
   return response.json();
 }
 
-export async function submitYouTubeTranscription(url, options = {}) {
+export async function submitYouTubeTranscription(url: string, options: TranscriptionOptions = {}): Promise<{ job_id: string }> {
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
     model_size: options.modelSize || 'voxtral-mini-3b',
-    word_timestamps: options.wordTimestamps ?? false,
-    speed_priority: options.speedPriority ?? false,
+    word_timestamps: String(options.wordTimestamps ?? false),
+    speed_priority: String(options.speedPriority ?? false),
     engine: options.engine || 'voxtral-local',
-    two_pass: options.twoPass ?? false,
+    two_pass: String(options.twoPass ?? false),
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
-    params.append('num_speakers', options.numSpeakers);
+    params.append('num_speakers', String(options.numSpeakers));
   }
 
   if (options.contextTerms) {
@@ -242,7 +319,7 @@ export async function submitYouTubeTranscription(url, options = {}) {
   return response.json();
 }
 
-export async function exportTranscript(jobId, format, isMultiModal = false) {
+export async function exportTranscript(jobId: string, format: string, isMultiModal = false): Promise<Blob> {
   const endpoint = isMultiModal
     ? `${API_URL}/process/job/${jobId}/export?format=${format}`
     : `${API_URL}/job/${jobId}/export?format=${format}`;
@@ -256,7 +333,7 @@ export async function exportTranscript(jobId, format, isMultiModal = false) {
   return response.blob();
 }
 
-export async function updateSegments(jobId, segments) {
+export async function updateSegments(jobId: string, segments: Segment[]): Promise<{ status: string }> {
   const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -270,7 +347,7 @@ export async function updateSegments(jobId, segments) {
   return response.json();
 }
 
-export async function updateSpeakers(jobId, speakerMapping) {
+export async function updateSpeakers(jobId: string, speakerMapping: Record<string, string>): Promise<{ status: string }> {
   const response = await fetch(`${API_URL}/job/${jobId}/speakers`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -284,7 +361,7 @@ export async function updateSpeakers(jobId, speakerMapping) {
   return response.json();
 }
 
-export async function fetchBatchStatus(batchId) {
+export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
   const response = await fetch(`${API_URL}/batch/${batchId}`, { headers: authHeaders() });
 
   if (!response.ok) {
@@ -294,24 +371,24 @@ export async function fetchBatchStatus(batchId) {
   return response.json();
 }
 
-export async function submitBatchTranscription(files, options = {}) {
+export async function submitBatchTranscription(files: File[], options: TranscriptionOptions = {}): Promise<{ batch_id: string }> {
   const formData = new FormData();
   files.forEach(f => formData.append('files', f));
 
   const params = new URLSearchParams({
     language: options.language || 'auto',
-    enable_diarization: options.enableDiarization ?? true,
+    enable_diarization: String(options.enableDiarization ?? true),
     model_size: options.modelSize || 'voxtral-mini-3b',
-    word_timestamps: options.wordTimestamps ?? false,
-    translate_to_english: options.translateToEnglish ?? false,
-    speed_priority: options.speedPriority ?? false,
+    word_timestamps: String(options.wordTimestamps ?? false),
+    translate_to_english: String(options.translateToEnglish ?? false),
+    speed_priority: String(options.speedPriority ?? false),
     engine: options.engine || 'voxtral-local',
-    two_pass: options.twoPass ?? false,
+    two_pass: String(options.twoPass ?? false),
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
-    params.append('num_speakers', options.numSpeakers);
+    params.append('num_speakers', String(options.numSpeakers));
   }
 
   if (options.contextTerms) {

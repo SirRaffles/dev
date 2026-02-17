@@ -1,21 +1,36 @@
 import { useState, useCallback } from 'react';
 import { API_URL } from '../utils/api';
+import type { HealthResponse } from '../utils/api';
+
+interface FallbackSettings {
+  engine: string;
+  modelSize: string;
+}
+
+interface UseEngineAvailabilityReturn {
+  voxtralAvailable: boolean;
+  voxtralLocalAvailable: boolean;
+  backendError: string | null;
+  fallbackNotice: string | null;
+  dismissFallbackNotice: () => void;
+  refreshEngines: () => Promise<FallbackSettings | null>;
+}
 
 /**
  * Fetches and tracks engine availability from the backend /health endpoint.
  * Returns engine flags and a fallback notice when Voxtral Local is unavailable.
  */
-export default function useEngineAvailability() {
+export default function useEngineAvailability(): UseEngineAvailabilityReturn {
   const [voxtralAvailable, setVoxtralAvailable] = useState(false);
   const [voxtralLocalAvailable, setVoxtralLocalAvailable] = useState(false);
-  const [backendError, setBackendError] = useState(null);
-  const [fallbackNotice, setFallbackNotice] = useState(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
 
   // Returns settings overrides if fallback is needed, or null if engines are fine
-  const refreshEngines = useCallback(async () => {
+  const refreshEngines = useCallback(async (): Promise<FallbackSettings | null> => {
     try {
       const res = await fetch(`${API_URL}/health`);
-      const data = await res.json();
+      const data: HealthResponse = await res.json();
       setBackendError(null);
       if (data.voxtral_available) setVoxtralAvailable(true);
       if (data.engines?.['voxtral-local']?.available) {

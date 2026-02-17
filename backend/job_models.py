@@ -123,7 +123,7 @@ class JobStore:
             file_path,
         )
 
-    def prune_completed(self, max_age_hours: int = 24):
+    def prune_completed(self, max_age_hours: int = 720):
         """Remove completed/failed jobs older than max_age_hours from DB and cache."""
         with self._lock:
             with self._get_connection() as conn:

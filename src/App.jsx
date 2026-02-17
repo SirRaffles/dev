@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
-import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, Info, RefreshCw, Moon } from 'lucide-react';
+import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, Info, RefreshCw, Moon, Sun } from 'lucide-react';
 
 // Components (eagerly loaded - needed immediately)
 import Header from './components/Header';
@@ -15,6 +15,7 @@ import useProcessingState from './hooks/useProcessingState';
 import useAudioPlayback from './hooks/useAudioPlayback';
 import useWakeOnLan from './hooks/useWakeOnLan';
 import useEngineAvailability from './hooks/useEngineAvailability';
+import useTheme from './hooks/useTheme';
 
 // Utils
 import { API_URL } from './utils/api';
@@ -93,6 +94,7 @@ function App() {
     useProcessingState(file);
   const { audioUrl, currentTime, audioRef, setFileAudio, clearAudio, seekToTime, handleTimeUpdate } =
     useAudioPlayback();
+  const { isDark, toggleTheme } = useTheme();
 
   // Reset dismissed error when a new error occurs
   useEffect(() => {
@@ -237,9 +239,18 @@ function App() {
   }, [active.result, isDocumentMode]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 text-slate-900 dark:text-white">
       <div className={`${viewMode === ViewMode.VISUAL ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 py-8 transition-all`}>
-        <Header />
+        <div className="relative">
+          <Header />
+          <button
+            onClick={toggleTheme}
+            className="absolute top-0 right-0 p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDark ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+          </button>
+        </div>
 
         {/* Backend Error Banner */}
         {backendError && (
@@ -612,7 +623,7 @@ function App() {
           </div>
         )}
 
-        <footer className="text-center mt-12 text-slate-500 text-sm">
+        <footer className="text-center mt-12 text-slate-400 dark:text-slate-500 text-sm">
           <p>Powered by MLX-Whisper with GPU acceleration</p>
           <p className="mt-1">Optimized for Apple Silicon (M1/M2/M3)</p>
         </footer>

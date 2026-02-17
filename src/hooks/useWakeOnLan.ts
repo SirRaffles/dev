@@ -1,19 +1,34 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { checkWakeStatus } from '../utils/api';
+import type { WakeStatus } from '../utils/api';
+
+interface UseWakeOnLanParams {
+  onAwake?: () => Promise<void> | void;
+}
+
+interface UseWakeOnLanReturn {
+  macState: string | null;
+  setMacState: React.Dispatch<React.SetStateAction<string | null>>;
+  wakeStartTime: number | null;
+  detectProxy: () => Promise<WakeStatus | null>;
+  triggerWake: (apiUrl: string) => void;
+  queueSubmit: () => void;
+  hasPendingSubmit: () => boolean;
+}
 
 /**
  * Manages Wake-on-LAN state for NAS proxy deployments.
  * Detects if behind a wake proxy, tracks Mac state, and handles
  * auto-wake + queued submission when Mac becomes available.
  */
-export default function useWakeOnLan({ onAwake }) {
+export default function useWakeOnLan({ onAwake }: UseWakeOnLanParams): UseWakeOnLanReturn {
   // null = direct connection (no proxy), otherwise 'awake', 'sleeping', 'waking'
-  const [macState, setMacState] = useState(null);
-  const [wakeStartTime, setWakeStartTime] = useState(null);
+  const [macState, setMacState] = useState<string | null>(null);
+  const [wakeStartTime, setWakeStartTime] = useState<number | null>(null);
   const pendingSubmitRef = useRef(false);
 
   // Check initial wake status on mount
-  const detectProxy = useCallback(async () => {
+  const detectProxy = useCallback(async (): Promise<WakeStatus | null> => {
     const proxyData = await checkWakeStatus();
     if (proxyData) {
       setMacState(proxyData.mac_state);
@@ -34,7 +49,6 @@ export default function useWakeOnLan({ onAwake }) {
         if (onAwake) await onAwake();
         if (pendingSubmitRef.current) {
           pendingSubmitRef.current = false;
-          return true; // signal: pending submit ready
         }
       }
     }, 5000);
@@ -42,7 +56,7 @@ export default function useWakeOnLan({ onAwake }) {
   }, [macState, onAwake]);
 
   // Trigger wake and queue a submit
-  const triggerWake = useCallback((apiUrl) => {
+  const triggerWake = useCallback((apiUrl: string) => {
     pendingSubmitRef.current = true;
     setWakeStartTime(Date.now());
     setMacState('waking');
