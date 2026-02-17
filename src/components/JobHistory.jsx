@@ -2,6 +2,13 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Loader2, FileText, RefreshCw } from 'lucide-react';
 import { API_URL } from '../utils/api';
 
+const API_KEY = import.meta.env.VITE_API_KEY || '';
+function authHeaders() {
+  const h = {};
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+}
+
 const STATUS_ICONS = {
   completed: <CheckCircle className="w-4 h-4 text-green-400" />,
   failed: <AlertCircle className="w-4 h-4 text-red-400" />,
@@ -33,7 +40,7 @@ export default function JobHistory({ onSelectJob }) {
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await fetch(`${API_URL}/jobs?limit=20`);
+      const resp = await fetch(`${API_URL}/jobs?limit=20`, { headers: authHeaders() });
       if (resp.ok) {
         const data = await resp.json();
         setJobs(data.jobs || []);
