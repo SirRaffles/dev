@@ -14,7 +14,7 @@ transformers>=4.45.0,<5.0  # pin below 5.0 — RC has breaking compat with mlx-a
 
 # YouTube
 yt-dlp>=2024.12.6,<2026.0
-youtube-transcript-api>=0.6.2,<1.0
+youtube-transcript-api>=0.6.2,<2.0
 
 # Speaker diarization
 pyannote.audio>=3.1,<4.0
