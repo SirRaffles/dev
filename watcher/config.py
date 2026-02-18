@@ -22,7 +22,7 @@ MAX_POLL_TIME = 3600  # 1 hour max transcription time (for long recordings)
 # Voxtral Local has better accuracy but OOM issues on 80+ min files on 24GB M3
 TRANSCRIPTION_SETTINGS = {
     "language": "auto",
-    "enable_diarization": False,
+    "enable_diarization": True,
     "enable_noise_reduction": False,
     "model_size": "large-v3-turbo",
     "word_timestamps": False,
@@ -30,6 +30,9 @@ TRANSCRIPTION_SETTINGS = {
     "engine": "whisper",
     "output_mode": "readable",
 }
+
+# Call intelligence: auto-register calls and identify speakers after transcription
+ENABLE_CALL_INTELLIGENCE = os.environ.get("ENABLE_CALL_INTELLIGENCE", "true").lower() == "true"
 
 # iCloud sync detection
 SYNC_STABILITY_DELAY = 2  # seconds to wait after file stops changing

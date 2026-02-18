@@ -3,6 +3,7 @@ import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, In
 
 // Components (eagerly loaded - needed immediately)
 import Header from './components/Header';
+import Navigation, { NavTab } from './components/Navigation';
 import FileInput from './components/FileInput';
 import YouTubeInput from './components/YouTubeInput';
 import SettingsPanel from './components/SettingsPanel';
@@ -26,6 +27,12 @@ const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
 const TranscriptView = lazy(() => import('./components/TranscriptView'));
 const DocumentView = lazy(() => import('./components/DocumentView'));
 const VisualElementsPanel = lazy(() => import('./components/VisualElementsPanel'));
+
+// Call intelligence views (lazily loaded - only when navigating to those tabs)
+const RecordingsView = lazy(() => import('./components/RecordingsView'));
+const CallsView = lazy(() => import('./components/CallsView'));
+const SpeakersView = lazy(() => import('./components/SpeakersView'));
+const ContextBrowser = lazy(() => import('./components/ContextBrowser'));
 
 const InputMode = { FILE: 'file', YOUTUBE: 'youtube' } as const;
 const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' } as const;
@@ -52,6 +59,9 @@ function WakeProgressBar({ startTime }: WakeProgressBarProps) {
 }
 
 function App() {
+  // Navigation state
+  const [activeTab, setActiveTab] = useState<NavTab>('transcribe');
+
   // Input state
   const [inputMode, setInputMode] = useState<string>(InputMode.FILE);
   const [youtubeUrl, setYoutubeUrl] = useState('');
@@ -258,6 +268,27 @@ function App() {
           </button>
         </div>
 
+        <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+
+        {/* Call Intelligence Views */}
+        {activeTab !== 'transcribe' && (
+          <Suspense fallback={
+            <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
+              <div className="space-y-4 py-4">
+                <div className="h-4 w-3/4 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-full bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+                <div className="h-4 w-5/6 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+              </div>
+            </div>
+          }>
+            {activeTab === 'recordings' && <RecordingsView />}
+            {activeTab === 'calls' && <CallsView />}
+            {activeTab === 'speakers' && <SpeakersView />}
+            {activeTab === 'contexts' && <ContextBrowser />}
+          </Suspense>
+        )}
+
+        {activeTab === 'transcribe' && (<>
         {/* Backend Error Banner */}
         {backendError && (
           <div role="alert" className="bg-amber-500/10 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
@@ -644,6 +675,7 @@ function App() {
           <p>Powered by MLX-Whisper with GPU acceleration</p>
           <p className="mt-1">Optimized for Apple Silicon (M1/M2/M3)</p>
         </footer>
+        </>)}
       </div>
     </div>
   );

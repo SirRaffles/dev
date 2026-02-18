@@ -2,6 +2,35 @@
 Application configuration constants and model definitions.
 """
 
+import os
+from pathlib import Path
+
+# iCloud Drive base path for call intelligence data (speakers, contexts, calls)
+ICLOUD_BASE_PATH = Path(os.environ.get(
+    "ICLOUD_BASE_PATH",
+    os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Davrine Transcription")
+))
+
+# Speaker embedding matching threshold (cosine similarity, 0-1)
+SPEAKER_MATCH_THRESHOLD = float(os.environ.get("SPEAKER_MATCH_THRESHOLD", "0.75"))
+
+# Minimum diarization segment duration (seconds) for reliable embedding extraction
+MIN_EMBEDDING_SEGMENT_SECONDS = float(os.environ.get("MIN_EMBEDDING_SEGMENT_SECONDS", "5.0"))
+
+# Just Press Record iCloud path
+JPR_WATCH_PATH = Path(os.environ.get(
+    "JPR_WATCH_PATH",
+    os.path.expanduser(
+        "~/Library/Mobile Documents/iCloud~com~openplanetsoftware~just-press-record/Documents"
+    )
+))
+
+# Watcher state file
+JPR_STATE_FILE = Path(os.environ.get(
+    "JPR_STATE_FILE",
+    os.path.expanduser("~/.jpr_watcher_state.json")
+))
+
 # Supported languages (Whisper supports 99, these are the most common)
 SUPPORTED_LANGUAGES = {
     "auto": "Auto-detect",

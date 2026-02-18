@@ -15,6 +15,7 @@ from requests.exceptions import ConnectionError, Timeout
 from config import (
     API_TIMEOUT,
     BACKEND_URL,
+    ENABLE_CALL_INTELLIGENCE,
     MAX_POLL_TIME,
     POLL_INTERVAL,
     REFINEMENT_TIMEOUT,
@@ -359,6 +360,65 @@ class TranscriptionClient:
             return response.text
         except Exception as e:
             logger.warning("Error getting refined transcript for job %s: %s", job_id, e)
+            return None
+
+    def register_call(self, job_id: str, source_path: str) -> Optional[dict]:
+        """
+        Register a completed transcription as a call for intelligence processing.
+
+        Returns call metadata dict, or None on failure.
+        """
+        if not ENABLE_CALL_INTELLIGENCE:
+            return None
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/calls/{job_id}/register",
+                json={
+                    "source_type": "jpr_watcher",
+                    "source_path": source_path,
+                },
+                timeout=API_TIMEOUT,
+            )
+            if response.status_code == 200:
+                logger.info("Registered call for job %s", job_id)
+                return response.json()
+            else:
+                logger.warning("Failed to register call for job %s: %s", job_id, response.status_code)
+                return None
+        except Exception as e:
+            logger.warning("Error registering call for job %s: %s", job_id, e)
+            return None
+
+    def identify_speakers(self, job_id: str) -> Optional[dict]:
+        """
+        Trigger automatic speaker identification for a call.
+
+        Returns identification results, or None on failure.
+        """
+        if not ENABLE_CALL_INTELLIGENCE:
+            return None
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/calls/{job_id}/identify-speakers",
+                timeout=120,  # Speaker identification can take a while
+            )
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(
+                    "Speaker identification for job %s: all_matched=%s",
+                    job_id, data.get("all_matched"),
+                )
+                return data
+            else:
+                logger.warning(
+                    "Speaker identification failed for job %s: %s",
+                    job_id, response.status_code,
+                )
+                return None
+        except Exception as e:
+            logger.warning("Error identifying speakers for job %s: %s", job_id, e)
             return None
 
     def transcribe_file(

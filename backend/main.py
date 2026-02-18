@@ -50,6 +50,10 @@ from routes.transcription import router as transcription_router
 from routes.multimodal import router as multimodal_router
 from routes.models_api import router as models_router
 from routes.refinement import router as refinement_router
+from routes.speakers import router as speakers_router
+from routes.calls import router as calls_router
+from routes.contexts import router as contexts_router
+from routes.jpr import router as jpr_router
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,12 @@ async def lifespan(app: FastAPI):
         logger.info("Note: Voxtral model will be downloaded on first use if not cached")
     else:
         logger.info("Voxtral Local: Not available (install mlx-audio for local Voxtral transcription)")
+
+    # Initialize iCloud Drive directory structure for call intelligence
+    from config import ICLOUD_BASE_PATH
+    for subdir in ("speakers", "speakers/_unknown", "contexts", "calls"):
+        (ICLOUD_BASE_PATH / subdir).mkdir(parents=True, exist_ok=True)
+    logger.info("iCloud Drive data directory: %s", ICLOUD_BASE_PATH)
 
     # Check for Voxtral API availability
     mistral_api_key = os.environ.get("MISTRAL_API_KEY")
@@ -213,6 +223,10 @@ app.include_router(models_router)
 app.include_router(transcription_router)
 app.include_router(multimodal_router)
 app.include_router(refinement_router)
+app.include_router(speakers_router)
+app.include_router(calls_router)
+app.include_router(contexts_router)
+app.include_router(jpr_router)
 
 
 # Serve frontend build from static/ when running in single-container mode.

@@ -422,3 +422,265 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
 
   return response.json();
 }
+
+// --- Call Intelligence Types ---
+
+export interface Speaker {
+  speaker_id: string;
+  name: string;
+  folder_path: string;
+  embedding_path?: string;
+  call_count: number;
+  total_speaking_time_seconds: number;
+  created_at: string;
+}
+
+export interface CallMetadata {
+  job_id: string;
+  title?: string;
+  context_path?: string;
+  call_folder_path?: string;
+  speakers_identified: number;
+  context_assigned: number;
+  deliverables_generated: number;
+  deliverables_generated_at?: string;
+  source_type: string;
+  source_path?: string;
+  created_at: string;
+  speakers?: CallSpeaker[];
+  speaker_identifications?: CallSpeaker[];
+  readiness?: { ready: boolean; missing: string[] };
+}
+
+export interface CallSpeaker {
+  call_id: string;
+  speaker_id: string;
+  speaker_label?: string;
+  confidence: number;
+  confirmed: number;
+  name?: string;
+}
+
+export interface ContextFolder {
+  name: string;
+  path: string;
+  description?: string;
+  created_at?: string;
+  has_insights: boolean;
+  has_context: boolean;
+}
+
+export interface ContextTree {
+  name: string;
+  path: string;
+  children?: ContextTree[];
+}
+
+export interface JPRRecording {
+  filename: string;
+  path: string;
+  date_folder: string;
+  size_bytes: number;
+  status: string;
+  job_id?: string;
+  transcript_exists: boolean;
+}
+
+// --- Speaker API ---
+
+export async function fetchSpeakers(): Promise<Speaker[]> {
+  const response = await fetch(`${API_URL}/speakers`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch speakers');
+  const data = await response.json();
+  return data.speakers;
+}
+
+export async function fetchSpeaker(speakerId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/speakers/${speakerId}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch speaker');
+  return response.json();
+}
+
+export async function createSpeaker(name: string): Promise<any> {
+  const response = await fetch(`${API_URL}/speakers`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || 'Failed to create speaker');
+  }
+  return response.json();
+}
+
+export async function deleteSpeaker(speakerId: string): Promise<void> {
+  const response = await fetch(`${API_URL}/speakers/${speakerId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to delete speaker');
+}
+
+export async function updateSpeakerPersonality(speakerId: string, content: string): Promise<void> {
+  const response = await fetch(`${API_URL}/speakers/${speakerId}/personality`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) throw new Error('Failed to update personality');
+}
+
+// --- Calls API ---
+
+export async function fetchCalls(limit = 50, offset = 0, status?: string): Promise<{ calls: CallMetadata[]; total: number }> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (status) params.append('status', status);
+  const response = await fetch(`${API_URL}/calls?${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch calls');
+  return response.json();
+}
+
+export async function fetchCall(jobId: string): Promise<CallMetadata> {
+  const response = await fetch(`${API_URL}/calls/${jobId}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch call');
+  return response.json();
+}
+
+export async function registerCall(jobId: string, sourceType = 'upload', sourcePath?: string): Promise<any> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/register`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ source_type: sourceType, source_path: sourcePath }),
+  });
+  if (!response.ok) throw new Error('Failed to register call');
+  return response.json();
+}
+
+export async function identifySpeakers(jobId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/identify-speakers`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || 'Failed to identify speakers');
+  }
+  return response.json();
+}
+
+export async function confirmSpeaker(
+  jobId: string,
+  speakerLabel: string,
+  speakerName: string,
+  createNew = false,
+): Promise<any> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/confirm-speaker`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ speaker_label: speakerLabel, speaker_name: speakerName, create_new: createNew }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || 'Failed to confirm speaker');
+  }
+  return response.json();
+}
+
+export async function setCallTitle(jobId: string, title: string): Promise<void> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/title`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) throw new Error('Failed to set title');
+}
+
+export async function assignContext(jobId: string, contextPath: string): Promise<void> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/context`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ context_path: contextPath }),
+  });
+  if (!response.ok) throw new Error('Failed to assign context');
+}
+
+export async function generateDeliverables(jobId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/generate-deliverables`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || 'Failed to generate deliverables');
+  }
+  return response.json();
+}
+
+export async function fetchDeliverables(jobId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/calls/${jobId}/deliverables`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch deliverables');
+  return response.json();
+}
+
+// --- Context API ---
+
+export async function fetchContextFolders(parentPath = ''): Promise<ContextFolder[]> {
+  const params = parentPath ? `?path=${encodeURIComponent(parentPath)}` : '';
+  const response = await fetch(`${API_URL}/contexts${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch contexts');
+  const data = await response.json();
+  return data.folders;
+}
+
+export async function fetchContextTree(): Promise<ContextTree[]> {
+  const response = await fetch(`${API_URL}/contexts/tree`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch context tree');
+  const data = await response.json();
+  // data.tree is the root node; we want its children as the top-level list
+  return data.tree?.children || [];
+}
+
+export async function createContextFolder(path: string, description = ''): Promise<any> {
+  const response = await fetch(`${API_URL}/contexts/folders`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ path, description }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || 'Failed to create context folder');
+  }
+  return response.json();
+}
+
+export async function fetchContextFile(path: string, filename: string): Promise<string> {
+  const response = await fetch(
+    `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) throw new Error('Failed to fetch file');
+  const data = await response.json();
+  return data.content;
+}
+
+export async function updateContextFile(path: string, filename: string, content: string): Promise<void> {
+  const response = await fetch(
+    `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
+    {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ content }),
+    },
+  );
+  if (!response.ok) throw new Error('Failed to update file');
+}
+
+// --- JPR Recordings API ---
+
+export async function fetchJPRRecordings(limit = 50, offset = 0): Promise<{ recordings: JPRRecording[]; total: number }> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await fetch(`${API_URL}/jpr/recordings?${params}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error('Failed to fetch recordings');
+  return response.json();
+}

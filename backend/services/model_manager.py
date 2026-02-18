@@ -22,6 +22,7 @@ class ModelName(str, Enum):
     WHISPER = "whisper"
     VISION = "vision"
     DIARIZATION = "diarization"
+    EMBEDDING = "embedding"
 
 
 class ModelConfig:
@@ -42,6 +43,12 @@ class ModelConfig:
         ModelName.DIARIZATION: {
             "priority": 2,  # Medium
             "memory_mb": 2000,
+            "unloadable": True,
+            "load_timeout": 60,
+        },
+        ModelName.EMBEDDING: {
+            "priority": 2,  # Medium — same as diarization
+            "memory_mb": 200,  # Speaker embedding model is lightweight (~200MB)
             "unloadable": True,
             "load_timeout": 60,
         },
@@ -321,6 +328,51 @@ class ModelManager:
             logger.error(f"Failed to load Diarization model: {e}")
             return False
 
+    async def load_embedding(self) -> bool:
+        """Load pyannote speaker embedding model for voice fingerprinting."""
+        if self.is_loaded(ModelName.EMBEDDING):
+            return True
+
+        if not self._can_load_model(ModelName.EMBEDDING):
+            if not self._unload_lower_priority_models(ModelName.EMBEDDING):
+                raise MemoryError("Not enough memory to load Embedding model")
+
+        try:
+            import os
+            import torch
+            import torch.serialization
+
+            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+            if not hf_token:
+                logger.warning("HF_TOKEN not set, embedding model may fail")
+                return False
+
+            torch.serialization._default_to_weights_only = lambda pickle_module: False
+
+            from pyannote.audio import Inference
+
+            logger.info("Loading pyannote speaker embedding model")
+            os.environ["HF_TOKEN"] = hf_token
+            inference = Inference("pyannote/embedding", window="whole")
+
+            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+            inference.to(device)
+
+            self._models[ModelName.EMBEDDING] = inference
+            self._model_status[ModelName.EMBEDDING].update({
+                "loaded": True,
+                "memory_mb": ModelConfig.CONFIGS[ModelName.EMBEDDING]["memory_mb"],
+                "device": str(device),
+                "last_used": datetime.now(),
+                "load_count": self._model_status[ModelName.EMBEDDING]["load_count"] + 1,
+            })
+            logger.info("Speaker embedding model loaded on %s", device)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load Embedding model: {e}")
+            return False
+
     def unload_model(self, model_name: ModelName) -> bool:
         """Explicitly unload a model to free memory."""
         if not self.is_loaded(model_name):
@@ -378,6 +430,8 @@ class ModelManager:
                 loop.run_until_complete(self.load_vision())
             elif model_name == ModelName.DIARIZATION:
                 loop.run_until_complete(self.load_diarization())
+            elif model_name == ModelName.EMBEDDING:
+                loop.run_until_complete(self.load_embedding())
 
         # Update last used
         self._model_status[model_name]["last_used"] = datetime.now()

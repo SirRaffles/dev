@@ -35,6 +35,7 @@ from api_client import (
     TranscriptionError,
 )
 from config import (
+    ENABLE_CALL_INTELLIGENCE,
     ENABLE_REFINEMENT,
     ICLOUD_PATH,
     LOG_BACKUP_COUNT,
@@ -315,6 +316,21 @@ def process_file(
                     logger.info(f"Refinement not available, skipping for: {filename}")
             except Exception as e:
                 logger.warning(f"Refinement failed for {filename} (non-blocking): {e}")
+
+        # Auto-register call and identify speakers (non-blocking)
+        if ENABLE_CALL_INTELLIGENCE:
+            try:
+                logger.info(f"Registering call for: {filename}")
+                call_result = client.register_call(job_id, str(file_path))
+                if call_result:
+                    logger.info(f"Starting speaker identification for: {filename}")
+                    id_result = client.identify_speakers(job_id)
+                    if id_result and id_result.get("all_matched"):
+                        logger.info(f"All speakers auto-matched for: {filename}")
+                    elif id_result:
+                        logger.info(f"Speaker identification complete, manual review needed for: {filename}")
+            except Exception as e:
+                logger.warning(f"Call intelligence failed for {filename} (non-blocking): {e}")
 
         # Update state
         state.mark_completed(file_path, transcript_path)

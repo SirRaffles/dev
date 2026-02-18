@@ -9,7 +9,7 @@ import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
-from job_models import JobStore, RefinementStore
+from job_models import JobStore, RefinementStore, SpeakerStore, CallSpeakerStore, CallMetadataStore
 
 
 class BoundedDict:
@@ -126,3 +126,28 @@ job_store = JobStore()
 batch_jobs = BoundedDict(max_size=500)
 multimodal_jobs = BoundedDict(max_size=500)
 jobs = job_store  # Legacy compatibility alias
+
+# Call intelligence stores
+speaker_store = SpeakerStore()
+call_speaker_store = CallSpeakerStore()
+call_metadata_store = CallMetadataStore()
+
+# Speaker embedding service (lazy-loaded, uses pyannote)
+_speaker_embedding_service = None
+
+def get_speaker_embedding_service():
+    """Get or create the speaker embedding service singleton."""
+    global _speaker_embedding_service
+    if _speaker_embedding_service is None:
+        from services.speaker_embedding import SpeakerEmbeddingService
+        _speaker_embedding_service = SpeakerEmbeddingService()
+    return _speaker_embedding_service
+
+# Deliverable generation service (requires claude CLI)
+deliverable_service = None
+deliverable_available = False
+
+if _claude_path:
+    from services.deliverable_service import DeliverableService
+    deliverable_service = DeliverableService(_claude_path)
+    deliverable_available = True
