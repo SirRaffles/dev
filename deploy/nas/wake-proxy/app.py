@@ -4,6 +4,9 @@ Wake-on-LAN Proxy for Whisper Transcription App.
 Sits between the NAS frontend and the Mac backend.
 Auto-wakes the Mac via WoL when a request arrives and the Mac is sleeping.
 Transparently proxies all requests to the Mac backend when awake.
+
+Streams both request and response bodies to avoid buffering large files
+in memory (audio uploads can be up to 500MB).
 """
 
 import asyncio
@@ -14,7 +17,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from wakeonlan import send_magic_packet
 
 # Configuration
@@ -27,6 +30,10 @@ CONSECUTIVE_FAILURES_TO_SLEEP = 3
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("wake-proxy")
+
+# Persistent HTTP client for connection pooling (initialized in lifespan)
+http_client: httpx.AsyncClient | None = None
+
 
 class MacState:
     """Tracks the Mac's current state."""
@@ -53,19 +60,21 @@ mac_state = MacState()
 async def check_backend_health():
     """Ping the Mac backend and update state."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-            resp = await client.get(f"{MAC_BACKEND_URL}/health")
-            if resp.status_code == 200:
-                data = resp.json()
-                mac_state.consecutive_failures = 0
-                mac_state.model_loaded = data.get("model_loaded", False)
-                mac_state.last_seen_awake = time.time()
+        resp = await http_client.get(
+            f"{MAC_BACKEND_URL}/health",
+            timeout=httpx.Timeout(5.0),
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            mac_state.consecutive_failures = 0
+            mac_state.model_loaded = data.get("model_loaded", False)
+            mac_state.last_seen_awake = time.time()
 
-                if mac_state.state in ("sleeping", "waking"):
-                    old_state = mac_state.state
-                    mac_state.state = "awake"
-                    logger.info("Mac is now awake (was %s), model_loaded=%s", old_state, mac_state.model_loaded)
-                return True
+            if mac_state.state in ("sleeping", "waking"):
+                old_state = mac_state.state
+                mac_state.state = "awake"
+                logger.info("Mac is now awake (was %s), model_loaded=%s", old_state, mac_state.model_loaded)
+            return True
     except Exception:
         mac_state.consecutive_failures += 1
 
@@ -102,13 +111,21 @@ async def health_check_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    global http_client
+    # Create persistent connection pool for proxying
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0, connect=10.0),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        follow_redirects=False,
+    )
     # Startup: initial health check and background task
     await check_backend_health()
     logger.info("Initial Mac state: %s (backend_url=%s, mac=%s)", mac_state.state, MAC_BACKEND_URL, MAC_MAC_ADDRESS)
     task = asyncio.create_task(health_check_loop())
     yield
-    # Shutdown: cancel background task
+    # Shutdown: cancel background task and close HTTP client
     task.cancel()
+    await http_client.aclose()
 
 
 app = FastAPI(title="Whisper Wake Proxy", lifespan=lifespan)
@@ -170,41 +187,49 @@ async def proxy_to_backend(request: Request, path: str):
             headers={"Retry-After": str(max(5, mac_state.estimated_ready_in or 30))},
         )
 
-    # Mac is awake -- proxy the request
+    # Mac is awake -- proxy the request with full streaming
     target_url = f"{MAC_BACKEND_URL}/{path}"
     if request.query_params:
         target_url += f"?{request.query_params}"
 
-    # Read the request body
-    body = await request.body()
-
-    # Forward headers, removing hop-by-hop headers
+    # Forward headers, removing only true hop-by-hop headers
     headers = {}
     for key, value in request.headers.items():
-        if key.lower() not in ("host", "transfer-encoding", "connection", "authorization"):
+        if key.lower() not in ("host", "connection"):
             headers[key] = value
     # Inject backend API key (NAS auth is handled by nginx Basic Auth)
     if MAC_API_KEY:
         headers["X-API-Key"] = MAC_API_KEY
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                content=body,
-                headers=headers,
-            )
+        # Build request with streaming body (never buffers entire upload)
+        backend_req = http_client.build_request(
+            method=request.method,
+            url=target_url,
+            content=request.stream(),
+            headers=headers,
+        )
 
-        # Forward response headers, filtering hop-by-hop
+        # Send request and get streaming response
+        backend_resp = await http_client.send(backend_req, stream=True)
+
+        # Filter response headers (only true hop-by-hop)
         response_headers = {}
-        for key, value in resp.headers.items():
-            if key.lower() not in ("transfer-encoding", "connection", "content-encoding"):
+        for key, value in backend_resp.headers.items():
+            if key.lower() not in ("connection", "transfer-encoding"):
                 response_headers[key] = value
 
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
+        # Stream response body back to client
+        async def response_stream():
+            try:
+                async for chunk in backend_resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await backend_resp.aclose()
+
+        return StreamingResponse(
+            content=response_stream(),
+            status_code=backend_resp.status_code,
             headers=response_headers,
         )
     except httpx.TimeoutException:
