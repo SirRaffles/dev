@@ -7,6 +7,7 @@ Optimized for Apple Silicon (M3) with GPU acceleration via Metal.
 """
 
 import os
+import json
 import hmac
 import time
 import logging
@@ -14,21 +15,36 @@ import multiprocessing
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
+# Structured JSON log formatter for production log aggregation.
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_entry = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
 # Configure logging with rotation
 _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_format_mode = os.environ.get("LOG_FORMAT", "text").lower()
 _log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _log_datefmt = "%Y-%m-%d %H:%M:%S"
 _log_file = os.environ.get("LOG_FILE", os.path.expanduser("~/.whisper-backend.log"))
 
-_formatter = logging.Formatter(_log_format, datefmt=_log_datefmt)
+_text_formatter = logging.Formatter(_log_format, datefmt=_log_datefmt)
+_json_formatter = JsonFormatter(datefmt=_log_datefmt)
 
 # Rotating file handler: 10MB per file, keep 3 backups
 _file_handler = RotatingFileHandler(_log_file, maxBytes=10 * 1024 * 1024, backupCount=3)
-_file_handler.setFormatter(_formatter)
+_file_handler.setFormatter(_json_formatter if _log_format_mode == "json" else _text_formatter)
 
-# Console handler (for interactive/development use)
+# Console handler (for interactive/development use) — always plain text
 _console_handler = logging.StreamHandler()
-_console_handler.setFormatter(_formatter)
+_console_handler.setFormatter(_text_formatter)
 
 logging.basicConfig(level=_log_level, handlers=[_file_handler, _console_handler])
 

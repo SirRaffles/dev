@@ -18,9 +18,10 @@ import useAudioPlayback from './hooks/useAudioPlayback';
 import useWakeOnLan from './hooks/useWakeOnLan';
 import useEngineAvailability from './hooks/useEngineAvailability';
 import useTheme from './hooks/useTheme';
+import useGlobalKeyboard from './hooks/useGlobalKeyboard';
 
 // Utils
-import { API_URL } from './utils/api';
+import { API_URL, JobStatus } from './utils/api';
 
 // Components (lazily loaded - only needed when results are shown)
 const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
@@ -110,6 +111,11 @@ function App() {
   const { audioUrl, currentTime, audioRef, setFileAudio, clearAudio, seekToTime, handleTimeUpdate } =
     useAudioPlayback();
   const { isDark, toggleTheme } = useTheme();
+
+  useGlobalKeyboard({
+    audioRef,
+    enabled: !!audioUrl && !!active.result && !active.isProcessing,
+  });
 
   // Reset dismissed error when a new error occurs
   useEffect(() => {
@@ -606,7 +612,7 @@ function App() {
                   }}
                   className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                 >
-                  {transcription.batchResults.map((br: any, i: number) => (
+                  {transcription.batchResults.map((br: JobStatus, i: number) => (
                     <option key={br.job_id} value={i}>
                       File {i + 1} — {br.job_id.slice(0, 8)}
                     </option>

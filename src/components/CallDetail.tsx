@@ -3,7 +3,7 @@ import { ArrowLeft, CheckCircle, Users, FolderOpen, FileText, Loader2, AlertCirc
 import {
   fetchCall, identifySpeakers, confirmSpeaker, assignContext, setCallTitle,
   generateDeliverables, fetchDeliverables, fetchSpeakers, fetchContextTree,
-  CallMetadata, Speaker, ContextTree,
+  CallMetadata, Speaker, ContextTree, DeliverablesResponse,
 } from '../utils/api';
 
 interface CallDetailProps {
@@ -17,7 +17,7 @@ function CallDetail({ jobId, onBack }: CallDetailProps) {
   const [error, setError] = useState<string | null>(null);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [contextTree, setContextTree] = useState<ContextTree[]>([]);
-  const [deliverables, setDeliverables] = useState<any>(null);
+  const [deliverables, setDeliverables] = useState<DeliverablesResponse | null>(null);
   const [generating, setGenerating] = useState(false);
   const [identifying, setIdentifying] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -347,7 +347,7 @@ function ContextNode({ node, onSelect, depth }: { node: ContextTree; onSelect: (
   );
 }
 
-function DeliverableView({ deliverables }: { deliverables: any }) {
+function DeliverableView({ deliverables }: { deliverables: DeliverablesResponse }) {
   const [tab, setTab] = useState<'summary' | 'analysis'>('summary');
 
   return (

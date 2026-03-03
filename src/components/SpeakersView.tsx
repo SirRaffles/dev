@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Users, Plus, Trash2, Clock, Loader2, RefreshCw, ChevronRight } from 'lucide-react';
 import useSpeakers from '../hooks/useSpeakers';
 import SpeakerProfile from './SpeakerProfile';
+import ConfirmModal from './ConfirmModal';
 
 function SpeakersView() {
   const { speakers, loading, error, refresh, addSpeaker, removeSpeaker } = useSpeakers();
@@ -10,6 +11,7 @@ function SpeakersView() {
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{id: string, name: string} | null>(null);
 
   if (selectedId) {
     return <SpeakerProfile speakerId={selectedId} onBack={() => { setSelectedId(null); refresh(); }} />;
@@ -30,12 +32,18 @@ function SpeakersView() {
     }
   };
 
-  const handleDelete = async (speakerId: string, name: string) => {
-    if (!window.confirm(`Delete speaker "${name}"? This cannot be undone.`)) return;
+  const handleDelete = (speakerId: string, name: string) => {
+    setDeleteTarget({ id: speakerId, name });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await removeSpeaker(speakerId);
+      await removeSpeaker(deleteTarget.id);
     } catch (e: any) {
       alert(e.message);
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -134,6 +142,17 @@ function SpeakersView() {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="Delete Speaker"
+        message={deleteTarget ? `Delete speaker "${deleteTarget.name}"? This cannot be undone.` : ''}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

@@ -486,6 +486,39 @@ export interface JPRRecording {
   transcript_exists: boolean;
 }
 
+export interface SpeakerDetail extends Speaker {
+  personality_md?: string;
+}
+
+export interface RegisterCallResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface IdentifySpeakersResponse {
+  identifications: CallSpeaker[];
+  all_matched: boolean;
+}
+
+export interface ConfirmSpeakerResponse {
+  status: string;
+  speaker_id: string;
+  confirmed: boolean;
+}
+
+export interface GenerateDeliverablesResponse {
+  status: string;
+  job_id: string;
+}
+
+export interface DeliverablesResponse {
+  generated: boolean;
+  generated_at?: string;
+  summary_md?: string;
+  analysis_md?: string;
+  call_folder?: string;
+}
+
 // --- Speaker API ---
 
 export async function fetchSpeakers(): Promise<Speaker[]> {
@@ -495,13 +528,13 @@ export async function fetchSpeakers(): Promise<Speaker[]> {
   return data.speakers;
 }
 
-export async function fetchSpeaker(speakerId: string): Promise<any> {
+export async function fetchSpeaker(speakerId: string): Promise<SpeakerDetail> {
   const response = await fetch(`${API_URL}/speakers/${speakerId}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch speaker');
   return response.json();
 }
 
-export async function createSpeaker(name: string): Promise<any> {
+export async function createSpeaker(name: string): Promise<{ speaker_id: string; name: string }> {
   const response = await fetch(`${API_URL}/speakers`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -547,7 +580,7 @@ export async function fetchCall(jobId: string): Promise<CallMetadata> {
   return response.json();
 }
 
-export async function registerCall(jobId: string, sourceType = 'upload', sourcePath?: string): Promise<any> {
+export async function registerCall(jobId: string, sourceType = 'upload', sourcePath?: string): Promise<RegisterCallResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/register`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -557,7 +590,7 @@ export async function registerCall(jobId: string, sourceType = 'upload', sourceP
   return response.json();
 }
 
-export async function identifySpeakers(jobId: string): Promise<any> {
+export async function identifySpeakers(jobId: string): Promise<IdentifySpeakersResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/identify-speakers`, {
     method: 'POST',
     headers: authHeaders(),
@@ -574,7 +607,7 @@ export async function confirmSpeaker(
   speakerLabel: string,
   speakerName: string,
   createNew = false,
-): Promise<any> {
+): Promise<ConfirmSpeakerResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/confirm-speaker`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -605,7 +638,7 @@ export async function assignContext(jobId: string, contextPath: string): Promise
   if (!response.ok) throw new Error('Failed to assign context');
 }
 
-export async function generateDeliverables(jobId: string): Promise<any> {
+export async function generateDeliverables(jobId: string): Promise<GenerateDeliverablesResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/generate-deliverables`, {
     method: 'POST',
     headers: authHeaders(),
@@ -617,7 +650,7 @@ export async function generateDeliverables(jobId: string): Promise<any> {
   return response.json();
 }
 
-export async function fetchDeliverables(jobId: string): Promise<any> {
+export async function fetchDeliverables(jobId: string): Promise<DeliverablesResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/deliverables`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch deliverables');
   return response.json();
@@ -641,7 +674,7 @@ export async function fetchContextTree(): Promise<ContextTree[]> {
   return data.tree?.children || [];
 }
 
-export async function createContextFolder(path: string, description = ''): Promise<any> {
+export async function createContextFolder(path: string, description = ''): Promise<{ path: string; description: string }> {
   const response = await fetch(`${API_URL}/contexts/folders`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),

@@ -18,8 +18,10 @@ export interface AudioPlayerHandle {
   seekToTime: (time: number) => void;
   play: () => void;
   pause: () => void;
+  togglePlayPause: () => void;
   getCurrentTime: () => number;
   getDuration: () => number;
+  isPlaying: () => boolean;
 }
 
 interface AudioPlayerProps {
@@ -110,9 +112,17 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function Aud
       const audio = audioRef.current;
       if (audio) { audio.pause(); setIsPlaying(false); }
     },
+    togglePlayPause: () => {
+      const audio = audioRef.current;
+      if (audio) {
+        if (isPlaying) { audio.pause(); setIsPlaying(false); }
+        else { audio.play(); setIsPlaying(true); }
+      }
+    },
     getCurrentTime: () => currentTime,
     getDuration: () => duration,
-  }), [seekToTime, currentTime, duration]);
+    isPlaying: () => isPlaying,
+  }), [seekToTime, currentTime, duration, isPlaying]);
 
   const handleSeekChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     seekToTime(parseFloat(e.target.value));

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2 } from 'lucide-react';
 import { LANGUAGES, updateSegments, updateSpeakers, Segment } from '../utils/api';
 import { formatTime } from './AudioPlayer';
+import ConfirmModal from './ConfirmModal';
 
 // Escape special regex characters to prevent ReDoS
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -44,6 +45,10 @@ function TranscriptView({
   const [tempSpeakerName, setTempSpeakerName] = useState('');
   const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
   const [speakerError, setSpeakerError] = useState<string | null>(null);
+
+  // Confirmation modals
+  const [confirmSave, setConfirmSave] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState<number>(0);
 
   // Search & replace
   const [showSearchPanel, setShowSearchPanel] = useState(false);
@@ -99,10 +104,12 @@ function TranscriptView({
       return;
     }
 
-    if (changeCount > 1 && !window.confirm(`Save ${changeCount} changes? This cannot be undone.`)) {
+    if (changeCount > 1 && !confirmSave) {
+      setConfirmSave(true);
       return;
     }
 
+    setConfirmSave(false);
     setIsSaving(true);
     setSaveError(null);
     try {
@@ -214,10 +221,12 @@ function TranscriptView({
 
     if (totalOccurrences === 0) return;
 
-    if (!window.confirm(`Replace ${totalOccurrences} occurrence${totalOccurrences !== 1 ? 's' : ''} of "${searchQuery}" with "${replaceText}"?`)) {
+    if (!confirmReplace) {
+      setConfirmReplace(totalOccurrences);
       return;
     }
 
+    setConfirmReplace(0);
     setIsReplacing(true);
     setReplaceError(null);
 
@@ -530,6 +539,27 @@ function TranscriptView({
           </p>
         )}
       </div>
+
+      <ConfirmModal
+        open={confirmSave}
+        title="Save Changes"
+        message={`Save ${Object.keys(editedSegments).length} changes? This cannot be undone.`}
+        confirmLabel="Save"
+        cancelLabel="Cancel"
+        onConfirm={saveEdits}
+        onCancel={() => setConfirmSave(false)}
+      />
+
+      <ConfirmModal
+        open={confirmReplace > 0}
+        title="Replace All"
+        message={`Replace ${confirmReplace} occurrence${confirmReplace !== 1 ? 's' : ''} of "${searchQuery}" with "${replaceText}"?`}
+        confirmLabel="Replace All"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={replaceAll}
+        onCancel={() => setConfirmReplace(0)}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { FolderOpen, Plus, FileText, Loader2, RefreshCw, ChevronRight, Save, Eye, Edit3 } from 'lucide-react';
 import useContexts from '../hooks/useContexts';
-import { fetchContextFile, updateContextFile } from '../utils/api';
+import { fetchContextFile, updateContextFile, ContextTree } from '../utils/api';
 
 function ContextBrowser() {
   const { tree, loading, error, refreshTree, addFolder } = useContexts();
@@ -163,7 +163,7 @@ function ContextBrowser() {
   );
 }
 
-function ContextTreeNode({ node, depth, onSelectFile }: { node: any; depth: number; onSelectFile: (path: string, filename: string) => void }) {
+function ContextTreeNode({ node, depth, onSelectFile }: { node: ContextTree; depth: number; onSelectFile: (path: string, filename: string) => void }) {
   const [expanded, setExpanded] = useState(depth === 0);
   const hasChildren = node.children && node.children.length > 0;
 
@@ -194,7 +194,7 @@ function ContextTreeNode({ node, depth, onSelectFile }: { node: any; depth: numb
           >
             <FileText className="w-3 h-3" /> insights.md
           </button>
-          {hasChildren && node.children.map((child: any) => (
+          {hasChildren && node.children!.map((child) => (
             <ContextTreeNode key={child.path} node={child} depth={depth + 1} onSelectFile={onSelectFile} />
           ))}
         </div>
