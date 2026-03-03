@@ -54,7 +54,7 @@ services:
     environment:
       - MAC_BACKEND_URL=${MAC_BACKEND_URL:-http://100.102.54.116:8000}
       - MAC_MAC_ADDRESS=${MAC_MAC_ADDRESS:-16:60:3e:7b:01:32}
-      - MAC_API_KEY=${MAC_API_KEY:-7yDTlT9CSIuRF9qlLRqphtk3RqSjuOrpUS5ery0wQns}
+      - MAC_API_KEY=${MAC_API_KEY:?MAC_API_KEY must be set in .env}
       - TZ=Europe/Paris
     deploy:
       resources:

@@ -5,6 +5,8 @@
 # Usage: ./scripts/stop-watcher.sh
 #
 
+set -eo pipefail
+
 PLIST_NAME="com.whisper.jpr-watcher.plist"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 

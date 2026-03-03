@@ -379,8 +379,8 @@ function TranscriptView({
       {/* Search & Replace Panel */}
       {showSearchPanel && (
         <div className="mb-4 p-4 bg-slate-100 dark:bg-slate-700/30 rounded-xl">
-          <div className="flex flex-wrap gap-3 mb-3">
-            <div className="flex-1 min-w-[200px]">
+          <div className="flex flex-col sm:flex-row gap-3 mb-3">
+            <div className="flex-1 min-w-0">
               <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Search</label>
               <input
                 type="text"
@@ -391,7 +391,7 @@ function TranscriptView({
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 dark:bg-slate-700 dark:border-slate-600 dark:text-white focus:outline-none focus:border-blue-400"
               />
             </div>
-            <div className="flex-1 min-w-[200px]">
+            <div className="flex-1 min-w-0">
               <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Replace with</label>
               <input
                 type="text"

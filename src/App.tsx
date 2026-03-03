@@ -149,11 +149,13 @@ function App() {
   }, [detectProxy, refreshEngines]);
 
   // Auto-submit when Mac wakes with pending request
+  const startProcessingRef = useRef(startProcessing);
+  startProcessingRef.current = startProcessing;
   useEffect(() => {
     if (macState === 'awake' && hasPendingSubmit()) {
-      startProcessing();
+      startProcessingRef.current();
     }
-  }, [macState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [macState, hasPendingSubmit]);
 
   // Handlers
   const handleFileSelect = (selectedFile: File) => {
@@ -467,6 +469,7 @@ function App() {
         </div>
 
         {/* Progress Bar */}
+        <div aria-live="polite" aria-atomic="true">
         {active.isProcessing && (
           <ProgressBar
             progress={active.progress}
@@ -475,6 +478,7 @@ function App() {
             batchProgress={transcription.batchProgress}
           />
         )}
+        </div>
 
         {/* Batch Progress (shown while batch is active, separate from single-file ProgressBar) */}
         {transcription.batchId && files.length > 1 && (

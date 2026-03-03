@@ -182,7 +182,7 @@ async def identify_speakers(job_id: str):
 
     except Exception as e:
         logger.error("Speaker identification failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Speaker identification failed: {e}")
+        raise HTTPException(status_code=500, detail="Speaker identification failed. Please try again.")
 
 
 @router.post("/calls/{job_id}/confirm-speaker")
@@ -299,7 +299,7 @@ async def generate_deliverables(job_id: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Deliverable generation failed for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Deliverable generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Deliverable generation failed. Please try again.")
 
 
 @router.get("/calls/{job_id}/deliverables")

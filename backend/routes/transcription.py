@@ -345,7 +345,7 @@ async def transcribe_youtube(
         job.error = str(e)
         state.jobs.update(job)
         logger.error(f"YouTube transcription error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="YouTube transcription failed. The video may be unavailable or an internal error occurred.")
 
 
 @router.post("/transcribe/batch", dependencies=[Depends(check_rate_limit)])
@@ -708,7 +708,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
             new_job.error = str(e)
             state.jobs.update(new_job)
             logger.error(f"Retry YouTube error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Retry failed. The video may be unavailable or an internal error occurred.")
     else:
         # File-based job: check if temp file still exists
         if not file_path or not os.path.exists(file_path):

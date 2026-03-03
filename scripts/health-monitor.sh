@@ -6,6 +6,8 @@
 # Usage: Run via launchd (com.whisper.health-monitor) every 5 minutes.
 #
 
+set -eo pipefail
+
 BACKEND_URL="http://localhost:8000/health"
 FRONTEND_URL="http://localhost:3000"
 NAS_PROXY_URL="http://192.168.50.171:8150"

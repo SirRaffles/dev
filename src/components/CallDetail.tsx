@@ -250,7 +250,7 @@ function SpeakerConfirmDropdown({ speakers, onConfirm }: { speakers: Speaker[]; 
         Identify
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg p-2 min-w-48">
+        <div className="absolute right-0 sm:right-0 left-auto top-full mt-1 z-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg p-2 min-w-48 max-w-[calc(100vw-2rem)]">
           {speakers.map((s) => (
             <button
               key={s.speaker_id}

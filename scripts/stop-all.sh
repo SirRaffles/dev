@@ -5,6 +5,8 @@
 # Usage: ./scripts/stop-all.sh
 #
 
+set -eo pipefail
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

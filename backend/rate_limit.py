@@ -11,6 +11,7 @@ from fastapi import Request, HTTPException
 # Config
 RATE_LIMIT = 10  # max requests per window
 RATE_WINDOW = 60  # window in seconds
+_MAX_TRACKED_IPS = 10_000  # cap to prevent unbounded memory growth
 
 # Storage: { ip: [timestamp, ...] }
 _requests: dict[str, list[float]] = {}
@@ -19,6 +20,20 @@ _lock = threading.Lock()
 # Clean up stale entries every N calls to avoid unbounded growth
 _CLEANUP_INTERVAL = 100
 _call_count = 0
+
+
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP, respecting proxy headers when present."""
+    # Check X-Forwarded-For (set by nginx/reverse proxies)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # First IP in the chain is the original client
+        return forwarded_for.split(",")[0].strip()
+    # Check X-Real-IP (set by some proxies)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _cleanup(now: float) -> None:
@@ -37,13 +52,21 @@ async def check_rate_limit(request: Request) -> None:
     """
     global _call_count
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
     now = time.monotonic()
 
     with _lock:
         _call_count += 1
         if _call_count % _CLEANUP_INTERVAL == 0:
             _cleanup(now)
+
+        # Evict oldest entries if we exceed the IP tracking cap
+        if len(_requests) >= _MAX_TRACKED_IPS and client_ip not in _requests:
+            _cleanup(now)
+            # If still at cap after cleanup, evict the oldest entry
+            if len(_requests) >= _MAX_TRACKED_IPS:
+                oldest_key = next(iter(_requests))
+                del _requests[oldest_key]
 
         timestamps = _requests.get(client_ip)
         if timestamps is None:

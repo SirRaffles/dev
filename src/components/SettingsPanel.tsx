@@ -62,7 +62,7 @@ function SettingsPanel({
   if (showForDocuments) {
     return (
       <div className="mt-6 p-4 bg-slate-100 dark:bg-slate-700/30 rounded-xl">
-        <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">
+        <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
           Document processing will extract text, images, and visual content.
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -162,7 +162,7 @@ function SettingsPanel({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Model Size Selection — different options per engine */}
         <div>
-          <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
             <FileAudio className="w-4 h-4" />
             {isVoxtralApi ? 'Cloud Model' : isVoxtralLocal ? 'Local Model' : 'Model Size'}
           </label>
@@ -217,7 +217,7 @@ function SettingsPanel({
 
         {/* Language Selection */}
         <div>
-          <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
             <Languages className="w-4 h-4" />
             Language
           </label>
@@ -251,7 +251,7 @@ function SettingsPanel({
         {/* Translate to English Toggle */}
         {language !== 'en' && !isVoxtralApi && (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Globe className="w-4 h-4" />
               Translate to English
             </label>
@@ -273,7 +273,7 @@ function SettingsPanel({
         {/* Speaker Diarization — different display for Voxtral vs Whisper */}
         {isVoxtralApi ? (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Users className="w-4 h-4" />
               Speaker Recognition
             </label>
@@ -284,7 +284,7 @@ function SettingsPanel({
           </div>
         ) : (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Users className="w-4 h-4" />
               Speaker Recognition
             </label>
@@ -306,7 +306,7 @@ function SettingsPanel({
         {/* Number of Speakers — only for local engines with diarization */}
         {!isVoxtralApi && enableDiarization && (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Users className="w-4 h-4" />
               Number of Speakers
             </label>
@@ -330,7 +330,7 @@ function SettingsPanel({
         {/* Context Terms — Voxtral Cloud only */}
         {isVoxtralApi && (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <BookOpen className="w-4 h-4" />
               Context Terms
             </label>
@@ -349,7 +349,7 @@ function SettingsPanel({
         {/* Two-Pass Mode — Voxtral Cloud only, when language is set */}
         {isVoxtralApi && language !== 'auto' && (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Layers className="w-4 h-4" />
               Two-Pass Mode
             </label>
@@ -371,7 +371,7 @@ function SettingsPanel({
 
         {/* Word Timestamps Toggle */}
         <div>
-          <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
             <Clock className="w-4 h-4" />
             Word Timestamps
           </label>
@@ -391,7 +391,7 @@ function SettingsPanel({
 
         {/* Noise Reduction Toggle */}
         <div>
-          <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
             {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             Noise Reduction
           </label>
@@ -412,7 +412,7 @@ function SettingsPanel({
         {/* Speed Priority Toggle — only for Whisper */}
         {isWhisper && (
           <div>
-            <label className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Clock className="w-4 h-4" />
               Speed Priority
             </label>

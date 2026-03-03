@@ -125,9 +125,10 @@ function SpeakersView() {
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(speaker.speaker_id, speaker.name); }}
+                aria-label={`Delete speaker ${speaker.name}`}
                 className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           ))}

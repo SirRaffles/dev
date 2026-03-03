@@ -1,6 +1,8 @@
 #!/bin/bash
 # Backup the whisper transcription SQLite database.
 # Designed to run via launchd timer (daily).
+set -eo pipefail
+
 
 DB_PATH="$HOME/.whisper_transcription_jobs.db"
 BACKUP_DIR="$HOME/.whisper-backups"

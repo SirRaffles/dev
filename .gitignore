@@ -58,3 +58,7 @@ ENV/
 *.temp
 /tmp/
 /backend/downloads/
+
+# Test output
+/test-results/
+/playwright-report/

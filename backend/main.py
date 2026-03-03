@@ -157,8 +157,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_origins],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
 
 
@@ -182,13 +182,16 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # API key authentication middleware
 _api_key = os.environ.get("API_KEY")
+_allow_localhost_bypass = os.environ.get("ALLOW_LOCALHOST_BYPASS", "true").lower() == "true"
 
 
 def _check_api_key(request: Request) -> bool:
     """Check if the request carries a valid API key (timing-safe)."""
     key = request.headers.get("X-API-Key") or ""
     if not _api_key:
-        return True
+        # No API_KEY configured — allow only localhost requests
+        client_ip = request.client.host if request.client else ""
+        return client_ip in ("127.0.0.1", "::1")
     return hmac.compare_digest(key, _api_key)
 
 
@@ -196,14 +199,21 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
             return await call_next(request)
-        # Allow /health, /docs, /openapi.json through without blocking,
-        # but /health will check auth itself to decide response detail level.
-        if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
+        # Allow /health and root through without blocking;
+        # /health will check auth itself to decide response detail level.
+        if request.url.path in ("/health", "/"):
             request.state.authenticated = _check_api_key(request)
             return await call_next(request)
+        # Gate /docs and /openapi.json behind auth (disable via EXPOSE_DOCS=true)
+        _expose_docs = os.environ.get("EXPOSE_DOCS", "").lower() == "true"
+        if request.url.path in ("/docs", "/openapi.json"):
+            if _expose_docs or _check_api_key(request):
+                request.state.authenticated = _check_api_key(request)
+                return await call_next(request)
+            return JSONResponse(status_code=401, content={"detail": "Authentication required"})
         # Exempt localhost requests (local frontend on same machine)
         client_ip = request.client.host if request.client else ""
-        if client_ip in ("127.0.0.1", "::1"):
+        if _allow_localhost_bypass and client_ip in ("127.0.0.1", "::1"):
             request.state.authenticated = True
             return await call_next(request)
         if not _check_api_key(request):
@@ -216,7 +226,9 @@ app.add_middleware(APIKeyMiddleware)
 if _api_key:
     logger.info("API key authentication enabled")
 else:
-    logger.warning("WARNING: API_KEY not set — all endpoints are unauthenticated. Set API_KEY env var for production use.")
+    logger.warning("WARNING: API_KEY not set — only localhost requests allowed. Set API_KEY env var for production use.")
+if _allow_localhost_bypass:
+    logger.info("Localhost auth bypass: enabled (set ALLOW_LOCALHOST_BYPASS=false to disable)")
 
 # Include route modules
 app.include_router(models_router)

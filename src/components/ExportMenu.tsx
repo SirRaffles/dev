@@ -165,7 +165,7 @@ function ExportMenu({
 
         {showMenu && (
           <div
-            className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-700 rounded-lg shadow-xl border border-slate-200 dark:border-slate-600 py-2 z-10"
+            className="absolute right-0 mt-2 w-48 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-700 rounded-lg shadow-xl border border-slate-200 dark:border-slate-600 py-2 z-10"
             role="menu"
           >
             {formatEntries.map(([format, { label, ext }], index) => {
