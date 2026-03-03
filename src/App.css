@@ -20,6 +20,14 @@
   background: #64748b;
 }
 
+/* Thinner scrollbar on mobile */
+@media (max-width: 640px) {
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+}
+
 /* Animation for loading spinner */
 @keyframes spin {
   from {

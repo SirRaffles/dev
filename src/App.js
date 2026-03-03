@@ -592,22 +592,22 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
         {/* Header */}
         <header className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
-            <FileAudio className="w-10 h-10 text-blue-400" />
-            <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+            <FileAudio className="w-8 h-8 sm:w-10 sm:h-10 text-blue-400" />
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
               Whisper Transcription
             </h1>
           </div>
-          <p className="text-slate-400 text-lg">
+          <p className="text-slate-400 text-base sm:text-lg">
             High-quality transcription with speaker recognition
           </p>
         </header>
 
         {/* Input Section */}
-        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-700">
+        <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 border border-slate-700">
           {/* Mode Tabs */}
           <div className="flex gap-2 mb-6">
             <button
@@ -711,7 +711,7 @@ function App() {
           )}
 
           {/* Settings */}
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {/* Language Selection */}
             <div>
               <label className="flex items-center gap-2 text-sm text-slate-400 mb-2">
@@ -823,23 +823,23 @@ function App() {
 
         {/* Results */}
         {result && (
-          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-6 border border-slate-700">
+          <div className="bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-700">
             {/* Hidden audio element */}
             {audioUrl && (
               <audio ref={audioRef} src={audioUrl} preload="metadata" />
             )}
 
             {/* Results Header */}
-            <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
               <div className="flex items-center gap-3">
                 <CheckCircle className="w-6 h-6 text-green-400" />
                 <h2 className="text-xl font-semibold">Transcription Complete</h2>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {isEditing ? (
                   <button
                     onClick={saveEdits}
-                    className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
                   >
                     <Save className="w-4 h-4" />
                     Save
@@ -847,7 +847,7 @@ function App() {
                 ) : (
                   <button
                     onClick={() => setIsEditing(true)}
-                    className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
                   >
                     <Edit2 className="w-4 h-4" />
                     Edit
@@ -855,7 +855,7 @@ function App() {
                 )}
                 <button
                   onClick={copyToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg transition-colors ${
                     copied ? 'bg-green-600 text-white' : 'bg-slate-700 hover:bg-slate-600'
                   }`}
                 >
@@ -867,14 +867,14 @@ function App() {
                 <div className="relative" ref={exportMenuRef}>
                   <button
                     onClick={() => setShowExportMenu(!showExportMenu)}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
                   >
                     <Download className="w-4 h-4" />
                     Export
                   </button>
 
                   {showExportMenu && (
-                    <div className="absolute right-0 mt-2 w-48 bg-slate-700 rounded-lg shadow-xl border border-slate-600 py-2 z-10">
+                    <div className="absolute right-0 mt-2 w-48 max-w-[calc(100vw-2rem)] bg-slate-700 rounded-lg shadow-xl border border-slate-600 py-2 z-10">
                       {Object.entries(EXPORT_FORMATS).map(([format, { label, ext, icon: Icon }]) => (
                         <button
                           key={format}
@@ -895,10 +895,10 @@ function App() {
             {/* Audio Player */}
             {audioUrl && (
               <div className="mb-6 bg-slate-700/50 rounded-xl p-4">
-                <div className="flex items-center gap-4 mb-3">
+                <div className="flex items-center gap-2 sm:gap-4 mb-3 flex-wrap">
                   <button
                     onClick={skipBackward}
-                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                    className="p-3 sm:p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
                   >
                     <SkipBack className="w-5 h-5" />
                   </button>
@@ -910,7 +910,7 @@ function App() {
                   </button>
                   <button
                     onClick={skipForward}
-                    className="p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                    className="p-3 sm:p-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
                   >
                     <SkipForward className="w-5 h-5" />
                   </button>
@@ -974,19 +974,19 @@ function App() {
                             type="text"
                             value={tempSpeakerName}
                             onChange={(e) => setTempSpeakerName(e.target.value)}
-                            className="w-24 bg-slate-700 text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="w-32 sm:w-24 bg-slate-700 text-white px-2 py-1.5 sm:py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
                             autoFocus
                             onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
                           />
                           <button
                             onClick={saveSpeakerName}
-                            className="p-1 text-green-400 hover:text-green-300"
+                            className="p-2 sm:p-1 text-green-400 hover:text-green-300"
                           >
                             <Check className="w-4 h-4" />
                           </button>
                           <button
                             onClick={cancelEditingSpeaker}
-                            className="p-1 text-red-400 hover:text-red-300"
+                            className="p-2 sm:p-1 text-red-400 hover:text-red-300"
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -996,7 +996,7 @@ function App() {
                           <span className="text-sm">{speakerNames[speaker] || speaker}</span>
                           <button
                             onClick={() => startEditingSpeaker(speaker)}
-                            className="p-0.5 hover:text-purple-200 transition-colors"
+                            className="p-1.5 sm:p-0.5 hover:text-purple-200 transition-colors"
                           >
                             <Edit3 className="w-3 h-3" />
                           </button>
@@ -1022,8 +1022,8 @@ function App() {
 
               {showSearchPanel && (
                 <div className="mt-3 p-4 bg-slate-700/30 rounded-xl">
-                  <div className="flex flex-wrap gap-3 mb-3">
-                    <div className="flex-1 min-w-[200px]">
+                  <div className="flex flex-col sm:flex-row gap-3 mb-3">
+                    <div className="flex-1 min-w-0 sm:min-w-[200px]">
                       <label className="text-xs text-slate-400 mb-1 block">Search</label>
                       <input
                         type="text"
@@ -1034,7 +1034,7 @@ function App() {
                         className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:border-blue-400"
                       />
                     </div>
-                    <div className="flex-1 min-w-[200px]">
+                    <div className="flex-1 min-w-0 sm:min-w-[200px]">
                       <label className="text-xs text-slate-400 mb-1 block">Replace with</label>
                       <input
                         type="text"
@@ -1085,7 +1085,7 @@ function App() {
             <div className="flex items-center gap-2 mb-4 flex-wrap">
               <button
                 onClick={() => setShowTimestamps(!showTimestamps)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                className={`flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-lg transition-colors ${
                   showTimestamps ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300'
                 }`}
               >
@@ -1095,7 +1095,7 @@ function App() {
               {speakers.length > 0 && (
                 <button
                   onClick={() => setShowSpeakers(!showSpeakers)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                  className={`flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-lg transition-colors ${
                     showSpeakers ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300'
                   }`}
                 >
@@ -1106,7 +1106,7 @@ function App() {
             </div>
 
             {/* Transcription Text */}
-            <div className="bg-slate-900/50 rounded-xl p-4 max-h-[32rem] overflow-y-auto">
+            <div className="bg-slate-900/50 rounded-xl p-3 sm:p-4 max-h-[70vh] sm:max-h-[32rem] overflow-y-auto">
               {(showTimestamps || showSpeakers) && result.segments ? (
                 <div className="space-y-3">
                   {result.segments.map((segment, index) => {
@@ -1117,32 +1117,36 @@ function App() {
                       <div
                         key={index}
                         ref={el => segmentRefs.current[index] = el}
-                        className={`flex gap-3 p-2 rounded transition-all ${
+                        className={`flex flex-col md:flex-row gap-1 md:gap-3 p-2 rounded transition-all ${
                           isCurrentSegment ? 'bg-blue-500/20 border-l-2 border-blue-400' : ''
                         } ${isEdited ? 'bg-yellow-500/10' : ''}`}
                       >
-                        {showTimestamps && (
-                          <button
-                            onClick={() => seekToTime(segment.start)}
-                            className="text-blue-400 hover:text-blue-300 font-mono text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors"
-                          >
-                            [{formatTime(segment.start)}]
-                          </button>
-                        )}
-                        {showSpeakers && segment.speaker && (
-                          <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
-                            {segment.speaker}:
-                          </span>
+                        {(showTimestamps || (showSpeakers && segment.speaker)) && (
+                          <div className="flex items-center gap-2 md:contents">
+                            {showTimestamps && (
+                              <button
+                                onClick={() => seekToTime(segment.start)}
+                                className="text-blue-400 hover:text-blue-300 font-mono text-sm whitespace-nowrap pt-1 cursor-pointer transition-colors"
+                              >
+                                [{formatTime(segment.start)}]
+                              </button>
+                            )}
+                            {showSpeakers && segment.speaker && (
+                              <span className="text-purple-400 font-medium text-sm whitespace-nowrap pt-1">
+                                {segment.speaker}:
+                              </span>
+                            )}
+                          </div>
                         )}
                         {isEditing ? (
                           <input
                             type="text"
                             value={editedSegments[index] !== undefined ? editedSegments[index] : segment.text}
                             onChange={(e) => handleEditSegment(index, e.target.value)}
-                            className="flex-1 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400"
+                            className="flex-1 min-w-[60%] sm:min-w-0 bg-slate-700 text-slate-200 px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-blue-400"
                           />
                         ) : (
-                          <p className={`text-slate-200 leading-relaxed flex-1 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
+                          <p className={`text-slate-200 leading-relaxed flex-1 min-w-[60%] sm:min-w-0 ${searchResults.includes(index) ? 'bg-yellow-500/10 rounded px-1' : ''}`}>
                             {highlightText(editedSegments[index] !== undefined ? editedSegments[index] : segment.text, index)}
                             {searchResults.includes(index) && replaceText && (
                               <button
