@@ -2,8 +2,8 @@ import { test, expect, Page } from '@playwright/test';
 
 // Helper: navigate to a tab by clicking it
 async function navigateToTab(page: Page, tabName: string) {
-  // Use exact match to avoid matching filter buttons like "Pending Speakers"
-  await page.getByRole('button', { name: tabName, exact: true }).click();
+  // Nav tabs use role="tab" (ARIA tablist pattern)
+  await page.getByRole('tab', { name: tabName, exact: true }).click();
   // Wait for lazy-loaded content to appear
   await page.waitForTimeout(800);
 }
@@ -77,9 +77,8 @@ test.describe('Recordings View', () => {
   test('shows recordings list or empty state', async ({ page }) => {
     await page.goto('/');
     await navigateToTab(page, 'Recordings');
-    // Should show either recordings or the "No recordings found" message
-    const hasRecordings = await page.getByText('recordings').first().isVisible();
-    expect(hasRecordings).toBeTruthy();
+    // Should show the "Just Press Record" heading in the recordings view
+    await expect(page.getByText('Just Press Record')).toBeVisible({ timeout: 5000 });
   });
 
   test('refresh button is visible', async ({ page }) => {
@@ -141,16 +140,18 @@ test.describe('Speakers View', () => {
     // Find the speaker in the list
     const speakerText = page.getByText(name);
     if (await speakerText.isVisible()) {
-      // Find the delete (trash) button near this speaker
-      // Accept the confirm dialog
-      page.on('dialog', dialog => dialog.accept());
+      // Click the delete (trash) button for this speaker
+      const deleteButton = page.getByRole('button', { name: `Delete speaker ${name}` });
+      if (await deleteButton.isVisible()) {
+        await deleteButton.click();
+        await page.waitForTimeout(300);
 
-      // Click the trash icon button - it's a sibling of the speaker item
-      const speakerRow = page.locator('button, div').filter({ hasText: name }).first();
-      const trashButton = speakerRow.locator('button').last();
-      if (await trashButton.isVisible()) {
-        await trashButton.click();
-        await page.waitForTimeout(500);
+        // Confirm via the custom ConfirmModal
+        const confirmButton = page.getByRole('button', { name: 'Delete', exact: true });
+        if (await confirmButton.isVisible()) {
+          await confirmButton.click();
+          await page.waitForTimeout(500);
+        }
       }
     }
 

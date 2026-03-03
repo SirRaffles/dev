@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
@@ -14,6 +14,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'mobile', use: { ...devices['Pixel 7'] } },
   ],
   webServer: {
     command: 'npm run dev',

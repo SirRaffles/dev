@@ -1,5 +1,5 @@
 import { useEffect, RefObject } from 'react';
-import { AudioPlayerHandle } from '../components/AudioPlayer';
+import type { AudioPlayerHandle } from '../components/AudioPlayer';
 
 interface UseGlobalKeyboardOptions {
   audioRef: RefObject<AudioPlayerHandle | null>;

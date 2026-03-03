@@ -155,11 +155,10 @@ function App() {
   }, [detectProxy, refreshEngines]);
 
   // Auto-submit when Mac wakes with pending request
-  const startProcessingRef = useRef(startProcessing);
-  startProcessingRef.current = startProcessing;
+  const startProcessingRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (macState === 'awake' && hasPendingSubmit()) {
-      startProcessingRef.current();
+      startProcessingRef.current?.();
     }
   }, [macState, hasPendingSubmit]);
 
@@ -238,6 +237,9 @@ function App() {
       await transcription.transcribeYouTube(youtubeUrl, options);
     }
   };
+
+  // Keep ref in sync so the auto-submit effect always calls the latest version
+  startProcessingRef.current = startProcessing;
 
   const canStart = (inputMode === InputMode.FILE && (file || files.length > 0)) ||
                    (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
