@@ -17,7 +17,7 @@ RUN npm ci
 
 COPY public/ public/
 COPY src/ src/
-COPY tailwind.config.js postcss.config.js ./
+COPY index.html vite.config.js tsconfig.json tailwind.config.cjs postcss.config.cjs ./
 RUN npm run build
 
 
