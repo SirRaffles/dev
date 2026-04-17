@@ -11,9 +11,9 @@ export default function useGlobalKeyboard({ audioRef, enabled }: UseGlobalKeyboa
     if (!enabled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if ((e.target as HTMLElement)?.isContentEditable) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('button, [role="button"], a, [role="tab"], [role="menuitem"], input, textarea, select')) return;
+      if (target?.isContentEditable) return;
 
       const audio = audioRef.current;
       if (!audio) return;

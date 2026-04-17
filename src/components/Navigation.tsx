@@ -20,15 +20,13 @@ function Navigation({ activeTab, onTabChange }: NavigationProps) {
   return (
     <nav
       className="flex gap-1 bg-white/60 dark:bg-slate-800/60 backdrop-blur rounded-xl p-1 mb-6 border border-slate-200 dark:border-slate-700"
-      role="tablist"
-      aria-label="Main navigation"
+      aria-label="Main"
     >
       {TABS.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
-          role="tab"
-          aria-selected={activeTab === id}
-          aria-label={label}
+          type="button"
+          aria-current={activeTab === id ? 'page' : undefined}
           title={label}
           onClick={() => onTabChange(id)}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all flex-1 justify-center ${

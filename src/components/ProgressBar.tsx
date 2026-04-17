@@ -38,7 +38,7 @@ function ProgressBar({
     <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
       <div className="flex items-center gap-3 mb-4">
         <Loader2 className="w-5 h-5 animate-spin text-blue-400" aria-hidden="true" />
-        <span className="font-medium" aria-live="polite">{getMessage()}</span>
+        <span className="font-medium">{getMessage()}</span>
       </div>
       <div
         className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3"

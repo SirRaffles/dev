@@ -1,7 +1,6 @@
 // API configuration
 const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 export const API_URL = import.meta.env.VITE_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
-const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 // --- Interfaces ---
 
@@ -35,6 +34,7 @@ export interface Segment {
   end: number;
   text: string;
   speaker?: string;
+  paragraph_break?: boolean;
 }
 
 export interface BatchStatus {
@@ -44,6 +44,9 @@ export interface BatchStatus {
   total: number;
   completed: number;
   failed: number;
+  overall_status?: string;
+  overall_progress?: number;
+  job_ids?: string[];
 }
 
 export interface TranscriptionOptions {
@@ -83,19 +86,12 @@ export interface ExportFormatInfo {
 
 export async function checkWakeStatus(): Promise<WakeStatus | null> {
   try {
-    const response = await fetch(`${API_URL}/api/wake-status`, { headers: authHeaders() });
+    const response = await fetch(`${API_URL}/api/wake-status`);
     if (!response.ok) return null;
     return response.json();
   } catch {
     return null;
   }
-}
-
-// Helper to build headers with optional API key
-function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
-  if (API_KEY) headers['X-API-Key'] = API_KEY;
-  return headers;
 }
 
 // Supported languages
@@ -215,7 +211,7 @@ export async function fetchJobStatus(jobId: string, isMultiModal = false): Promi
     ? `${API_URL}/process/job/${jobId}`
     : `${API_URL}/job/${jobId}`;
 
-  const response = await fetch(endpoint, { headers: authHeaders() });
+  const response = await fetch(endpoint);
   if (!response.ok) {
     throw new Error('Failed to fetch job status');
   }
@@ -249,7 +245,6 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
 
   const response = await fetch(`${API_URL}/transcribe/file?${params}`, {
     method: 'POST',
-    headers: authHeaders(),
     body: formData,
   });
 
@@ -267,7 +262,6 @@ export async function submitMultiModalProcessing(file: File, options: Transcript
 
   const response = await fetch(`${API_URL}/process/multimodal`, {
     method: 'POST',
-    headers: authHeaders(),
     body: formData,
   });
 
@@ -279,7 +273,7 @@ export async function submitMultiModalProcessing(file: File, options: Transcript
   return response.json();
 }
 
-export async function submitYouTubeTranscription(url: string, options: TranscriptionOptions = {}): Promise<{ job_id: string }> {
+export async function submitYouTubeTranscription(url: string, options: TranscriptionOptions = {}): Promise<{ job_id: string; status?: string }> {
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
     model_size: options.modelSize || 'voxtral-mini-3b',
@@ -301,7 +295,7 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
   // Body contains YouTubeRequest fields
   const response = await fetch(`${API_URL}/transcribe/youtube?${params}`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url,
       language: options.language || 'auto',
@@ -324,7 +318,7 @@ export async function exportTranscript(jobId: string, format: string, isMultiMod
     ? `${API_URL}/process/job/${jobId}/export?format=${format}`
     : `${API_URL}/job/${jobId}/export?format=${format}`;
 
-  const response = await fetch(endpoint, { headers: authHeaders() });
+  const response = await fetch(endpoint);
 
   if (!response.ok) {
     throw new Error('Export failed');
@@ -336,7 +330,7 @@ export async function exportTranscript(jobId: string, format: string, isMultiMod
 export async function updateSegments(jobId: string, segments: Segment[]): Promise<{ status: string }> {
   const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ segments }),
   });
 
@@ -347,10 +341,10 @@ export async function updateSegments(jobId: string, segments: Segment[]): Promis
   return response.json();
 }
 
-export async function updateSpeakers(jobId: string, speakerMapping: Record<string, string>): Promise<{ status: string }> {
+export async function updateSpeakers(jobId: string, speakerMapping: Record<string, string>): Promise<{ status: string; segments?: Segment[]; speakers?: string[] }> {
   const response = await fetch(`${API_URL}/job/${jobId}/speakers`, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ speaker_mapping: speakerMapping }),
   });
 
@@ -362,7 +356,7 @@ export async function updateSpeakers(jobId: string, speakerMapping: Record<strin
 }
 
 export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
-  const response = await fetch(`${API_URL}/batch/${batchId}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/batch/${batchId}`);
 
   if (!response.ok) {
     throw new Error('Failed to fetch batch status');
@@ -374,7 +368,6 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
 export async function retryJob(jobId: string): Promise<{ job_id: string; status: string; retried_from: string }> {
   const response = await fetch(`${API_URL}/job/${jobId}/retry`, {
     method: 'POST',
-    headers: authHeaders(),
   });
 
   if (!response.ok) {
@@ -385,7 +378,7 @@ export async function retryJob(jobId: string): Promise<{ job_id: string; status:
   return response.json();
 }
 
-export async function submitBatchTranscription(files: File[], options: TranscriptionOptions = {}): Promise<{ batch_id: string }> {
+export async function submitBatchTranscription(files: File[], options: TranscriptionOptions = {}): Promise<{ batch_id: string; job_ids: string[] }> {
   const formData = new FormData();
   files.forEach(f => formData.append('files', f));
 
@@ -411,7 +404,6 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
 
   const response = await fetch(`${API_URL}/transcribe/batch?${params}`, {
     method: 'POST',
-    headers: authHeaders(),
     body: formData,
   });
 
@@ -522,14 +514,14 @@ export interface DeliverablesResponse {
 // --- Speaker API ---
 
 export async function fetchSpeakers(): Promise<Speaker[]> {
-  const response = await fetch(`${API_URL}/speakers`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/speakers`);
   if (!response.ok) throw new Error('Failed to fetch speakers');
   const data = await response.json();
   return data.speakers;
 }
 
 export async function fetchSpeaker(speakerId: string): Promise<SpeakerDetail> {
-  const response = await fetch(`${API_URL}/speakers/${speakerId}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/speakers/${speakerId}`);
   if (!response.ok) throw new Error('Failed to fetch speaker');
   return response.json();
 }
@@ -537,7 +529,7 @@ export async function fetchSpeaker(speakerId: string): Promise<SpeakerDetail> {
 export async function createSpeaker(name: string): Promise<{ speaker_id: string; name: string }> {
   const response = await fetch(`${API_URL}/speakers`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
   if (!response.ok) {
@@ -550,7 +542,6 @@ export async function createSpeaker(name: string): Promise<{ speaker_id: string;
 export async function deleteSpeaker(speakerId: string): Promise<void> {
   const response = await fetch(`${API_URL}/speakers/${speakerId}`, {
     method: 'DELETE',
-    headers: authHeaders(),
   });
   if (!response.ok) throw new Error('Failed to delete speaker');
 }
@@ -558,7 +549,7 @@ export async function deleteSpeaker(speakerId: string): Promise<void> {
 export async function updateSpeakerPersonality(speakerId: string, content: string): Promise<void> {
   const response = await fetch(`${API_URL}/speakers/${speakerId}/personality`, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
   });
   if (!response.ok) throw new Error('Failed to update personality');
@@ -569,13 +560,13 @@ export async function updateSpeakerPersonality(speakerId: string, content: strin
 export async function fetchCalls(limit = 50, offset = 0, status?: string): Promise<{ calls: CallMetadata[]; total: number }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.append('status', status);
-  const response = await fetch(`${API_URL}/calls?${params}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/calls?${params}`);
   if (!response.ok) throw new Error('Failed to fetch calls');
   return response.json();
 }
 
 export async function fetchCall(jobId: string): Promise<CallMetadata> {
-  const response = await fetch(`${API_URL}/calls/${jobId}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/calls/${jobId}`);
   if (!response.ok) throw new Error('Failed to fetch call');
   return response.json();
 }
@@ -583,7 +574,7 @@ export async function fetchCall(jobId: string): Promise<CallMetadata> {
 export async function registerCall(jobId: string, sourceType = 'upload', sourcePath?: string): Promise<RegisterCallResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/register`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source_type: sourceType, source_path: sourcePath }),
   });
   if (!response.ok) throw new Error('Failed to register call');
@@ -593,7 +584,6 @@ export async function registerCall(jobId: string, sourceType = 'upload', sourceP
 export async function identifySpeakers(jobId: string): Promise<IdentifySpeakersResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/identify-speakers`, {
     method: 'POST',
-    headers: authHeaders(),
   });
   if (!response.ok) {
     const err = await response.json();
@@ -610,7 +600,7 @@ export async function confirmSpeaker(
 ): Promise<ConfirmSpeakerResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/confirm-speaker`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ speaker_label: speakerLabel, speaker_name: speakerName, create_new: createNew }),
   });
   if (!response.ok) {
@@ -623,7 +613,7 @@ export async function confirmSpeaker(
 export async function setCallTitle(jobId: string, title: string): Promise<void> {
   const response = await fetch(`${API_URL}/calls/${jobId}/title`, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
   });
   if (!response.ok) throw new Error('Failed to set title');
@@ -632,7 +622,7 @@ export async function setCallTitle(jobId: string, title: string): Promise<void> 
 export async function assignContext(jobId: string, contextPath: string): Promise<void> {
   const response = await fetch(`${API_URL}/calls/${jobId}/context`, {
     method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ context_path: contextPath }),
   });
   if (!response.ok) throw new Error('Failed to assign context');
@@ -641,7 +631,6 @@ export async function assignContext(jobId: string, contextPath: string): Promise
 export async function generateDeliverables(jobId: string): Promise<GenerateDeliverablesResponse> {
   const response = await fetch(`${API_URL}/calls/${jobId}/generate-deliverables`, {
     method: 'POST',
-    headers: authHeaders(),
   });
   if (!response.ok) {
     const err = await response.json();
@@ -651,7 +640,7 @@ export async function generateDeliverables(jobId: string): Promise<GenerateDeliv
 }
 
 export async function fetchDeliverables(jobId: string): Promise<DeliverablesResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/deliverables`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/calls/${jobId}/deliverables`);
   if (!response.ok) throw new Error('Failed to fetch deliverables');
   return response.json();
 }
@@ -660,14 +649,14 @@ export async function fetchDeliverables(jobId: string): Promise<DeliverablesResp
 
 export async function fetchContextFolders(parentPath = ''): Promise<ContextFolder[]> {
   const params = parentPath ? `?path=${encodeURIComponent(parentPath)}` : '';
-  const response = await fetch(`${API_URL}/contexts${params}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/contexts${params}`);
   if (!response.ok) throw new Error('Failed to fetch contexts');
   const data = await response.json();
   return data.folders;
 }
 
 export async function fetchContextTree(): Promise<ContextTree[]> {
-  const response = await fetch(`${API_URL}/contexts/tree`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/contexts/tree`);
   if (!response.ok) throw new Error('Failed to fetch context tree');
   const data = await response.json();
   // data.tree is the root node; we want its children as the top-level list
@@ -677,7 +666,7 @@ export async function fetchContextTree(): Promise<ContextTree[]> {
 export async function createContextFolder(path: string, description = ''): Promise<{ path: string; description: string }> {
   const response = await fetch(`${API_URL}/contexts/folders`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, description }),
   });
   if (!response.ok) {
@@ -690,7 +679,6 @@ export async function createContextFolder(path: string, description = ''): Promi
 export async function fetchContextFile(path: string, filename: string): Promise<string> {
   const response = await fetch(
     `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
-    { headers: authHeaders() },
   );
   if (!response.ok) throw new Error('Failed to fetch file');
   const data = await response.json();
@@ -702,7 +690,7 @@ export async function updateContextFile(path: string, filename: string, content:
     `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
     {
       method: 'PUT',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     },
   );
@@ -713,7 +701,7 @@ export async function updateContextFile(path: string, filename: string, content:
 
 export async function fetchJPRRecordings(limit = 50, offset = 0): Promise<{ recordings: JPRRecording[]; total: number }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await fetch(`${API_URL}/jpr/recordings?${params}`, { headers: authHeaders() });
+  const response = await fetch(`${API_URL}/jpr/recordings?${params}`);
   if (!response.ok) throw new Error('Failed to fetch recordings');
   return response.json();
 }

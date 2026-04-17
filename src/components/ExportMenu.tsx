@@ -184,7 +184,7 @@ function ExportMenu({
                   {isThisExporting ? (
                     <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
                   ) : (
-                    <Icon className="w-4 h-4 text-slate-400" />
+                    <Icon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
                   )}
                   <span>{label}</span>
                   <span className="text-slate-500 text-sm ml-auto">{ext}</span>

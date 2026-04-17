@@ -113,24 +113,22 @@ function FileInput({
     return `Supports ${formats.join(', ')}`;
   };
 
+  const hasSelection = Boolean(file) || files.length > 0;
+
   return (
-    <div
+    <section
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onClick={handleClick}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-label={file ? `Selected file: ${file.name}. Click to change.` : 'Click or drag and drop files to upload'}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
+      aria-label="File upload drop zone"
       className={`relative border-2 border-dashed rounded-xl p-4 sm:p-8 text-center transition-all ${
         disabled
-          ? 'border-slate-300 bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50 cursor-not-allowed'
+          ? 'border-slate-300 bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50'
           : isDragging
-          ? 'border-blue-400 bg-blue-500/10 cursor-pointer'
-          : file
-          ? 'border-green-400 bg-green-500/10 cursor-pointer'
-          : 'border-slate-300 hover:border-slate-400 hover:bg-slate-100 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700/30 cursor-pointer'
+          ? 'border-blue-400 bg-blue-500/10'
+          : hasSelection
+          ? 'border-green-400 bg-green-500/10'
+          : 'border-slate-300 hover:border-slate-400 hover:bg-slate-100 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700/30'
       }`}
     >
       <input
@@ -147,31 +145,39 @@ function FileInput({
       {file ? (
         <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
           {getFileIcon(file.name)}
-          <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0" />
+          <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0" aria-hidden="true" />
           <span className="text-base sm:text-lg truncate max-w-[60vw] sm:max-w-none">{file.name}</span>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClear?.();
-            }}
-            className="flex-shrink-0 ml-1 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600"
-            aria-label="Remove selected file"
+            type="button"
+            onClick={() => onClear?.()}
+            className="flex-shrink-0 ml-1 p-2.5 min-w-[44px] min-h-[44px] rounded-full hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center"
+            aria-label={`Remove selected file ${file.name}`}
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={handleClick}
+            disabled={disabled}
+            className="px-3 py-2 text-sm rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-slate-600 dark:hover:bg-slate-500 min-w-[44px] min-h-[44px]"
+          >
+            Change file
           </button>
         </div>
       ) : files.length > 0 ? (
-        <div className="text-left" onClick={(e) => e.stopPropagation()}>
+        <div className="text-left">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Files className="w-5 h-5 text-green-400" />
+              <Files className="w-5 h-5 text-green-400" aria-hidden="true" />
               <span className="font-medium">{files.length} files selected</span>
             </div>
             <button
+              type="button"
               onClick={onClear}
-              className="p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600"
+              aria-label="Clear all selected files"
+              className="p-2.5 min-w-[44px] min-h-[44px] rounded-full hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
           <div className="max-h-40 overflow-y-auto space-y-2">
@@ -182,11 +188,12 @@ function FileInput({
                   <span className="text-sm truncate">{f.name}</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => handleRemoveFile(idx)}
-                  className="ml-2 p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-600"
-                  aria-label={"Remove " + f.name}
+                  className="ml-2 p-2.5 min-w-[44px] min-h-[44px] rounded hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center"
+                  aria-label={`Remove ${f.name}`}
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3 h-3" aria-hidden="true" />
                 </button>
               </div>
             ))}
@@ -194,16 +201,24 @@ function FileInput({
         </div>
       ) : (
         <>
-          <Upload className="w-12 h-12 mx-auto mb-4 text-slate-400" />
+          <Upload className="w-12 h-12 mx-auto mb-4 text-slate-500 dark:text-slate-400" aria-hidden="true" />
           <p className="text-lg mb-2">
             Drag & drop your file here
           </p>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
             {getSupportedFormatsText()}
           </p>
+          <button
+            type="button"
+            onClick={handleClick}
+            disabled={disabled}
+            className="px-5 py-2.5 text-sm font-medium rounded-lg bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 min-h-[44px]"
+          >
+            Browse files
+          </button>
         </>
       )}
-    </div>
+    </section>
   );
 }
 

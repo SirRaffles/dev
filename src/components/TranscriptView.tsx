@@ -273,7 +273,7 @@ function TranscriptView({
             <span className="text-slate-500 dark:text-slate-300">Language:</span>
             <span className="font-medium">{LANGUAGES[result.language] || result.language.toUpperCase()}</span>
             {result.language_probability && (
-              <span className="text-slate-400 text-sm">
+              <span className="text-slate-500 dark:text-slate-400 text-sm">
                 ({(result.language_probability * 100).toFixed(1)}%)
               </span>
             )}
@@ -310,29 +310,37 @@ function TranscriptView({
                       onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
                     />
                     <button
+                      type="button"
                       onClick={saveSpeakerName}
                       disabled={isSavingSpeaker}
-                      className="p-1 text-green-400 hover:text-green-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Save speaker name"
+                      className="p-2.5 min-w-[44px] min-h-[44px] text-green-500 hover:text-green-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                     >
-                      {isSavingSpeaker ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      {isSavingSpeaker
+                        ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                        : <Check className="w-4 h-4" aria-hidden="true" />}
                     </button>
                     <button
+                      type="button"
                       onClick={cancelEditingSpeaker}
                       disabled={isSavingSpeaker}
-                      className="p-1 text-red-400 hover:text-red-300 disabled:opacity-50"
+                      aria-label="Cancel rename"
+                      className="p-2.5 min-w-[44px] min-h-[44px] text-red-500 hover:text-red-400 disabled:opacity-50 flex items-center justify-center"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-4 h-4" aria-hidden="true" />
                     </button>
-                    {speakerError && <span className="text-red-400 text-xs ml-1">{speakerError}</span>}
+                    {speakerError && <span role="alert" className="text-red-400 text-xs ml-1">{speakerError}</span>}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 bg-purple-500/20 text-purple-300 rounded-lg px-3 py-1">
                     <span className="text-sm">{speakerNames[speaker] || speaker}</span>
                     <button
+                      type="button"
                       onClick={() => startEditingSpeaker(speaker)}
-                      className="p-0.5 hover:text-purple-200 transition-colors"
+                      aria-label={`Rename speaker ${speakerNames[speaker] || speaker}`}
+                      className="p-2.5 min-w-[44px] min-h-[44px] hover:text-purple-200 transition-colors flex items-center justify-center"
                     >
-                      <Edit3 className="w-3 h-3" />
+                      <Edit3 className="w-3 h-3" aria-hidden="true" />
                     </button>
                   </div>
                 )}
@@ -422,7 +430,7 @@ function TranscriptView({
             </button>
             {searchResults.length > 0 && (
               <>
-                <span className="text-sm text-slate-400">
+                <span className="text-sm text-slate-500 dark:text-slate-400">
                   {searchResults.length} match{searchResults.length !== 1 ? 'es' : ''} found
                 </span>
                 <button
@@ -438,7 +446,7 @@ function TranscriptView({
             {searchQuery && (
               <button
                 onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); setReplaceError(null); }}
-                className="flex items-center gap-1 px-2 py-2 text-slate-400 hover:text-slate-300 transition-colors"
+                className="flex items-center gap-1 px-2 py-2 text-slate-500 dark:text-slate-400 hover:text-slate-300 transition-colors"
               >
                 <X className="w-4 h-4" />
                 Clear

@@ -2,8 +2,6 @@ import { useState, useCallback } from 'react';
 import { API_URL } from '../utils/api';
 import type { HealthResponse } from '../utils/api';
 
-const API_KEY = import.meta.env.VITE_API_KEY || '';
-
 interface FallbackSettings {
   engine: string;
   modelSize: string;
@@ -31,9 +29,7 @@ export default function useEngineAvailability(): UseEngineAvailabilityReturn {
   // Returns settings overrides if fallback is needed, or null if engines are fine
   const refreshEngines = useCallback(async (): Promise<FallbackSettings | null> => {
     try {
-      const headers: Record<string, string> = {};
-      if (API_KEY) headers['X-API-Key'] = API_KEY;
-      const res = await fetch(`${API_URL}/health`, { headers });
+      const res = await fetch(`${API_URL}/health`);
       const data: HealthResponse = await res.json();
       setBackendError(null);
       if (data.voxtral_available) setVoxtralAvailable(true);

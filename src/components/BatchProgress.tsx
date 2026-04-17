@@ -2,13 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, AlertCircle, Loader2, Clock, FileText, Layers } from 'lucide-react';
 import { API_URL } from '../utils/api';
 
-const API_KEY = import.meta.env.VITE_API_KEY || '';
-function authHeaders(): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (API_KEY) h['X-API-Key'] = API_KEY;
-  return h;
-}
-
 const STATUS_ICONS: Record<string, React.ReactNode> = {
   completed: <CheckCircle className="w-4 h-4 text-green-400" />,
   failed: <AlertCircle className="w-4 h-4 text-red-400" />,
@@ -46,7 +39,7 @@ export default function BatchProgress({ batchId, onSelectJob }: BatchProgressPro
   const fetchStatus = useCallback(async () => {
     if (!batchId) return;
     try {
-      const resp = await fetch(`${API_URL}/batch/${batchId}`, { headers: authHeaders() });
+      const resp = await fetch(`${API_URL}/batch/${batchId}`);
       if (!resp.ok) return;
       const data = await resp.json();
       setBatchData(data);
@@ -57,22 +50,15 @@ export default function BatchProgress({ batchId, onSelectJob }: BatchProgressPro
     }
   }, [batchId]);
 
-  // Poll every 3 seconds while the batch is active
   useEffect(() => {
     if (!batchId) return;
     setDone(false);
     setBatchData(null);
     fetchStatus();
-    const interval = setInterval(() => {
-      if (!done) fetchStatus();
-    }, 3000);
+    if (done) return;
+    const interval = setInterval(fetchStatus, 3000);
     return () => clearInterval(interval);
-  }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Stop polling when done
-  useEffect(() => {
-    if (done) fetchStatus(); // one final fetch to get the definitive state
-  }, [done]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [batchId, done, fetchStatus]);
 
   if (!batchId || !batchData) return null;
 

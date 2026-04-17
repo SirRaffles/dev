@@ -14,12 +14,20 @@ export function usePollingJob(fetchStatusFn) {
 
   const pollIntervalRef = useRef(null);
   const pollCountRef = useRef(0);
+  const lastProgressRef = useRef(-1);
+  const stagnantCountRef = useRef(0);
 
+  // Exponential backoff when progress hasn't advanced for 3+ polls.
+  // Caps at 10s. Resets to 1s whenever progress moves.
   const getPollInterval = () => {
-    const count = pollCountRef.current;
-    if (count < 10) return 1000;   // First 10s: every 1s
-    if (count < 30) return 2000;   // Next 40s: every 2s
-    return 5000;                    // After that: every 5s
+    if (stagnantCountRef.current <= 3) {
+      const count = pollCountRef.current;
+      if (count < 10) return 1000;
+      if (count < 30) return 2000;
+      return 3000;
+    }
+    const exp = Math.min(stagnantCountRef.current - 3, 4);
+    return Math.min(1000 * Math.pow(2, exp), 10000);
   };
 
   const stopPolling = useCallback(() => {
@@ -33,7 +41,15 @@ export function usePollingJob(fetchStatusFn) {
     try {
       const data = await fetchStatusFn(id);
 
-      setProgress(data.progress || 0);
+      const nextProgress = data.progress || 0;
+      if (nextProgress !== lastProgressRef.current) {
+        lastProgressRef.current = nextProgress;
+        stagnantCountRef.current = 0;
+      } else {
+        stagnantCountRef.current += 1;
+      }
+
+      setProgress(nextProgress);
       setProgressMessage(data.progress_message || '');
 
       if (data.status === 'completed') {
@@ -58,6 +74,8 @@ export function usePollingJob(fetchStatusFn) {
   useEffect(() => {
     if (jobId && isActive) {
       pollCountRef.current = 0;
+      lastProgressRef.current = -1;
+      stagnantCountRef.current = 0;
 
       const schedulePoll = () => {
         pollIntervalRef.current = setTimeout(async () => {
