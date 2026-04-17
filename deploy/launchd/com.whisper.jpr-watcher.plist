@@ -7,12 +7,12 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/davidmarchesseau/Development/whisper-transcription-app/scripts/start-watcher-with-health-check.sh</string>
+        <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/scripts/start-watcher-with-health-check.sh</string>
         <string>--scan-existing</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/davidmarchesseau/Development/whisper-transcription-app/watcher</string>
+    <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/watcher</string>
 
     <key>EnvironmentVariables</key>
     <dict>

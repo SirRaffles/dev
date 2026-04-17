@@ -241,6 +241,17 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     }
 
 
+def _update_job(job, progress: int = None, message: str = None, status: str = None):
+    """Update job fields and persist to DB so progress survives restarts."""
+    if status is not None:
+        job.status = status
+    if progress is not None:
+        job.progress = progress
+    if message is not None:
+        job.progress_message = message
+    state.jobs.update(job)
+
+
 def _run_transcription_sync(job_id: str, audio_path: str, settings: TranscriptionSettings):
     """Synchronous transcription worker - runs in thread pool."""
     job = state.jobs.get(job_id)
@@ -256,37 +267,37 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         if not state._voxtral_available:
             job.status = "failed"
             job.error = "Voxtral API not configured. Set MISTRAL_API_KEY environment variable."
+            state.jobs.update(job)
             return
     elif use_voxtral_local:
         if not state._voxtral_local_available:
             job.status = "failed"
             job.error = "Voxtral Local not available. Install with: pip install mlx-audio"
+            state.jobs.update(job)
             return
     elif use_parakeet:
         if not state._parakeet_available:
             job.status = "failed"
             job.error = "Parakeet MLX not installed. Install with: pip install parakeet-mlx"
+            state.jobs.update(job)
             return
     elif not state.whisper_model_ready:
         job.status = "failed"
         job.error = "MLX-Whisper not configured. Please restart the server."
+        state.jobs.update(job)
         return
 
     try:
-        job.status = "processing"
-        job.progress = 5
-        job.progress_message = "Starting transcription..."
+        _update_job(job, progress=5, message="Starting transcription...", status="processing")
 
         if settings.enable_noise_reduction:
-            job.progress = 8
-            job.progress_message = "Applying noise reduction..."
+            _update_job(job, progress=8, message="Applying noise reduction...")
             cleaned_audio_path = audio_path.replace(".wav", "_cleaned.wav")
             audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
 
         # === VOXTRAL API ENGINE ===
         if use_voxtral:
-            job.progress = 15
-            job.progress_message = "Transcribing with Voxtral (cloud API)..."
+            _update_job(job, progress=15, message="Transcribing with Voxtral (cloud API)...")
 
             result = transcribe_with_voxtral(audio_path, settings)
 
@@ -312,11 +323,10 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                         "Skipping speaker identification."
                     )
                 else:
-                    job.progress = 10
                     if settings.num_speakers:
-                        job.progress_message = f"Identifying {settings.num_speakers} speakers..."
+                        _update_job(job, progress=10, message=f"Identifying {settings.num_speakers} speakers...")
                     else:
-                        job.progress_message = "Identifying speakers..."
+                        _update_job(job, progress=10, message="Identifying speakers...")
                     try:
                         speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
                     except Exception as e:
@@ -324,12 +334,10 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                         speakers = []
                     job.speakers = speakers
 
-            job.progress = 20
-
             if use_voxtral_local:
                 if settings.word_timestamps:
                     logger.warning("word_timestamps=True ignored: Voxtral Local does not support word-level timestamps")
-                job.progress_message = "Transcribing with Voxtral Local (~4% WER)..."
+                _update_job(job, progress=20, message="Transcribing with Voxtral Local (~4% WER)...")
                 logger.info("Using Voxtral Local for transcription")
 
                 result = transcribe_with_voxtral_local(audio_path, settings)
@@ -343,7 +351,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             elif use_parakeet:
                 if settings.word_timestamps:
                     logger.warning("word_timestamps=True ignored: Parakeet does not support word-level timestamps")
-                job.progress_message = "Transcribing with Parakeet MLX (60x real-time)..."
+                _update_job(job, progress=20, message="Transcribing with Parakeet MLX (60x real-time)...")
                 logger.info("Using Parakeet MLX for English transcription")
 
                 result = transcribe_with_parakeet(audio_path)
@@ -357,7 +365,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             else:
                 import mlx_whisper
 
-                job.progress_message = "Transcribing with MLX-Whisper (GPU-accelerated)..."
+                _update_job(job, progress=20, message="Transcribing with MLX-Whisper (GPU-accelerated)...")
 
                 language = None if settings.language == "auto" else settings.language
 
@@ -411,8 +419,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
                 transcription_segments = stitch_speaker_turns(transcription_segments)
 
-        job.progress = 70
-        job.progress_message = "Processing segments..."
+        _update_job(job, progress=70, message="Processing segments...")
 
         # Apply text normalization (whitespace, punctuation, stutter removal)
         normalize_segments(transcription_segments)
@@ -425,15 +432,11 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 seg["text"].strip() for seg in transcription_segments if seg.get("text")
             )
 
-        job.progress = 90
-        job.progress_message = "Finalizing..."
+        _update_job(job, progress=90, message="Finalizing...")
 
         job.segments = transcription_segments
         job.result = full_text
-        job.progress = 100
-        job.progress_message = "Complete!"
-        job.status = "completed"
-        state.jobs.update(job)
+        _update_job(job, progress=100, message="Complete!", status="completed")
         model_name = "Voxtral API" if use_voxtral else ("Voxtral Local" if use_voxtral_local else ("Parakeet MLX" if use_parakeet else "MLX-Whisper"))
         logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
 

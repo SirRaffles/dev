@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/davidmarchesseau/Development/whisper-transcription-app/backend/venv/bin/uvicorn</string>
+        <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend/venv/bin/uvicorn</string>
         <string>main:app</string>
         <string>--host</string>
         <string>0.0.0.0</string>
@@ -16,7 +16,7 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/davidmarchesseau/Development/whisper-transcription-app/backend</string>
+    <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -25,7 +25,7 @@
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>PATH</key>
-        <string>/Users/davidmarchesseau/Development/whisper-transcription-app/backend/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 
     <!-- Start automatically on login -->

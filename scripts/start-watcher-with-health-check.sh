@@ -20,7 +20,7 @@ BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
 BACKEND_HEALTH_ENDPOINT="$BACKEND_URL/health"
 
 # Timing configuration
-MAX_WAIT_SECONDS=300  # Maximum time to wait for backend (5 minutes)
+MAX_WAIT_SECONDS=600  # Maximum time to wait for backend (10 minutes)
 CHECK_INTERVAL=10     # Seconds between health checks
 STARTUP_DELAY=30      # Initial delay before first check (let system settle)
 

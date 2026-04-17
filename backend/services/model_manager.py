@@ -303,11 +303,12 @@ class ModelManager:
 
             logger.info("Loading pyannote diarization pipeline (singleton)")
 
-            # Set HF_TOKEN in env — pyannote reads it from there.
-            # Passing use_auth_token= can cause errors with newer huggingface_hub.
+            # pyannote 4.x uses token= parameter (not use_auth_token=).
+            # Also set HF_TOKEN in env as fallback.
             os.environ["HF_TOKEN"] = hf_token
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
+                token=hf_token,
             )
 
             device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")

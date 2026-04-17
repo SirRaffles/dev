@@ -34,16 +34,13 @@ def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List
 
         # Load pipeline if not already cached
         if not manager.is_loaded(ModelName.DIARIZATION):
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're called from a thread (ThreadPoolExecutor), create a new loop
-                _loop = asyncio.new_event_loop()
-                try:
-                    loaded = _loop.run_until_complete(manager.load_diarization())
-                finally:
-                    _loop.close()
-            else:
-                loaded = loop.run_until_complete(manager.load_diarization())
+            # Always create a fresh event loop — this runs in a ThreadPoolExecutor
+            # worker thread which has no event loop by default.
+            _loop = asyncio.new_event_loop()
+            try:
+                loaded = _loop.run_until_complete(manager.load_diarization())
+            finally:
+                _loop.close()
 
             if not loaded:
                 logger.warning("Diarization model failed to load")

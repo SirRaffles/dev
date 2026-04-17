@@ -16,7 +16,7 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/davidmarchesseau/Development/whisper-transcription-app</string>
+    <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app</string>
 
     <key>EnvironmentVariables</key>
     <dict>

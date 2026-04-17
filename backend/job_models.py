@@ -55,6 +55,7 @@ class JobStore:
         except OSError:
             pass
         self._load_active_jobs()
+        self._cleanup_stale_pending()
 
     def _get_connection(self):
         return sqlite3.connect(self.db_path, check_same_thread=False)
@@ -92,6 +93,19 @@ class JobStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN youtube_url TEXT")
             conn.commit()
         logger.info(f"Job store initialized at {self.db_path}")
+
+    def _cleanup_stale_pending(self):
+        """Mark jobs stuck in pending/processing for >24h as failed on startup."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE jobs SET status='failed', error='stale: auto-cleaned on startup', "
+                "updated_at=CURRENT_TIMESTAMP "
+                "WHERE status IN ('pending', 'processing') "
+                "AND updated_at < datetime('now', '-24 hours')"
+            )
+            if cursor.rowcount:
+                conn.commit()
+                logger.info("Cleaned %d stale pending/processing jobs", cursor.rowcount)
 
     def _load_active_jobs(self):
         with self._get_connection() as conn:

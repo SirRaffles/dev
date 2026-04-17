@@ -3,6 +3,13 @@ const isLocalDev = window.location.hostname === 'localhost' || window.location.h
 export const API_URL = import.meta.env.VITE_API_URL || (isLocalDev ? 'http://localhost:8000' : '');
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 
+// Fetch with timeout — prevents requests from hanging indefinitely
+function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 // --- Interfaces ---
 
 export interface WakeStatus {
@@ -83,7 +90,7 @@ export interface ExportFormatInfo {
 
 export async function checkWakeStatus(): Promise<WakeStatus | null> {
   try {
-    const response = await fetch(`${API_URL}/api/wake-status`, { headers: authHeaders() });
+    const response = await fetchWithTimeout(`${API_URL}/api/wake-status`, { headers: authHeaders() }, 10000);
     if (!response.ok) return null;
     return response.json();
   } catch {
@@ -215,7 +222,7 @@ export async function fetchJobStatus(jobId: string, isMultiModal = false): Promi
     ? `${API_URL}/process/job/${jobId}`
     : `${API_URL}/job/${jobId}`;
 
-  const response = await fetch(endpoint, { headers: authHeaders() });
+  const response = await fetchWithTimeout(endpoint, { headers: authHeaders() });
   if (!response.ok) {
     throw new Error('Failed to fetch job status');
   }
@@ -247,11 +254,11 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     params.append('context_terms', options.contextTerms);
   }
 
-  const response = await fetch(`${API_URL}/transcribe/file?${params}`, {
+  const response = await fetchWithTimeout(`${API_URL}/transcribe/file?${params}`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  });
+  }, 600000);
 
   if (!response.ok) {
     const errorData = await response.json();
@@ -265,11 +272,11 @@ export async function submitMultiModalProcessing(file: File, options: Transcript
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch(`${API_URL}/process/multimodal`, {
+  const response = await fetchWithTimeout(`${API_URL}/process/multimodal`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  });
+  }, 600000);
 
   if (!response.ok) {
     const errorData = await response.json();
@@ -299,7 +306,7 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
   }
 
   // Body contains YouTubeRequest fields
-  const response = await fetch(`${API_URL}/transcribe/youtube?${params}`, {
+  const response = await fetchWithTimeout(`${API_URL}/transcribe/youtube?${params}`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -309,7 +316,7 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
       enable_noise_reduction: options.enableNoiseReduction ?? false,
       translate_to_english: options.translateToEnglish ?? false,
     }),
-  });
+  }, 600000);
 
   if (!response.ok) {
     const errorData = await response.json();
@@ -324,7 +331,7 @@ export async function exportTranscript(jobId: string, format: string, isMultiMod
     ? `${API_URL}/process/job/${jobId}/export?format=${format}`
     : `${API_URL}/job/${jobId}/export?format=${format}`;
 
-  const response = await fetch(endpoint, { headers: authHeaders() });
+  const response = await fetchWithTimeout(endpoint, { headers: authHeaders() }, 60000);
 
   if (!response.ok) {
     throw new Error('Export failed');
@@ -334,7 +341,7 @@ export async function exportTranscript(jobId: string, format: string, isMultiMod
 }
 
 export async function updateSegments(jobId: string, segments: Segment[]): Promise<{ status: string }> {
-  const response = await fetch(`${API_URL}/job/${jobId}/segments`, {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/segments`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ segments }),
@@ -348,7 +355,7 @@ export async function updateSegments(jobId: string, segments: Segment[]): Promis
 }
 
 export async function updateSpeakers(jobId: string, speakerMapping: Record<string, string>): Promise<{ status: string }> {
-  const response = await fetch(`${API_URL}/job/${jobId}/speakers`, {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/speakers`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ speaker_mapping: speakerMapping }),
@@ -362,7 +369,7 @@ export async function updateSpeakers(jobId: string, speakerMapping: Record<strin
 }
 
 export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
-  const response = await fetch(`${API_URL}/batch/${batchId}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/batch/${batchId}`, { headers: authHeaders() });
 
   if (!response.ok) {
     throw new Error('Failed to fetch batch status');
@@ -372,7 +379,7 @@ export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
 }
 
 export async function retryJob(jobId: string): Promise<{ job_id: string; status: string; retried_from: string }> {
-  const response = await fetch(`${API_URL}/job/${jobId}/retry`, {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/retry`, {
     method: 'POST',
     headers: authHeaders(),
   });
@@ -409,11 +416,11 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
     params.append('context_terms', options.contextTerms);
   }
 
-  const response = await fetch(`${API_URL}/transcribe/batch?${params}`, {
+  const response = await fetchWithTimeout(`${API_URL}/transcribe/batch?${params}`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  });
+  }, 600000);
 
   if (!response.ok) {
     const errorData = await response.json();
@@ -522,20 +529,20 @@ export interface DeliverablesResponse {
 // --- Speaker API ---
 
 export async function fetchSpeakers(): Promise<Speaker[]> {
-  const response = await fetch(`${API_URL}/speakers`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/speakers`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch speakers');
   const data = await response.json();
   return data.speakers;
 }
 
 export async function fetchSpeaker(speakerId: string): Promise<SpeakerDetail> {
-  const response = await fetch(`${API_URL}/speakers/${speakerId}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/speakers/${speakerId}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch speaker');
   return response.json();
 }
 
 export async function createSpeaker(name: string): Promise<{ speaker_id: string; name: string }> {
-  const response = await fetch(`${API_URL}/speakers`, {
+  const response = await fetchWithTimeout(`${API_URL}/speakers`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name }),
@@ -548,7 +555,7 @@ export async function createSpeaker(name: string): Promise<{ speaker_id: string;
 }
 
 export async function deleteSpeaker(speakerId: string): Promise<void> {
-  const response = await fetch(`${API_URL}/speakers/${speakerId}`, {
+  const response = await fetchWithTimeout(`${API_URL}/speakers/${speakerId}`, {
     method: 'DELETE',
     headers: authHeaders(),
   });
@@ -556,7 +563,7 @@ export async function deleteSpeaker(speakerId: string): Promise<void> {
 }
 
 export async function updateSpeakerPersonality(speakerId: string, content: string): Promise<void> {
-  const response = await fetch(`${API_URL}/speakers/${speakerId}/personality`, {
+  const response = await fetchWithTimeout(`${API_URL}/speakers/${speakerId}/personality`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ content }),
@@ -569,19 +576,19 @@ export async function updateSpeakerPersonality(speakerId: string, content: strin
 export async function fetchCalls(limit = 50, offset = 0, status?: string): Promise<{ calls: CallMetadata[]; total: number }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.append('status', status);
-  const response = await fetch(`${API_URL}/calls?${params}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/calls?${params}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch calls');
   return response.json();
 }
 
 export async function fetchCall(jobId: string): Promise<CallMetadata> {
-  const response = await fetch(`${API_URL}/calls/${jobId}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch call');
   return response.json();
 }
 
 export async function registerCall(jobId: string, sourceType = 'upload', sourcePath?: string): Promise<RegisterCallResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/register`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/register`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ source_type: sourceType, source_path: sourcePath }),
@@ -591,7 +598,7 @@ export async function registerCall(jobId: string, sourceType = 'upload', sourceP
 }
 
 export async function identifySpeakers(jobId: string): Promise<IdentifySpeakersResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/identify-speakers`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/identify-speakers`, {
     method: 'POST',
     headers: authHeaders(),
   });
@@ -608,7 +615,7 @@ export async function confirmSpeaker(
   speakerName: string,
   createNew = false,
 ): Promise<ConfirmSpeakerResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/confirm-speaker`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/confirm-speaker`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ speaker_label: speakerLabel, speaker_name: speakerName, create_new: createNew }),
@@ -621,7 +628,7 @@ export async function confirmSpeaker(
 }
 
 export async function setCallTitle(jobId: string, title: string): Promise<void> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/title`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/title`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ title }),
@@ -630,7 +637,7 @@ export async function setCallTitle(jobId: string, title: string): Promise<void> 
 }
 
 export async function assignContext(jobId: string, contextPath: string): Promise<void> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/context`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/context`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ context_path: contextPath }),
@@ -639,7 +646,7 @@ export async function assignContext(jobId: string, contextPath: string): Promise
 }
 
 export async function generateDeliverables(jobId: string): Promise<GenerateDeliverablesResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/generate-deliverables`, {
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/generate-deliverables`, {
     method: 'POST',
     headers: authHeaders(),
   });
@@ -651,7 +658,7 @@ export async function generateDeliverables(jobId: string): Promise<GenerateDeliv
 }
 
 export async function fetchDeliverables(jobId: string): Promise<DeliverablesResponse> {
-  const response = await fetch(`${API_URL}/calls/${jobId}/deliverables`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/calls/${jobId}/deliverables`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch deliverables');
   return response.json();
 }
@@ -660,14 +667,14 @@ export async function fetchDeliverables(jobId: string): Promise<DeliverablesResp
 
 export async function fetchContextFolders(parentPath = ''): Promise<ContextFolder[]> {
   const params = parentPath ? `?path=${encodeURIComponent(parentPath)}` : '';
-  const response = await fetch(`${API_URL}/contexts${params}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/contexts${params}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch contexts');
   const data = await response.json();
   return data.folders;
 }
 
 export async function fetchContextTree(): Promise<ContextTree[]> {
-  const response = await fetch(`${API_URL}/contexts/tree`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/contexts/tree`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch context tree');
   const data = await response.json();
   // data.tree is the root node; we want its children as the top-level list
@@ -675,7 +682,7 @@ export async function fetchContextTree(): Promise<ContextTree[]> {
 }
 
 export async function createContextFolder(path: string, description = ''): Promise<{ path: string; description: string }> {
-  const response = await fetch(`${API_URL}/contexts/folders`, {
+  const response = await fetchWithTimeout(`${API_URL}/contexts/folders`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ path, description }),
@@ -713,7 +720,7 @@ export async function updateContextFile(path: string, filename: string, content:
 
 export async function fetchJPRRecordings(limit = 50, offset = 0): Promise<{ recordings: JPRRecording[]; total: number }> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await fetch(`${API_URL}/jpr/recordings?${params}`, { headers: authHeaders() });
+  const response = await fetchWithTimeout(`${API_URL}/jpr/recordings?${params}`, { headers: authHeaders() });
   if (!response.ok) throw new Error('Failed to fetch recordings');
   return response.json();
 }

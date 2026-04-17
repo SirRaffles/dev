@@ -108,7 +108,7 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-sed -e "s|/Users/davidmarchesseau/Development/whisper-transcription-app|$PROJECT_DIR|g" \
+sed -e "s|/Users/davidmarchesseau/Development/apps/whisper-transcription-app|$PROJECT_DIR|g" \
     -e "s|__HF_TOKEN_PLACEHOLDER__|${HF_TOKEN}|g" \
     "$PLIST_SRC" > "$LAUNCH_AGENTS_DIR/$PLIST_NAME"
 
