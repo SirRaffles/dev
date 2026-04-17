@@ -17,7 +17,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks,
 from fastapi.responses import StreamingResponse
 
 from config import (
-    SUPPORTED_LANGUAGES, MLX_MODELS, ALLOWED_EXTENSIONS,
+    SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS, ALLOWED_EXTENSIONS,
     ALLOWED_AUDIO_EXTENSIONS, VOXTRAL_LOCAL_MODELS, VOXTRAL_LOCAL_LANGUAGES,
 )
 from job_models import (
@@ -26,13 +26,19 @@ from job_models import (
 )
 from services.audio import extract_audio
 from services.youtube import download_youtube_audio, extract_video_id, get_youtube_transcript
-from services.transcription import select_optimal_model, transcribe_audio
+from services.transcription import select_optimal_model, transcribe_audio, is_parakeet_key
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import state
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# All accepted keys when engine="whisper" — MLX Whisper variants plus every
+# Parakeet variant (including the legacy "parakeet" alias).
+_WHISPER_ENGINE_MODEL_KEYS: frozenset[str] = frozenset(
+    set(MLX_MODELS.keys()) | set(PARAKEET_MODELS.keys()) | {"parakeet"}
+)
 
 
 def _validate_file_magic(file_path: str, expected_ext: str) -> bool:
@@ -103,7 +109,7 @@ async def transcribe_file(
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
     enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
-    model_size: str = Query("voxtral-mini-3b", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3, voxtral-mini-3b, voxtral-mini-3b-4bit"),
+    model_size: str = Query("voxtral-mini-3b", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3, parakeet, parakeet-en-v2, parakeet-multi-v3, voxtral-mini-3b, voxtral-mini-3b-4bit"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language -> English)"),
     speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
@@ -138,8 +144,11 @@ async def transcribe_file(
             )
     elif engine == "whisper":
         effective_model = select_optimal_model(language, model_size, speed_priority)
-        if effective_model not in MLX_MODELS and effective_model != "parakeet":
-            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
+            )
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -266,8 +275,11 @@ async def transcribe_youtube(
             )
     elif engine == "whisper":
         effective_model = select_optimal_model(request.language, model_size, speed_priority)
-        if effective_model not in MLX_MODELS and effective_model != "parakeet":
-            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
+            )
 
     if request.language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -418,8 +430,11 @@ async def transcribe_batch(
             )
     elif engine == "whisper":
         effective_model = select_optimal_model(language, model_size, speed_priority)
-        if effective_model not in MLX_MODELS and effective_model != "parakeet":
-            raise HTTPException(status_code=400, detail=f"Invalid model size. Use: {list(MLX_MODELS.keys())}")
+        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
+            )
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")

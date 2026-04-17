@@ -27,6 +27,9 @@ interface SettingsPanelProps {
   voxtralLocalAvailable?: boolean;
 }
 
+// Identifies any Parakeet variant (legacy alias or explicit keys).
+const PARAKEET_KEYS = new Set<string>(['parakeet', 'parakeet-en-v2', 'parakeet-multi-v3']);
+
 function SettingsPanel({
   settings,
   onSettingsChange,
@@ -57,6 +60,36 @@ function SettingsPanel({
   const isVoxtralApi = engine === 'voxtral-api';
   const isVoxtralLocal = engine === 'voxtral-local';
   const isWhisper = engine === 'whisper';
+
+  // Helper: does the current `language` work with a given Parakeet/model entry?
+  // Accepts either the legacy single-language `languageRestriction` or the
+  // multi-language `supportedLanguages` list from MODEL_SIZES.
+  const isLanguageSupported = (info: { languageRestriction?: string; supportedLanguages?: string[] }, lang: string): boolean => {
+    if (lang === 'auto') return true;
+    if (info.supportedLanguages && info.supportedLanguages.length > 0) {
+      return info.supportedLanguages.includes(lang);
+    }
+    if (info.languageRestriction) {
+      return info.languageRestriction === lang;
+    }
+    return true;
+  };
+
+  // Helper: readable summary of the supported-language list for the warning label.
+  const supportedLabel = (info: { languageRestriction?: string; supportedLanguages?: string[] }): string => {
+    if (info.supportedLanguages && info.supportedLanguages.length > 0) {
+      return info.supportedLanguages.map((c) => c.toUpperCase()).join(', ');
+    }
+    if (info.languageRestriction) {
+      return info.languageRestriction.toUpperCase();
+    }
+    return '';
+  };
+
+  const isParakeet = PARAKEET_KEYS.has(modelSize);
+  const currentModelInfo = MODEL_SIZES[modelSize];
+  const parakeetLanguageInvalid =
+    isWhisper && isParakeet && currentModelInfo && !isLanguageSupported(currentModelInfo, language);
 
   // For document processing, only show relevant settings
   if (showForDocuments) {
@@ -199,19 +232,23 @@ function SettingsPanel({
               disabled={disabled}
               className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white focus:outline-none focus:border-blue-400 disabled:opacity-50"
             >
-              {Object.entries(MODEL_SIZES).map(([id, { label, description, languageRestriction }]) => {
-                const isRestricted = languageRestriction && language !== languageRestriction && language !== 'auto';
-                const prefix = id === 'parakeet' ? '\u{1F680} ' : '';
+              {Object.entries(MODEL_SIZES).map(([id, info]) => {
+                const { label, description } = info;
+                const isRestricted = !isLanguageSupported(info, language);
+                const prefix = PARAKEET_KEYS.has(id) ? '\u{1F680} ' : '';
+                const restrictionNote = isRestricted ? ` (${supportedLabel(info)} only)` : '';
                 return (
-                  <option key={id} value={id} disabled={!!isRestricted}>
-                    {prefix}{label} - {description}{isRestricted ? ' (English only)' : ''}
+                  <option key={id} value={id} disabled={isRestricted}>
+                    {prefix}{label} - {description}{restrictionNote}
                   </option>
                 );
               })}
             </select>
           )}
-          {isWhisper && modelSize === 'parakeet' && language !== 'en' && language !== 'auto' && (
-            <p className="text-xs text-amber-400 mt-1">Parakeet requires English. Please select English or Auto-detect.</p>
+          {parakeetLanguageInvalid && (
+            <p className="text-xs text-amber-400 mt-1">
+              {currentModelInfo?.label} supports {supportedLabel(currentModelInfo)}. Please pick a supported language or Auto-detect.
+            </p>
           )}
         </div>
 
@@ -231,7 +268,14 @@ function SettingsPanel({
                 updates.translateToEnglish = false;
               }
 
-              if (isWhisper && modelSize === 'parakeet' && newLang !== 'en' && newLang !== 'auto') {
+              // If the user picks a language the current Parakeet variant
+              // doesn't support, fall back to the safe default Whisper model.
+              if (
+                isWhisper &&
+                PARAKEET_KEYS.has(modelSize) &&
+                currentModelInfo &&
+                !isLanguageSupported(currentModelInfo, newLang)
+              ) {
                 updates.modelSize = 'large-v3-turbo';
               }
 

@@ -10,7 +10,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from config import MLX_MODELS, PARAKEET_MODEL, VOXTRAL_LOCAL_MODELS
+from config import MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS, VOXTRAL_LOCAL_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
 from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
@@ -18,6 +18,24 @@ from services.postprocess import normalize_segments, apply_readable_mode
 import state
 
 logger = logging.getLogger(__name__)
+
+# Parakeet model keys accepted by the `model_size` setting.
+# "parakeet" is a legacy alias for the English v2 model.
+_PARAKEET_ALIASES = {
+    "parakeet": "parakeet-en-v2",
+    "parakeet-en-v2": "parakeet-en-v2",
+    "parakeet-multi-v3": "parakeet-multi-v3",
+}
+
+
+def is_parakeet_key(model_size: str) -> bool:
+    """Return True if model_size selects any Parakeet variant."""
+    return model_size in _PARAKEET_ALIASES
+
+
+def resolve_parakeet_key(model_size: str) -> str:
+    """Normalize a Parakeet model_size to a canonical PARAKEET_MODELS key."""
+    return _PARAKEET_ALIASES.get(model_size, "parakeet-en-v2")
 
 
 def get_mlx_model_path():
@@ -36,15 +54,29 @@ def select_optimal_model(language: str, model_size: str, speed_priority: bool = 
     return model_size
 
 
-def transcribe_with_parakeet(audio_path: str) -> dict:
-    """Transcribe audio using Parakeet MLX (60x real-time on Apple Silicon)."""
+def transcribe_with_parakeet(audio_path: str, model_key: str = "parakeet-en-v2") -> dict:
+    """Transcribe audio using Parakeet MLX (60x real-time on Apple Silicon).
+
+    Args:
+        audio_path: Path to the input audio file.
+        model_key: Key into PARAKEET_MODELS. Defaults to the English v2 model
+            for backwards compatibility with callers that don't specify a variant.
+    """
     import parakeet_mlx
 
-    logger.info("Transcribing with Parakeet MLX (60x real-time)...")
+    model_key = resolve_parakeet_key(model_key)
+    model_info = PARAKEET_MODELS[model_key]
+    model_path = model_info["path"]
+    language_tag = model_info.get("language", "en")
 
-    if state._parakeet_model is None:
-        logger.info("Loading Parakeet model: %s", PARAKEET_MODEL['path'])
-        state._parakeet_model = parakeet_mlx.from_pretrained(PARAKEET_MODEL["path"])
+    logger.info("Transcribing with Parakeet MLX (%s)...", model_key)
+
+    # Cache a single loaded model per process. Reload if the user switched variant.
+    cached_path = getattr(state, "_parakeet_model_path", None)
+    if state._parakeet_model is None or cached_path != model_path:
+        logger.info("Loading Parakeet model: %s", model_path)
+        state._parakeet_model = parakeet_mlx.from_pretrained(model_path)
+        state._parakeet_model_path = model_path
         logger.info("Parakeet model loaded successfully")
 
     result = state._parakeet_model.transcribe(audio_path)
@@ -82,10 +114,12 @@ def transcribe_with_parakeet(audio_path: str) -> dict:
 
     full_text = " ".join(all_text_parts)
 
+    # For the multilingual model we don't know the detected language without
+    # extra inference; label as the canonical tag ("en" for v2, "multi" for v3).
     return {
         "text": full_text,
         "segments": segments,
-        "language": "en",
+        "language": language_tag,
     }
 
 
@@ -275,7 +309,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
     use_voxtral = settings.engine == "voxtral-api"
     use_voxtral_local = settings.engine == "voxtral-local"
-    use_parakeet = settings.model_size == "parakeet" and not use_voxtral and not use_voxtral_local
+    use_parakeet = is_parakeet_key(settings.model_size) and not use_voxtral and not use_voxtral_local
 
     if use_voxtral:
         if not state._voxtral_available:
@@ -368,12 +402,20 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             elif use_parakeet:
                 if settings.word_timestamps:
                     logger.warning("word_timestamps=True ignored: Parakeet does not support word-level timestamps")
-                _update_job(job, progress=20, message="Transcribing with Parakeet MLX (60x real-time)...")
-                logger.info("Using Parakeet MLX for English transcription")
 
-                result = transcribe_with_parakeet(audio_path)
+                parakeet_key = resolve_parakeet_key(settings.model_size)
+                parakeet_info = PARAKEET_MODELS[parakeet_key]
+                _update_job(
+                    job,
+                    progress=20,
+                    message=f"Transcribing with Parakeet MLX ({parakeet_key})...",
+                )
+                logger.info("Using Parakeet MLX for transcription: %s", parakeet_key)
 
-                job.language = "en"
+                result = transcribe_with_parakeet(audio_path, parakeet_key)
+
+                # v2 is English-only; v3 is multilingual — keep label consistent.
+                job.language = parakeet_info.get("language", "en")
                 job.language_probability = 0.99
 
                 transcription_segments = result.get("segments", [])
@@ -386,7 +428,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
                 language = None if settings.language == "auto" else settings.language
 
-                model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3"])
+                model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3-turbo"])
                 model_path = model_info["path"]
                 logger.info("Using model: %s (%s)", settings.model_size, model_path)
 

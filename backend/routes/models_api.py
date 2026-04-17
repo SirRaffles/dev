@@ -8,7 +8,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODEL, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS
+from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS
 from services.model_manager import get_model_manager, ModelName
 import state
 
@@ -86,13 +86,17 @@ async def list_models():
     ]
 
     if state._parakeet_available:
-        models.append({
-            "id": "parakeet",
-            "path": PARAKEET_MODEL["path"],
-            "description": PARAKEET_MODEL["description"],
-            "language": "en",
-            "engine": "whisper",
-        })
+        # Surface every Parakeet variant. "parakeet" is kept as a legacy alias
+        # for the English v2 model (handled by the transcription service).
+        for key, val in PARAKEET_MODELS.items():
+            models.append({
+                "id": key,
+                "path": val["path"],
+                "description": val["description"],
+                "language": val.get("language", "en"),
+                "supported_languages": val.get("supported_languages", [val.get("language", "en")]),
+                "engine": "whisper",
+            })
 
     if state._voxtral_local_available:
         for key, val in VOXTRAL_LOCAL_MODELS.items():

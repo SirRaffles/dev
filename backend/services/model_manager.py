@@ -300,7 +300,7 @@ class ModelManager:
             # Also set HF_TOKEN in env as fallback.
             os.environ["HF_TOKEN"] = hf_token
             pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
+                "pyannote/speaker-diarization-community-1",
                 token=hf_token,
             )
 

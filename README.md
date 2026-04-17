@@ -42,7 +42,7 @@ High-quality audio and video transcription powered by OpenAI Whisper Large-V3 vi
 
 2. **HuggingFace Token** (required for speaker diarization)
    - Get your token at: https://huggingface.co/settings/tokens
-   - Accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
 
 3. **Environment Setup**
    ```bash
@@ -324,7 +324,7 @@ whisper-transcription-app/
 
 ### Speaker diarization not working
 - Verify HF_TOKEN is set correctly
-- Accept model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1
+- Accept model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
 
 ### Frontend can't connect to backend
 - Ensure backend is running: `curl http://localhost:8000/health`

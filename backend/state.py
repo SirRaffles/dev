@@ -92,9 +92,13 @@ try:
 except ImportError:
     pass
 
-# Parakeet state
+# Parakeet state.
+# _parakeet_model holds a single cached parakeet_mlx model.
+# _parakeet_model_path tracks which HF path is currently loaded so we can
+# swap between variants (English v2 vs multilingual v3) on demand.
 _parakeet_available = False
 _parakeet_model = None
+_parakeet_model_path = None
 
 # Check if Parakeet is available
 try:

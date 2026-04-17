@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
         logger.warning("Get your token at: https://huggingface.co/settings/tokens")
-        logger.warning("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-3.1")
+        logger.warning("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1")
 
     # Check for refinement availability
     if state.refinement_available:

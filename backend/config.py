@@ -61,12 +61,29 @@ MLX_MODELS = {
     "distil-large-v3": {"path": "mlx-community/distil-whisper-large-v3", "description": "5x faster, fewer hallucinations (~756M params)"},
 }
 
-# English-only optimized model (Parakeet MLX - 60x real-time on Apple Silicon)
-PARAKEET_MODEL = {
-    "path": "mlx-community/parakeet-tdt-0.6b-v2",
-    "description": "60x real-time, English only (~600M params)",
-    "language": "en",
+# Parakeet MLX model variants — optimized for Apple Silicon.
+# v2 is English-only (60x real-time, baseline).
+# v3 adds 25 European languages and class-leading noise robustness, same ~600M params.
+PARAKEET_MODELS = {
+    "parakeet-en-v2": {
+        "path": "mlx-community/parakeet-tdt-0.6b-v2",
+        "description": "60x real-time, English only (~600M params)",
+        "language": "en",
+        "supported_languages": ["en"],
+    },
+    "parakeet-multi-v3": {
+        "path": "mlx-community/parakeet-tdt-0.6b-v3",
+        "description": "Multilingual (25 EU languages), best noise robustness (~600M params)",
+        "language": "multi",
+        "supported_languages": [
+            "en", "fr", "de", "es", "it", "pt", "nl", "ru",
+        ],
+    },
 }
+
+# Backwards-compat alias: legacy callers referenced PARAKEET_MODEL as a single dict.
+# Keep it pointing at the English v2 model so existing behavior is unchanged.
+PARAKEET_MODEL = PARAKEET_MODELS["parakeet-en-v2"]
 
 # Voxtral cloud transcription models (Mistral API)
 VOXTRAL_MODELS = {

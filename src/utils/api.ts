@@ -81,7 +81,10 @@ export interface EngineInfo {
 export interface ModelInfo {
   label: string;
   description: string;
+  // Back-compat: single-language restriction. Prefer `supportedLanguages` for
+  // multilingual models (e.g. Parakeet v3). When both are present, the list wins.
   languageRestriction?: string;
+  supportedLanguages?: string[];
 }
 
 export interface ExportFormatInfo {
@@ -142,7 +145,7 @@ export const ENGINES: Record<string, EngineInfo> = {
   },
 };
 
-// Available model sizes (matching backend MLX_MODELS)
+// Available model sizes (matching backend MLX_MODELS + PARAKEET_MODELS)
 export const MODEL_SIZES: Record<string, ModelInfo> = {
   'tiny': { label: 'Tiny', description: 'Fastest (~1min audio in ~10s)' },
   'base': { label: 'Base', description: 'Fast, good for real-time' },
@@ -151,7 +154,13 @@ export const MODEL_SIZES: Record<string, ModelInfo> = {
   'large-v3': { label: 'Large V3', description: 'Best quality, slowest' },
   'large-v3-turbo': { label: 'Large V3 Turbo', description: '6x faster, near-best quality (Recommended)' },
   'distil-large-v3': { label: 'Distil Large V3', description: '5x faster, fewer hallucinations' },
+  // Parakeet MLX — keep "parakeet" as the legacy English v2 alias for back-compat.
   'parakeet': { label: 'Parakeet MLX', description: '60x speed, English only', languageRestriction: 'en' },
+  'parakeet-multi-v3': {
+    label: 'Parakeet V3 (Multilingual)',
+    description: '60x speed, 25 EU languages, best noise robustness',
+    supportedLanguages: ['en', 'fr', 'de', 'es', 'it', 'pt', 'nl', 'ru'],
+  },
 };
 
 // Voxtral cloud models
