@@ -10,7 +10,7 @@
         <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend/venv/bin/uvicorn</string>
         <string>main:app</string>
         <string>--host</string>
-        <string>0.0.0.0</string>
+        <string>127.0.0.1</string>
         <string>--port</string>
         <string>8000</string>
     </array>
@@ -20,8 +20,6 @@
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HF_TOKEN</key>
-        <string>YOUR_HF_TOKEN_HERE</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>PATH</key>
@@ -42,10 +40,10 @@
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Users/davidmarchesseau/.whisper-backend.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/backend.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/davidmarchesseau/.whisper-backend.error.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/backend.error.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

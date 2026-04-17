@@ -8,12 +8,11 @@ Manages MLX-Whisper, GLM-4.6V-Flash, and Pyannote models with:
 """
 import gc
 import logging
+import time
 from typing import Dict, Optional, Any, ContextManager
 from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
-import platform
-import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +22,13 @@ class ModelName(str, Enum):
     VISION = "vision"
     DIARIZATION = "diarization"
     EMBEDDING = "embedding"
+    VOXTRAL_LOCAL = "voxtral_local"
 
 
 class ModelConfig:
     """Configuration for each model."""
+    # TODO: switch memory estimates to RSS deltas measured at load time
+    # (audit #13). Constants below are rough fp16/int4 footprints.
     CONFIGS = {
         ModelName.WHISPER: {
             "priority": 1,  # Highest - always loaded first
@@ -51,6 +53,12 @@ class ModelConfig:
             "memory_mb": 200,  # Speaker embedding model is lightweight (~200MB)
             "unloadable": True,
             "load_timeout": 60,
+        },
+        ModelName.VOXTRAL_LOCAL: {
+            "priority": 1,  # Same tier as Whisper — primary transcription engine
+            "memory_mb": 10000,  # Voxtral Mini 3B fp16; 4-bit variant uses ~3500MB
+            "unloadable": True,
+            "load_timeout": 120,
         },
     }
 
@@ -82,44 +90,23 @@ class ModelManager:
         }
         self._whisper_model_size = "large-v3-turbo"
         self._vision_model_path: Optional[str] = None
+        # Audit #13: memoize available memory for up to 2s to avoid repeated syscalls.
+        self._avail_mem_cache_mb: Optional[int] = None
+        self._avail_mem_cache_at: float = 0.0
 
     def get_available_memory_mb(self) -> int:
-        """Get available system memory in MB."""
-        if platform.system() == "Darwin":
-            # macOS: Use vm_stat
-            try:
-                result = subprocess.run(
-                    ["vm_stat"], capture_output=True, text=True
-                )
-                lines = result.stdout.split("\n")
-                # Parse page size from first line of vm_stat output
-                page_size = 16384  # Default for Apple Silicon
-                if lines and "page size of" in lines[0]:
-                    try:
-                        page_size = int(lines[0].split("page size of")[1].strip().split()[0])
-                    except (ValueError, IndexError):
-                        pass
-
-                free_pages = 0
-                for line in lines:
-                    if "Pages free" in line:
-                        free_pages = int(line.split(":")[1].strip().rstrip("."))
-                        break
-
-                return (free_pages * page_size) // (1024 * 1024)
-            except Exception:
-                return 8000  # Conservative default
-        else:
-            # Linux: Use /proc/meminfo
-            try:
-                with open("/proc/meminfo", "r") as f:
-                    for line in f:
-                        if "MemAvailable" in line:
-                            return int(line.split()[1]) // 1024
-            except Exception:
-                return 8000
-
-        return 8000  # Default fallback
+        """Get available system memory in MB via psutil (audit #13)."""
+        now = time.monotonic()
+        if self._avail_mem_cache_mb is not None and (now - self._avail_mem_cache_at) < 2.0:
+            return self._avail_mem_cache_mb
+        try:
+            import psutil
+            avail = int(psutil.virtual_memory().available // (1024 * 1024))
+        except Exception:
+            avail = 8000  # conservative fallback
+        self._avail_mem_cache_mb = avail
+        self._avail_mem_cache_at = now
+        return avail
 
     def get_total_loaded_memory_mb(self) -> int:
         """Get total memory used by loaded models."""
@@ -187,7 +174,13 @@ class ModelManager:
         return freed_memory >= needed
 
     async def load_whisper(self, model_size: str = "large-v3-turbo") -> bool:
-        """Load MLX-Whisper model."""
+        """Load MLX-Whisper model.
+
+        TODO(audit #11): mlx-whisper 0.4.x does not expose a stable top-level
+        load_model(path) API — transcribe() loads on demand. We keep the
+        module reference here so the rest of the manager's accounting/unload
+        logic can still track the "in-memory" state of the weights.
+        """
         if self.is_loaded(ModelName.WHISPER):
             if self._whisper_model_size == model_size:
                 return True
@@ -374,6 +367,57 @@ class ModelManager:
             logger.error(f"Failed to load Embedding model: {e}")
             return False
 
+    async def load_voxtral_local(self, model_path: str) -> bool:
+        """Load Voxtral Local (mlx-audio) with ModelManager accounting (audit #12).
+
+        Different `model_path` values (fp16 vs 4-bit) both map to VOXTRAL_LOCAL;
+        we unload + reload if the caller asks for a different variant.
+        """
+        current = self._models.get(ModelName.VOXTRAL_LOCAL)
+        if (
+            self.is_loaded(ModelName.VOXTRAL_LOCAL)
+            and isinstance(current, dict)
+            and current.get("path") == model_path
+        ):
+            return True
+
+        if self.is_loaded(ModelName.VOXTRAL_LOCAL):
+            self.unload_model(ModelName.VOXTRAL_LOCAL)
+
+        if not self._can_load_model(ModelName.VOXTRAL_LOCAL):
+            if not self._unload_lower_priority_models(ModelName.VOXTRAL_LOCAL):
+                raise MemoryError("Not enough memory to load Voxtral Local model")
+
+        try:
+            from mlx_audio.stt.utils import load as mlx_audio_load
+            logger.info("Loading Voxtral Local model: %s", model_path)
+            model = mlx_audio_load(model_path)
+            mem_mb = ModelConfig.CONFIGS[ModelName.VOXTRAL_LOCAL]["memory_mb"]
+            # 4-bit variants carry ~3.5 GB, not ~10 GB.
+            if "4bit" in model_path.lower():
+                mem_mb = 3500
+            self._models[ModelName.VOXTRAL_LOCAL] = {"model": model, "path": model_path}
+            self._model_status[ModelName.VOXTRAL_LOCAL].update({
+                "loaded": True,
+                "memory_mb": mem_mb,
+                "device": "mps",
+                "last_used": datetime.now(),
+                "load_count": self._model_status[ModelName.VOXTRAL_LOCAL]["load_count"] + 1,
+            })
+            # Mirror into legacy state.* slots so existing readers stay coherent.
+            state_mod = None
+            try:
+                import state as state_mod  # type: ignore
+            except Exception:
+                pass
+            if state_mod is not None:
+                state_mod._voxtral_local_model = model
+                state_mod._voxtral_local_model_name = model_path
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load Voxtral Local model: {e}")
+            return False
+
     def unload_model(self, model_name: ModelName) -> bool:
         """Explicitly unload a model to free memory."""
         if not self.is_loaded(model_name):
@@ -407,6 +451,14 @@ class ModelManager:
                 "memory_mb": 0,
             })
 
+            if model_name == ModelName.VOXTRAL_LOCAL:
+                try:
+                    import state as state_mod  # type: ignore
+                    state_mod._voxtral_local_model = None
+                    state_mod._voxtral_local_model_name = None
+                except Exception:
+                    pass
+
             return True
 
         except Exception as e:
@@ -421,18 +473,22 @@ class ModelManager:
         """
         import asyncio
 
-        # Load model if not already loaded
+        # Load model if not already loaded. Audit #7: always use a fresh loop
+        # — the old `asyncio.get_event_loop()` path could race with the running
+        # server loop when invoked from a thread.
         if not self.is_loaded(model_name):
-            loop = asyncio.get_event_loop()
-
-            if model_name == ModelName.WHISPER:
-                loop.run_until_complete(self.load_whisper())
-            elif model_name == ModelName.VISION:
-                loop.run_until_complete(self.load_vision())
-            elif model_name == ModelName.DIARIZATION:
-                loop.run_until_complete(self.load_diarization())
-            elif model_name == ModelName.EMBEDDING:
-                loop.run_until_complete(self.load_embedding())
+            _loop = asyncio.new_event_loop()
+            try:
+                if model_name == ModelName.WHISPER:
+                    _loop.run_until_complete(self.load_whisper())
+                elif model_name == ModelName.VISION:
+                    _loop.run_until_complete(self.load_vision())
+                elif model_name == ModelName.DIARIZATION:
+                    _loop.run_until_complete(self.load_diarization())
+                elif model_name == ModelName.EMBEDDING:
+                    _loop.run_until_complete(self.load_embedding())
+            finally:
+                _loop.close()
 
         # Update last used
         self._model_status[model_name]["last_used"] = datetime.now()

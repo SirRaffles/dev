@@ -12,6 +12,7 @@ function SpeakersView() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{id: string, name: string} | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (selectedId) {
     return <SpeakerProfile speakerId={selectedId} onBack={() => { setSelectedId(null); refresh(); }} />;
@@ -40,8 +41,9 @@ function SpeakersView() {
     if (!deleteTarget) return;
     try {
       await removeSpeaker(deleteTarget.id);
+      setDeleteError(null);
     } catch (e: any) {
-      alert(e.message);
+      setDeleteError(e?.message || 'Failed to delete speaker');
     } finally {
       setDeleteTarget(null);
     }
@@ -62,14 +64,31 @@ function SpeakersView() {
           <span className="text-sm text-slate-400">({speakers.length})</span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowCreate(!showCreate)} className="p-2 rounded-lg text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">
-            <Plus className="w-5 h-5" />
+          <button
+            type="button"
+            onClick={() => setShowCreate(!showCreate)}
+            aria-label={showCreate ? 'Close add speaker form' : 'Add speaker'}
+            aria-expanded={showCreate}
+            className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center justify-center"
+          >
+            <Plus className="w-5 h-5" aria-hidden="true" />
           </button>
-          <button onClick={refresh} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <button
+            type="button"
+            onClick={refresh}
+            aria-label="Refresh speakers"
+            className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center justify-center"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
           </button>
         </div>
       </div>
+
+      {deleteError && (
+        <div role="alert" className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-4 text-red-400 text-sm">
+          {deleteError}
+        </div>
+      )}
 
       {showCreate && (
         <div className="mb-4 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
@@ -104,8 +123,8 @@ function SpeakersView() {
           <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading speakers...
         </div>
       ) : speakers.length === 0 ? (
-        <div className="text-center py-12 text-slate-400">
-          <Users className="w-12 h-12 mx-auto mb-3 opacity-50" />
+        <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+          <Users className="w-12 h-12 mx-auto mb-3 opacity-50" aria-hidden="true" />
           <p>No speakers registered yet</p>
           <p className="text-sm mt-1">Speakers are created automatically during call identification</p>
         </div>
@@ -129,7 +148,7 @@ function SpeakersView() {
                     {speaker.call_count} calls &middot; {formatTime(speaker.total_speaking_time_seconds)} speaking
                   </p>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400" />
+                <ChevronRight className="w-4 h-4 text-slate-500 dark:text-slate-400" aria-hidden="true" />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(speaker.speaker_id, speaker.name); }}

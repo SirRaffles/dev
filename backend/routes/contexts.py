@@ -30,6 +30,9 @@ class FileWriteRequest(BaseModel):
 
 def _safe_path(user_path: str) -> Path:
     """Resolve a user-provided path safely within CONTEXTS_DIR."""
+    # Reject raw `..` before resolving (audit #4)
+    if ".." in user_path.split("/") or ".." in user_path.split("\\"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
     resolved = (CONTEXTS_DIR / user_path).resolve()
     if not str(resolved).startswith(str(CONTEXTS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="Path traversal not allowed")
@@ -159,8 +162,9 @@ async def delete_context_folder(path: str):
     import shutil
     try:
         shutil.rmtree(target)
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Could not delete folder: {e}")
+    except OSError:
+        logger.error("Could not delete context folder %s", target, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     return {"status": "deleted", "path": path}
 
@@ -182,6 +186,10 @@ async def read_context_file(path: str):
 async def write_context_file(path: str, req: FileWriteRequest):
     """Write/update a markdown file in a context folder."""
     target = _safe_path(path)
+
+    # Audit #4: only allow markdown files under /contexts/files.
+    if target.suffix != ".md":
+        raise HTTPException(status_code=400, detail="Only .md files are allowed")
 
     # Ensure parent directory exists
     target.parent.mkdir(parents=True, exist_ok=True)

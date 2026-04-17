@@ -1,28 +1,30 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { isMediaFile } from '../utils/api';
 
-/**
- * Manages audio playback state: URL lifecycle, seek, time tracking.
- */
 export default function useAudioPlayback() {
   const [audioUrl, setAudioUrl] = useState(null);
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef(null);
+  const urlRef = useRef(null);
 
   const setFileAudio = useCallback((file) => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     if (file && isMediaFile(file.name)) {
-      setAudioUrl(URL.createObjectURL(file));
+      const next = URL.createObjectURL(file);
+      urlRef.current = next;
+      setAudioUrl(next);
     } else {
+      urlRef.current = null;
       setAudioUrl(null);
     }
-  }, [audioUrl]);
+  }, []);
 
   const clearAudio = useCallback(() => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = null;
     setAudioUrl(null);
     setCurrentTime(0);
-  }, [audioUrl]);
+  }, []);
 
   const seekToTime = useCallback((time) => {
     if (audioRef.current) {
@@ -34,12 +36,11 @@ export default function useAudioPlayback() {
     setCurrentTime(time);
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     };
-  }, [audioUrl]);
+  }, []);
 
   return {
     audioUrl,

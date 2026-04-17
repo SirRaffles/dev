@@ -11,7 +11,7 @@
 # Usage: ./scripts/install-watcher.sh
 #
 
-set -eo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -32,16 +32,10 @@ echo -e "${BLUE}  JPR Watcher Installation${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
-# Check for HuggingFace token
-if [ -z "$HF_TOKEN" ]; then
-    if [ -f "$PROJECT_DIR/.env" ]; then
-        source "$PROJECT_DIR/.env"
-    fi
-fi
-
-if [ -z "$HF_TOKEN" ]; then
-    echo -e "${YELLOW}Warning: HF_TOKEN not set. Speaker diarization requires a HuggingFace token.${NC}"
-    echo -e "${YELLOW}Get your token at: https://huggingface.co/settings/tokens${NC}"
+# Secrets live in ~/.whisper-env (mode 0600) and are sourced by the wrapper script.
+if [ ! -f "$HOME/.whisper-env" ]; then
+    echo -e "${YELLOW}Warning: ~/.whisper-env not found.${NC}"
+    echo -e "${YELLOW}Create it with HF_TOKEN_WATCHER and set chmod 600 ~/.whisper-env${NC}"
     echo ""
 fi
 
@@ -50,8 +44,8 @@ PYTHON_CMD=""
 for py in python3.11 python3.12 python3; do
     if command -v $py &> /dev/null; then
         version=$($py -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        major=$(echo $version | cut -d. -f1)
-        minor=$(echo $version | cut -d. -f2)
+        major=$(echo "$version" | cut -d. -f1)
+        minor=$(echo "$version" | cut -d. -f2)
         if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
             PYTHON_CMD=$py
             break
@@ -97,19 +91,13 @@ if launchctl list | grep -q "$PLIST_NAME"; then
     launchctl unload "$LAUNCH_AGENTS_DIR/$PLIST_NAME" 2>/dev/null || true
 fi
 
-# Install launchd plist
+# Install launchd plist — only substitute the PROJECT_DIR placeholder. HF_TOKEN
+# is NOT baked into the plist (audit #3); it flows in via ~/.whisper-env which
+# the wrapper script sources at runtime.
 echo -e "${BLUE}Installing launchd configuration...${NC}"
 mkdir -p "$LAUNCH_AGENTS_DIR"
 
-# Update plist with correct paths and HF_TOKEN
-if [ -z "$HF_TOKEN" ]; then
-    echo -e "${RED}Error: HF_TOKEN is required. Set it in your environment or .env file.${NC}"
-    echo -e "${YELLOW}Get your token at: https://huggingface.co/settings/tokens${NC}"
-    exit 1
-fi
-
-sed -e "s|/Users/davidmarchesseau/Development/apps/whisper-transcription-app|$PROJECT_DIR|g" \
-    -e "s|__HF_TOKEN_PLACEHOLDER__|${HF_TOKEN}|g" \
+sed -e "s|/Users/davidmarchesseau/Development/whisper-transcription-app|$PROJECT_DIR|g" \
     "$PLIST_SRC" > "$LAUNCH_AGENTS_DIR/$PLIST_NAME"
 
 echo "  Installed: $LAUNCH_AGENTS_DIR/$PLIST_NAME"
@@ -124,7 +112,7 @@ if launchctl list | grep -q "com.whisper.jpr-watcher"; then
     echo -e "${GREEN}Watcher service is running!${NC}"
 else
     echo -e "${YELLOW}Warning: Service may not have started correctly${NC}"
-    echo -e "${YELLOW}Check logs: tail -f ~/.jpr_watcher.log${NC}"
+    echo -e "${YELLOW}Check logs: tail -f ~/Library/Logs/whisper/jpr-watcher.log${NC}"
 fi
 
 echo ""
@@ -139,7 +127,7 @@ echo "  - Transcribe new .m4a files automatically"
 echo "  - Save .txt transcripts next to the recordings"
 echo ""
 echo "Commands:"
-echo "  View logs:     tail -f ~/.jpr_watcher.log"
+echo "  View logs:     tail -f ~/Library/Logs/whisper/jpr-watcher.log"
 echo "  Stop service:  launchctl unload ~/Library/LaunchAgents/$PLIST_NAME"
 echo "  Start service: launchctl load ~/Library/LaunchAgents/$PLIST_NAME"
 echo "  Uninstall:     ./scripts/uninstall-watcher.sh"

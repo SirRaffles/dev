@@ -246,13 +246,8 @@ function App() {
 
   // Available view modes based on result type
   const availableViewModes = useMemo(() => {
-    if (!active.result) return [];
-    if (isDocumentMode) {
-      const modes = [ViewMode.DOCUMENT];
-      if (active.result.visual_elements?.length > 0) modes.push(ViewMode.VISUAL);
-      return modes;
-    }
-    const modes = [ViewMode.TRANSCRIPT];
+    if (!active.result) return [] as string[];
+    const modes: string[] = [isDocumentMode ? ViewMode.DOCUMENT : ViewMode.TRANSCRIPT];
     if (active.result.visual_elements?.length > 0) modes.push(ViewMode.VISUAL);
     return modes;
   }, [active.result, isDocumentMode]);
@@ -603,7 +598,7 @@ function App() {
             {/* Batch Results Selector */}
             {transcription.batchResults.length > 1 && (
               <div className="flex items-center gap-3 mb-4">
-                <label htmlFor="batch-select" className="text-sm text-slate-400">Batch result:</label>
+                <label htmlFor="batch-select" className="text-sm text-slate-500 dark:text-slate-400">Batch result:</label>
                 <select
                   id="batch-select"
                   value={selectedBatchIndex}
@@ -614,7 +609,7 @@ function App() {
                   }}
                   className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                 >
-                  {transcription.batchResults.map((br: JobStatus, i: number) => (
+                  {transcription.batchResults.map((br: { job_id: string }, i: number) => (
                     <option key={br.job_id} value={i}>
                       File {i + 1} — {br.job_id.slice(0, 8)}
                     </option>
@@ -683,7 +678,7 @@ function App() {
           </div>
         )}
 
-        <footer className="text-center mt-12 text-slate-400 dark:text-slate-500 text-sm">
+        <footer className="text-center mt-12 text-slate-500 dark:text-slate-400 dark:text-slate-500 text-sm">
           <p>Powered by MLX-Whisper with GPU acceleration</p>
           <p className="mt-1">Optimized for Apple Silicon (M1/M2/M3)</p>
         </footer>

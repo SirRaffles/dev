@@ -6,12 +6,11 @@ Features speaker diarization and multiple export formats.
 Optimized for Apple Silicon (M3) with GPU acceleration via Metal.
 """
 
+import asyncio
 import os
 import json
-import hmac
 import time
 import logging
-import multiprocessing
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
@@ -33,7 +32,16 @@ _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 _log_format_mode = os.environ.get("LOG_FORMAT", "text").lower()
 _log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _log_datefmt = "%Y-%m-%d %H:%M:%S"
-_log_file = os.environ.get("LOG_FILE", os.path.expanduser("~/.whisper-backend.log"))
+_log_file = os.environ.get("LOG_FILE", os.path.expanduser("~/Library/Logs/whisper/backend.log"))
+
+# Ensure log directory exists with restrictive permissions
+_log_dir = os.path.dirname(_log_file)
+if _log_dir:
+    os.makedirs(_log_dir, exist_ok=True)
+    try:
+        os.chmod(_log_dir, 0o700)
+    except OSError:
+        pass
 
 _text_formatter = logging.Formatter(_log_format, datefmt=_log_datefmt)
 _json_formatter = JsonFormatter(datefmt=_log_datefmt)
@@ -50,17 +58,14 @@ logging.basicConfig(level=_log_level, handlers=[_file_handler, _console_handler]
 
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Must be set before any multiprocessing usage
-multiprocessing.set_start_method('spawn', force=True)
-
 import state
 from migrations import run_migrations
+from rate_limit import check_rate_limit
 from services.transcription import get_mlx_model_path
 from routes.transcription import router as transcription_router
 from routes.multimodal import router as multimodal_router
@@ -153,11 +158,26 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Voxtral API: Not configured (set MISTRAL_API_KEY for cloud transcription)")
 
+    # Opportunistic prune of old jobs at startup (audit #14)
+    try:
+        state.job_store.prune_completed()
+    except Exception as prune_err:
+        logger.warning("Startup prune_completed failed: %s", prune_err)
+
     yield
 
     # Cleanup on shutdown
     state.whisper_model_ready = False
     state.diarization_pipeline = None
+    try:
+        state.job_store.prune_completed()
+    except Exception as prune_err:
+        logger.warning("Shutdown prune_completed failed: %s", prune_err)
+    try:
+        # Audit #20: shut down the module-level transcription executor.
+        state.transcription_executor.shutdown(wait=False)
+    except Exception as shutdown_err:
+        logger.warning("Transcription executor shutdown failed: %s", shutdown_err)
 
 
 app = FastAPI(
@@ -168,13 +188,20 @@ app = FastAPI(
 )
 
 # CORS middleware
-_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+_cors_origins = [o.strip() for o in os.environ.get(
+    "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+).split(",") if o.strip()]
+
+# Audit #1/#18: wildcard origins are incompatible with allow_credentials=True.
+if "*" in _cors_origins:
+    raise ValueError("CORS_ORIGINS cannot contain * when allow_credentials=True")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -196,65 +223,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-# API key authentication middleware
-_api_key = os.environ.get("API_KEY")
-_allow_localhost_bypass = os.environ.get("ALLOW_LOCALHOST_BYPASS", "true").lower() == "true"
+# Audit #1: no shared-secret auth; backend binds to 127.0.0.1 and sits behind Tailscale.
 
-
-def _check_api_key(request: Request) -> bool:
-    """Check if the request carries a valid API key (timing-safe)."""
-    key = request.headers.get("X-API-Key") or ""
-    if not _api_key:
-        # No API_KEY configured — allow only localhost requests
-        client_ip = request.client.host if request.client else ""
-        return client_ip in ("127.0.0.1", "::1")
-    return hmac.compare_digest(key, _api_key)
-
-
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.method == "OPTIONS":
-            return await call_next(request)
-        # Allow /health and root through without blocking;
-        # /health will check auth itself to decide response detail level.
-        if request.url.path in ("/health", "/"):
-            request.state.authenticated = _check_api_key(request)
-            return await call_next(request)
-        # Gate /docs and /openapi.json behind auth (disable via EXPOSE_DOCS=true)
-        _expose_docs = os.environ.get("EXPOSE_DOCS", "").lower() == "true"
-        if request.url.path in ("/docs", "/openapi.json"):
-            if _expose_docs or _check_api_key(request):
-                request.state.authenticated = _check_api_key(request)
-                return await call_next(request)
-            return JSONResponse(status_code=401, content={"detail": "Authentication required"})
-        # Exempt localhost requests (local frontend on same machine)
-        client_ip = request.client.host if request.client else ""
-        if _allow_localhost_bypass and client_ip in ("127.0.0.1", "::1"):
-            request.state.authenticated = True
-            return await call_next(request)
-        if not _check_api_key(request):
-            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
-        request.state.authenticated = True
-        return await call_next(request)
-
-
-app.add_middleware(APIKeyMiddleware)
-if _api_key:
-    logger.info("API key authentication enabled")
-else:
-    logger.warning("WARNING: API_KEY not set — only localhost requests allowed. Set API_KEY env var for production use.")
-if _allow_localhost_bypass:
-    logger.info("Localhost auth bypass: enabled (set ALLOW_LOCALHOST_BYPASS=false to disable)")
-
-# Include route modules
-app.include_router(models_router)
-app.include_router(transcription_router)
-app.include_router(multimodal_router)
-app.include_router(refinement_router)
-app.include_router(speakers_router)
-app.include_router(calls_router)
-app.include_router(contexts_router)
-app.include_router(jpr_router)
+# Include route modules with rate limiting applied at router level (audit #2)
+_rate_dep = [Depends(check_rate_limit)]
+app.include_router(models_router, dependencies=_rate_dep)
+app.include_router(transcription_router, dependencies=_rate_dep)
+app.include_router(multimodal_router, dependencies=_rate_dep)
+app.include_router(refinement_router, dependencies=_rate_dep)
+app.include_router(speakers_router, dependencies=_rate_dep)
+app.include_router(calls_router, dependencies=_rate_dep)
+app.include_router(contexts_router, dependencies=_rate_dep)
+app.include_router(jpr_router, dependencies=_rate_dep)
 
 
 # Serve frontend build from static/ when running in single-container mode.

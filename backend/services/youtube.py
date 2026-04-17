@@ -45,6 +45,8 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
 
     output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
 
+    # "--" terminates option parsing so a URL that starts with "-" cannot be
+    # interpreted as a flag (audit #5).
     cmd = [
         "yt-dlp",
         "--no-exec",
@@ -54,6 +56,7 @@ def download_youtube_audio(url: str, output_dir: str) -> str:
         "--audio-quality", "0",
         "--postprocessor-args", "-ar 16000 -ac 1",
         "-o", output_template,
+        "--",
         url,
     ]
 

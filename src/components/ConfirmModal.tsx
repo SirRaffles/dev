@@ -26,11 +26,18 @@ function ConfirmModal({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (open) {
-      cancelRef.current?.focus();
-    }
+    if (!open) return;
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    cancelRef.current?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      previouslyFocusedRef.current?.focus?.();
+    };
   }, [open]);
 
   const handleKeyDown = useCallback(
@@ -42,7 +49,7 @@ function ConfirmModal({
 
       if (e.key === 'Tab') {
         const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled])'
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
         );
         if (!focusable || focusable.length === 0) return;
 

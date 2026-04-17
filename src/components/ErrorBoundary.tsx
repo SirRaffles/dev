@@ -11,6 +11,8 @@ interface ErrorBoundaryState {
 }
 
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  private resetButtonRef = React.createRef<HTMLButtonElement>();
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -24,6 +26,12 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     console.error('ErrorBoundary caught:', error, errorInfo);
   }
 
+  componentDidUpdate(_prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState) {
+    if (!prevState.hasError && this.state.hasError) {
+      this.resetButtonRef.current?.focus();
+    }
+  }
+
   handleReset = () => {
     this.setState({ hasError: false, error: null });
   };
@@ -31,18 +39,22 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 text-slate-900 dark:text-white flex items-center justify-center p-8">
+        <div
+          role="alert"
+          className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 text-slate-900 dark:text-white flex items-center justify-center p-8"
+        >
           <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-8 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none max-w-lg w-full text-center">
-            <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+            <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" aria-hidden="true" />
             <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
             <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
               {this.state.error?.message || 'An unexpected error occurred.'}
             </p>
             <button
+              ref={this.resetButtonRef}
               onClick={this.handleReset}
               className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-medium bg-blue-500 hover:bg-blue-600 text-white transition-colors"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className="w-4 h-4" aria-hidden="true" />
               Try Again
             </button>
           </div>

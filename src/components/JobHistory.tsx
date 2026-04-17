@@ -2,18 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Loader2, FileText, RefreshCw } from 'lucide-react';
 import { API_URL, retryJob } from '../utils/api';
 
-const API_KEY = import.meta.env.VITE_API_KEY || '';
-function authHeaders(): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (API_KEY) h['X-API-Key'] = API_KEY;
-  return h;
-}
-
 const STATUS_ICONS: Record<string, React.ReactNode> = {
   completed: <CheckCircle className="w-4 h-4 text-green-400" />,
   failed: <AlertCircle className="w-4 h-4 text-red-400" />,
   processing: <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />,
-  pending: <Clock className="w-4 h-4 text-slate-400" />,
+  pending: <Clock className="w-4 h-4 text-slate-500 dark:text-slate-400" />,
 };
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -55,7 +48,7 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await fetch(`${API_URL}/jobs?limit=20`, { headers: authHeaders() });
+      const resp = await fetch(`${API_URL}/jobs?limit=20`);
       if (resp.ok) {
         const data = await resp.json();
         setJobs(data.jobs || []);
@@ -93,22 +86,27 @@ export default function JobHistory({ onSelectJob, onRetryJob }: JobHistoryProps)
   return (
     <div className="mt-6">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-controls="job-history-panel"
         className="flex items-center gap-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors text-sm font-medium"
       >
-        <Clock className="w-4 h-4" />
+        <Clock className="w-4 h-4" aria-hidden="true" />
         Recent Transcriptions {total > 0 && `(${total})`}
-        {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        {expanded
+          ? <ChevronUp className="w-4 h-4" aria-hidden="true" />
+          : <ChevronDown className="w-4 h-4" aria-hidden="true" />}
       </button>
 
       {expanded && (
-        <div className="mt-3 bg-white/80 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 overflow-hidden shadow-sm dark:shadow-none">
+        <div id="job-history-panel" className="mt-3 bg-white/80 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 overflow-hidden shadow-sm dark:shadow-none">
           <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-slate-700/50">
             <span className="text-xs text-slate-500">{total} total jobs</span>
             <button
               onClick={fetchJobs}
               disabled={loading}
-              className="text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 transition-colors"
+              className="text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 transition-colors"
               title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />

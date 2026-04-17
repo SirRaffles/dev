@@ -7,6 +7,8 @@ import asyncio
 import logging
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from config import MLX_MODELS, PARAKEET_MODEL, VOXTRAL_LOCAL_MODELS
 from job_models import TranscriptionSettings
@@ -135,8 +137,9 @@ def _extract_audio_chunk(audio_path: str, start: float, duration: float, output_
     """Extract a chunk of audio as 16kHz mono WAV for Voxtral."""
     import subprocess
     try:
+        # Audit #10: -ss must precede -i for keyframe seek.
         subprocess.run(
-            ["ffmpeg", "-i", audio_path, "-ss", str(start), "-t", str(duration),
+            ["ffmpeg", "-ss", str(start), "-i", audio_path, "-t", str(duration),
              "-ar", "16000", "-ac", "1", output_path, "-y", "-loglevel", "error"],
             capture_output=True, timeout=60, check=True,
         )
@@ -152,7 +155,7 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     and merges results with correct timestamps.
     """
     import tempfile
-    from mlx_audio.stt.utils import load as mlx_audio_load
+    from services.model_manager import get_model_manager, ModelName
 
     CHUNK_DURATION = 30  # seconds — Voxtral encoder max (WhisperFeatureExtractor chunk_length)
     MAX_TOKENS_PER_CHUNK = 4096
@@ -163,14 +166,25 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
 
     logger.info("Transcribing with Voxtral Local (%s)...", model_path)
 
-    # Lazy-load: cache model in state to avoid reloading on every request
-    if state._voxtral_local_model is None or state._voxtral_local_model_name != model_path:
-        logger.info("Loading Voxtral Local model: %s", model_path)
-        state._voxtral_local_model = mlx_audio_load(model_path)
-        state._voxtral_local_model_name = model_path
-        logger.info("Voxtral Local model loaded successfully")
+    # Audit #12: route through ModelManager so memory accounting is respected.
+    manager = get_model_manager()
+    model = None
+    if manager.is_loaded(ModelName.VOXTRAL_LOCAL) and manager.get_model(ModelName.VOXTRAL_LOCAL) is not None:
+        cached = manager.get_model(ModelName.VOXTRAL_LOCAL)
+        if isinstance(cached, dict) and cached.get("path") == model_path:
+            model = cached.get("model")
 
-    model = state._voxtral_local_model
+    if model is None:
+        _loop = asyncio.new_event_loop()
+        try:
+            loaded = _loop.run_until_complete(manager.load_voxtral_local(model_path))
+        finally:
+            _loop.close()
+        if not loaded:
+            raise RuntimeError("Failed to load Voxtral Local model")
+        cached = manager.get_model(ModelName.VOXTRAL_LOCAL)
+        model = cached.get("model") if isinstance(cached, dict) else cached
+
     language = settings.language if settings.language != "auto" else None
 
     # Get total duration to determine chunking
@@ -292,7 +306,9 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
         if settings.enable_noise_reduction:
             _update_job(job, progress=8, message="Applying noise reduction...")
-            cleaned_audio_path = audio_path.replace(".wav", "_cleaned.wav")
+            # Audit #15: use Path.with_stem for safe suffix append.
+            src = Path(audio_path)
+            cleaned_audio_path = str(src.with_stem(src.stem + "_cleaned"))
             audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
 
         # === VOXTRAL API ENGINE ===
@@ -314,25 +330,26 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
         else:
             # === LOCAL ENGINES (Whisper / Parakeet / Voxtral Local) ===
+            # Audit #9: diarize concurrently with transcription via a side executor.
             speakers = []
             hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-            if settings.enable_diarization:
-                if not hf_token:
-                    logger.warning(
-                        "Diarization requested but HF_TOKEN is not set. "
-                        "Skipping speaker identification."
-                    )
+            diarization_future = None
+            diarization_executor = None
+
+            if settings.enable_diarization and hf_token:
+                if settings.num_speakers:
+                    _update_job(job, progress=10, message=f"Identifying {settings.num_speakers} speakers...")
                 else:
-                    if settings.num_speakers:
-                        _update_job(job, progress=10, message=f"Identifying {settings.num_speakers} speakers...")
-                    else:
-                        _update_job(job, progress=10, message="Identifying speakers...")
-                    try:
-                        speakers = run_diarization(audio_path, num_speakers=settings.num_speakers)
-                    except Exception as e:
-                        logger.warning("Diarization failed, continuing without speaker identification: %s", e)
-                        speakers = []
-                    job.speakers = speakers
+                    _update_job(job, progress=10, message="Identifying speakers...")
+                diarization_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="diarize")
+                diarization_future = diarization_executor.submit(
+                    run_diarization, audio_path, settings.num_speakers
+                )
+            elif settings.enable_diarization and not hf_token:
+                logger.warning(
+                    "Diarization requested but HF_TOKEN is not set. "
+                    "Skipping speaker identification."
+                )
 
             if use_voxtral_local:
                 if settings.word_timestamps:
@@ -415,6 +432,19 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
 
                 full_text = result.get("text", " ".join(full_text_parts))
 
+            # Join the concurrent diarization (audit #9). Never let a diarization
+            # failure prevent transcription from being returned.
+            if diarization_future is not None:
+                try:
+                    speakers = diarization_future.result() or []
+                    job.speakers = speakers
+                except Exception as e:
+                    logger.warning("Diarization failed, continuing without speaker identification: %s", e)
+                    speakers = []
+                finally:
+                    if diarization_executor is not None:
+                        diarization_executor.shutdown(wait=False)
+
             if speakers:
                 transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
                 transcription_segments = stitch_speaker_turns(transcription_segments)
@@ -447,6 +477,12 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         logger.exception("Transcription failed for job %s", job_id)
 
     finally:
+        # Audit #16: retries re-use the same file_path. Don't rmtree if this
+        # job was created from a retry — the parent dir is still wanted by any
+        # subsequent retry attempt.
+        retry_of = getattr(job, "_retry_of", None) if job is not None else None
+        if retry_of:
+            return
         try:
             parent_dir = os.path.dirname(audio_path)
             if parent_dir and os.path.isdir(parent_dir) and parent_dir.startswith(tempfile.gettempdir()):

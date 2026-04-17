@@ -13,10 +13,8 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Literal
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
-
-from rate_limit import check_rate_limit
 
 from config import (
     SUPPORTED_LANGUAGES, MLX_MODELS, ALLOWED_EXTENSIONS,
@@ -70,7 +68,34 @@ def _validate_file_magic(file_path: str, expected_ext: str) -> bool:
         return False
 
 
-@router.post("/transcribe/file", dependencies=[Depends(check_rate_limit)])
+async def _extract_audio_then_transcribe(
+    job_id: str,
+    input_path: str,
+    audio_path: str,
+    remove_input_after: bool,
+    settings: TranscriptionSettings,
+):
+    """Background task: run blocking extract_audio off the event loop, then transcribe (audit #8)."""
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, extract_audio, input_path, audio_path)
+        if remove_input_after:
+            try:
+                os.remove(input_path)
+            except OSError:
+                pass
+    except Exception as exc:
+        logger.error("extract_audio failed for job %s", job_id, exc_info=True)
+        job = state.jobs.get(job_id)
+        if job is not None:
+            job.status = "failed"
+            job.error = f"Audio extraction failed: {exc}"
+            state.jobs.update(job)
+        return
+    await transcribe_audio(job_id, audio_path, settings)
+
+
+@router.post("/transcribe/file")
 async def transcribe_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -156,14 +181,13 @@ async def transcribe_file(
                 detail=f"File content does not match declared type '{file_ext}'"
             )
 
+        # Audit #8: do NOT call extract_audio inline — push it into the background task
+        # so the HTTP response can return immediately with job_id.
+        audio_path = os.path.join(temp_dir, "audio.wav")
         if file_ext in ALLOWED_AUDIO_EXTENSIONS:
-            converted_path = os.path.join(temp_dir, "audio.wav")
-            extract_audio(input_path, converted_path)
-            audio_path = converted_path
+            remove_input_after = False
         else:
-            audio_path = os.path.join(temp_dir, "audio.wav")
-            extract_audio(input_path, audio_path)
-            os.remove(input_path)
+            remove_input_after = True
 
         parsed_context_terms = None
         if context_terms:
@@ -185,7 +209,10 @@ async def transcribe_file(
         )
 
         state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
-        background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
+        background_tasks.add_task(
+            _extract_audio_then_transcribe,
+            job_id, input_path, audio_path, remove_input_after, settings,
+        )
 
         return {"job_id": job_id, "status": "processing", "model": effective_model, "engine": engine}
 
@@ -198,7 +225,7 @@ async def transcribe_file(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/transcribe/youtube", dependencies=[Depends(check_rate_limit)])
+@router.post("/transcribe/youtube")
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
@@ -348,7 +375,7 @@ async def transcribe_youtube(
         raise HTTPException(status_code=500, detail="YouTube transcription failed. The video may be unavailable or an internal error occurred.")
 
 
-@router.post("/transcribe/batch", dependencies=[Depends(check_rate_limit)])
+@router.post("/transcribe/batch")
 async def transcribe_batch(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
@@ -406,17 +433,40 @@ async def transcribe_batch(
     for file in files:
         job_id = str(uuid.uuid4())
         job = TranscriptionJob(job_id)
-        state.jobs[job_id] = job
-        job_ids.append(job_id)
 
         temp_dir = tempfile.mkdtemp()
         file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
         input_path = os.path.join(temp_dir, f"input{file_ext}")
+        audio_path = os.path.join(temp_dir, "audio.wav")
+
+        parsed_context_terms = None
+        if context_terms:
+            parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
+
+        settings = TranscriptionSettings(
+            vad_filter=False,
+            word_timestamps=word_timestamps,
+            language=language,
+            enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
+            model_size=effective_model,
+            translate_to_english=translate_to_english,
+            engine=engine,
+            context_terms=parsed_context_terms,
+            two_pass=two_pass and engine == "voxtral-api",
+            output_mode=output_mode,
+        )
+
+        # Audit #6: persist via JobStore.create() BEFORE upload so an oversize
+        # failure can persist job.status="failed" properly.
+        state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
+        job_ids.append(job_id)
 
         max_size = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
 
         try:
             file_size = 0
+            oversize = False
             with open(input_path, "wb") as f:
                 while chunk := await file.read(1024 * 1024):
                     file_size += len(chunk)
@@ -425,47 +475,27 @@ async def transcribe_batch(
                         shutil.rmtree(temp_dir, ignore_errors=True)
                         job.status = "failed"
                         job.error = f"File too large. Maximum size is {max_size // (1024 * 1024)}MB."
+                        state.jobs.update(job)
+                        oversize = True
                         break
                     f.write(chunk)
 
-            if job.status == "failed":
+            if oversize:
                 continue
 
             audio_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
+            remove_input_after = file_ext not in audio_extensions
 
-            if file_ext in audio_extensions:
-                converted_path = os.path.join(temp_dir, "audio.wav")
-                extract_audio(input_path, converted_path)
-                audio_path = converted_path
-            else:
-                audio_path = os.path.join(temp_dir, "audio.wav")
-                extract_audio(input_path, audio_path)
-                os.remove(input_path)
-
-            parsed_context_terms = None
-            if context_terms:
-                parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
-
-            settings = TranscriptionSettings(
-                vad_filter=False,
-                word_timestamps=word_timestamps,
-                language=language,
-                enable_diarization=enable_diarization,
-                num_speakers=num_speakers,
-                model_size=effective_model,
-                translate_to_english=translate_to_english,
-                engine=engine,
-                context_terms=parsed_context_terms,
-                two_pass=two_pass and engine == "voxtral-api",
-                output_mode=output_mode,
+            background_tasks.add_task(
+                _extract_audio_then_transcribe,
+                job_id, input_path, audio_path, remove_input_after, settings,
             )
-
-            background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
         except Exception as e:
             shutil.rmtree(temp_dir, ignore_errors=True)
             job.status = "failed"
             job.error = str(e)
+            state.jobs.update(job)
 
     batch = BatchJob(batch_id, job_ids)
     state.batch_jobs[batch_id] = batch
@@ -710,13 +740,21 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
             logger.error(f"Retry YouTube error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Retry failed. The video may be unavailable or an internal error occurred.")
     else:
-        # File-based job: check if temp file still exists
-        if not file_path or not os.path.exists(file_path):
-            raise HTTPException(
-                status_code=410,
-                detail="Original file is no longer available. Please re-upload."
-            )
+        # File-based job: check if temp file still exists AND that it lives under /tmp.
+        # Audit #4: never re-read a stored path that escapes the system temp dir.
+        if not file_path:
+            raise HTTPException(status_code=410, detail="original upload no longer available")
+        try:
+            resolved = Path(file_path).resolve()
+            if not resolved.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+                raise HTTPException(status_code=410, detail="original upload no longer available")
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=410, detail="original upload no longer available")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=410, detail="original upload no longer available")
         state.jobs.create(new_job, file_path=file_path, settings=stored_settings)
+        # Audit #16: mark job as a retry so the worker's cleanup guard can skip rmtree.
+        setattr(new_job, "_retry_of", job_id)
         background_tasks.add_task(transcribe_audio, new_job_id, file_path, settings)
         return {"job_id": new_job_id, "status": "processing", "retried_from": job_id}
 
@@ -809,6 +847,10 @@ async def search_transcript(
 
     if not q:
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+    # Audit #23: cap search query length.
+    if len(q) > 200:
+        raise HTTPException(status_code=400, detail="query too long")
 
     matches = []
     search_query = q if case_sensitive else q.lower()

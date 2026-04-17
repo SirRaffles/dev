@@ -6,7 +6,7 @@
 # Usage: ./scripts/start-all.sh
 #
 
-set -eo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -40,7 +40,7 @@ mkdir -p "$LOG_DIR"
 cleanup() {
     echo ""
     echo -e "${YELLOW}Shutting down services...${NC}"
-    kill $(jobs -p) 2>/dev/null
+    kill "$(jobs -p)" 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGINT SIGTERM
@@ -52,7 +52,7 @@ BACKEND_PID=$!
 
 # Wait for backend to start
 echo -e "${YELLOW}Waiting for backend to initialize...${NC}"
-for i in {1..30}; do
+for _ in {1..30}; do
     if curl -s http://localhost:8000/health > /dev/null 2>&1; then
         echo -e "${GREEN}Backend ready!${NC}"
         break

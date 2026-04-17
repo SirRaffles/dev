@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 import state
@@ -21,13 +21,16 @@ router = APIRouter(tags=["speakers"])
 
 SPEAKERS_DIR = ICLOUD_BASE_PATH / "speakers"
 
+# Audit #4: restrict speaker names to a conservative, filesystem-safe charset.
+_SPEAKER_NAME_PATTERN = r"^[A-Za-z0-9 _\-]{1,64}$"
+
 
 class SpeakerCreateRequest(BaseModel):
-    name: str
+    name: str = Field(..., pattern=_SPEAKER_NAME_PATTERN)
 
 
 class SpeakerUpdateRequest(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, pattern=_SPEAKER_NAME_PATTERN)
 
 
 class PersonalityUpdateRequest(BaseModel):
