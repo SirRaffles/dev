@@ -9,11 +9,12 @@
 # Usage: ./scripts/start-watcher-with-health-check.sh [--scan-existing] [--debug]
 #
 
-set -eo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 WATCHER_DIR="$PROJECT_DIR/watcher"
+WHISPER_ENV="$HOME/.whisper-env"
 
 # Backend configuration
 BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
@@ -67,10 +68,17 @@ wait_for_backend() {
     return 1
 }
 
-# Load HF_TOKEN from .env if available
-if [ -z "$HF_TOKEN" ] && [ -f "$PROJECT_DIR/.env" ]; then
-    source "$PROJECT_DIR/.env"
-    export HF_TOKEN
+# Load secrets from ~/.whisper-env (required to be mode 0600).
+if [ -f "$WHISPER_ENV" ]; then
+    mode=$(stat -f %Lp "$WHISPER_ENV")
+    if [ "$mode" != "600" ]; then
+        log "ERROR: $WHISPER_ENV has mode $mode; must be 600."
+        exit 1
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    source "$WHISPER_ENV"
+    set +a
 fi
 
 # Check if venv exists
@@ -79,6 +87,10 @@ if [ ! -d "$WATCHER_DIR/.venv" ]; then
     log "Please run the installer first: ./scripts/install-watcher.sh"
     exit 1
 fi
+
+# Ensure log directory exists
+umask 077
+mkdir -p "$HOME/Library/Logs/whisper"
 
 # Wait for backend to be available
 wait_for_backend

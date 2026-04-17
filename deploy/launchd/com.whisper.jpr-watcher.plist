@@ -16,8 +16,6 @@
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HF_TOKEN</key>
-        <string>__HF_TOKEN_PLACEHOLDER__</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>
@@ -36,10 +34,10 @@
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Users/davidmarchesseau/.jpr_watcher.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/jpr-watcher.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/davidmarchesseau/.jpr_watcher.error.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/jpr-watcher.error.log</string>
 
     <!-- Run as background process -->
     <key>ProcessType</key>

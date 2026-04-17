@@ -43,6 +43,10 @@ class JobStore:
     Provides persistence across backend restarts.
     """
 
+    # Audit #14: run prune_completed every hour via a daemon thread instead of
+    # on every create().
+    _PRUNE_INTERVAL_SECONDS = 3600
+
     def __init__(self, db_path: str = None):
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
@@ -55,13 +59,25 @@ class JobStore:
         except OSError:
             pass
         self._load_active_jobs()
+        # Start background prune timer (daemon thread exits with the process).
+        self._prune_stop = threading.Event()
+        self._prune_thread = threading.Thread(
+            target=self._prune_loop, daemon=True, name="job-prune"
+        )
+        self._prune_thread.start()
 
     def _get_connection(self):
+        # TODO(audit #14): switch to thread-local cached connections. Current
+        # implementation opens a fresh handle per call, which is safe but slow.
         return sqlite3.connect(self.db_path, check_same_thread=False)
 
     def _init_db(self):
         with self._get_connection() as conn:
+            # Audit #14: WAL + relaxed sync + in-memory temp + mmap for perf.
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA mmap_size=268435456")
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
@@ -102,6 +118,13 @@ class JobStore:
                 job = self._row_to_job(row)
                 self._cache[job.job_id] = job
         logger.info(f"Loaded {len(self._cache)} active jobs from database")
+
+    def _prune_loop(self):
+        while not self._prune_stop.wait(self._PRUNE_INTERVAL_SECONDS):
+            try:
+                self.prune_completed()
+            except Exception as exc:
+                logger.warning("Periodic prune_completed failed: %s", exc)
 
     def _row_to_job(self, row) -> TranscriptionJob:
         job = TranscriptionJob(row[0])
@@ -158,7 +181,7 @@ class JobStore:
                 logger.info("Pruned %d completed/failed jobs older than %dh", pruned, max_age_hours)
 
     def create(self, job: TranscriptionJob, file_path: str = None, settings: dict = None, youtube_url: str = None):
-        self.prune_completed()
+        # Audit #14: prune is now a scheduled job; do not run it synchronously here.
         with self._lock:
             self._cache[job.job_id] = job
             with self._get_connection() as conn:

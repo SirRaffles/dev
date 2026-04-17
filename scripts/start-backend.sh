@@ -6,12 +6,13 @@
 # Usage: ./scripts/start-backend.sh
 #
 
-set -eo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKEND_DIR="$PROJECT_DIR/backend"
 VENV_DIR="$BACKEND_DIR/venv"
+WHISPER_ENV="$HOME/.whisper-env"
 
 # Colors for output
 RED='\033[0;31m'
@@ -24,24 +25,22 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Davrine Transcription Backend${NC}"
 echo -e "${BLUE}========================================${NC}"
 
-# Check for HuggingFace token
-if [ -z "$HF_TOKEN" ]; then
-    if [ -f "$PROJECT_DIR/.env" ]; then
-        source "$PROJECT_DIR/.env"
-        export HF_TOKEN
+# Load secrets from ~/.whisper-env (required to be mode 0600).
+if [ -f "$WHISPER_ENV" ]; then
+    mode=$(stat -f %Lp "$WHISPER_ENV")
+    if [ "$mode" != "600" ]; then
+        echo -e "${RED}Error: $WHISPER_ENV has mode $mode; must be 600.${NC}" >&2
+        echo -e "${YELLOW}Fix with: chmod 600 $WHISPER_ENV${NC}" >&2
+        exit 1
     fi
+    set -a
+    # shellcheck disable=SC1090
+    source "$WHISPER_ENV"
+    set +a
 fi
 
-if [ -z "$HF_TOKEN" ]; then
-    echo -e "${YELLOW}Warning: HF_TOKEN not set. Speaker diarization will be disabled.${NC}"
-    echo -e "${YELLOW}Get your token at: https://huggingface.co/settings/tokens${NC}"
-    echo ""
-    read -p "Enter HuggingFace token (or press Enter to skip): " HF_TOKEN
-    if [ -n "$HF_TOKEN" ]; then
-        export HF_TOKEN
-        echo "HF_TOKEN=$HF_TOKEN" > "$PROJECT_DIR/.env"
-        echo -e "${GREEN}Token saved to .env file${NC}"
-    fi
+if [ -z "${HF_TOKEN:-}" ]; then
+    echo -e "${YELLOW}Warning: HF_TOKEN not set in ~/.whisper-env. Speaker diarization disabled.${NC}"
 fi
 
 # Use Python 3.11 for best compatibility with ML packages
@@ -65,6 +64,7 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 # Activate virtual environment
+# shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
 # Check if dependencies are installed
@@ -81,6 +81,10 @@ if ! command -v ffmpeg &> /dev/null; then
     exit 1
 fi
 
+# Ensure log directory exists with restrictive permissions (audit #21)
+umask 077
+mkdir -p "$HOME/Library/Logs/whisper"
+
 # Get local IP for network access
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "localhost")
 
@@ -93,6 +97,6 @@ echo -e "${YELLOW}First startup will download Whisper model (~3GB)${NC}"
 echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
 echo ""
 
-# Start the server
+# Start the server (bound to localhost by default; Tailscale-fronted deployment)
 cd "$BACKEND_DIR"
-exec uvicorn main:app --host "${UVICORN_HOST:-0.0.0.0}" --port 8000
+exec uvicorn main:app --host "${UVICORN_HOST:-127.0.0.1}" --port 8000

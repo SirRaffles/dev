@@ -4,15 +4,35 @@ Handles the call lifecycle: speaker identification, context assignment, delivera
 """
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 
 import state
+from config import ICLOUD_BASE_PATH, JPR_WATCH_PATH
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["calls"])
+
+
+def _validate_source_path(source_path: str) -> str:
+    """Ensure source_path resolves inside an allowed root (audit #4).
+
+    Raises HTTPException(400) if the resolved path escapes ICLOUD_BASE_PATH
+    or JPR_WATCH_PATH.
+    """
+    if ".." in source_path.split("/") or ".." in source_path.split("\\"):
+        raise HTTPException(status_code=400, detail="source_path contains '..'")
+    try:
+        resolved = Path(source_path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=400, detail="invalid source_path")
+    allowed_roots = [ICLOUD_BASE_PATH.resolve(), JPR_WATCH_PATH.resolve()]
+    if not any(resolved.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=400, detail="source_path outside allowed roots")
+    return str(resolved)
 
 
 class ConfirmSpeakerRequest(BaseModel):
@@ -33,6 +53,22 @@ class RegisterCallRequest(BaseModel):
     source_type: str = "upload"
     source_path: Optional[str] = None
     title: Optional[str] = None
+
+    @field_validator("source_path")
+    @classmethod
+    def _validate_source_path(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if ".." in v.split("/") or ".." in v.split("\\"):
+            raise ValueError("source_path contains '..'")
+        try:
+            resolved = Path(v).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"invalid source_path: {exc}")
+        allowed_roots = [ICLOUD_BASE_PATH.resolve(), JPR_WATCH_PATH.resolve()]
+        if not any(resolved.is_relative_to(root) for root in allowed_roots):
+            raise ValueError("source_path outside allowed roots")
+        return str(resolved)
 
 
 @router.get("/calls")
@@ -156,6 +192,9 @@ async def identify_speakers(job_id: str):
             detail="Audio file path not available (needed for embedding extraction)"
         )
 
+    # Re-validate at read site (audit #4): stored paths are not implicitly trusted.
+    audio_path = _validate_source_path(audio_path)
+
     try:
         embedding_service = state.get_speaker_embedding_service()
         identifications = embedding_service.auto_identify_speakers(
@@ -180,9 +219,9 @@ async def identify_speakers(job_id: str):
 
         return {"identifications": identifications, "all_matched": all_matched}
 
-    except Exception as e:
-        logger.error("Speaker identification failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail="Speaker identification failed. Please try again.")
+    except Exception:
+        logger.error("Speaker identification failed for job %s", job_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/calls/{job_id}/confirm-speaker")
@@ -213,7 +252,6 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
             # Create speaker without embedding (can be added later)
             import uuid
             speaker_id = str(uuid.uuid4())
-            from config import ICLOUD_BASE_PATH
             folder = ICLOUD_BASE_PATH / "speakers" / speaker_name
             folder.mkdir(parents=True, exist_ok=True)
             folder_path = str(folder.relative_to(ICLOUD_BASE_PATH))
@@ -297,9 +335,9 @@ async def generate_deliverables(job_id: str):
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("Deliverable generation failed for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail="Deliverable generation failed. Please try again.")
+    except Exception:
+        logger.error("Deliverable generation failed for %s", job_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/calls/{job_id}/deliverables")
@@ -313,7 +351,6 @@ async def get_deliverables(job_id: str):
         return {"summary_md": None, "analysis_md": None, "generated": False}
 
     # Read from call folder on iCloud Drive
-    from config import ICLOUD_BASE_PATH
     call_folder = ICLOUD_BASE_PATH / call.get("call_folder_path", "")
 
     summary_md = ""

@@ -40,10 +40,10 @@
 
     <!-- Log files -->
     <key>StandardOutPath</key>
-    <string>/Users/davidmarchesseau/.whisper-frontend.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/frontend.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/davidmarchesseau/.whisper-frontend.error.log</string>
+    <string>/Users/davidmarchesseau/Library/Logs/whisper/frontend.error.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>
