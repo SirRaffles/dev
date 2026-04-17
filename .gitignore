@@ -62,3 +62,6 @@ ENV/
 # Test output
 /test-results/
 /playwright-report/
+
+# Worktrees
+.worktrees/
