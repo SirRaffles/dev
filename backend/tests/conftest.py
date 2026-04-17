@@ -16,6 +16,14 @@ def _patch_env():
     os.environ.setdefault("LOG_FILE", os.path.join(tempfile.gettempdir(), "whisper_test.log"))
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    import rate_limit
+    rate_limit._requests.clear()
+    yield
+    rate_limit._requests.clear()
+
+
 @pytest.fixture
 def icloud_base(tmp_path, monkeypatch):
     """Create a temp iCloud-like directory and patch all paths to use it."""
