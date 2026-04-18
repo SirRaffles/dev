@@ -223,7 +223,42 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Audit #1: no shared-secret auth; backend binds to 127.0.0.1 and sits behind Tailscale.
+
+# Network-level access control: allow only loopback, LAN, and Tailscale peers.
+# Rationale: backend binds 0.0.0.0 so the NAS nginx proxy can reach it over
+# Tailscale (100.64.0.0/10) or LAN. We don't want random WiFi devices hitting
+# /transcribe. No shared-secret auth — Tailscale ACL + LAN is the gate.
+import ipaddress
+
+_allowlist_env = os.environ.get(
+    "TRUSTED_IP_CIDRS",
+    "127.0.0.0/8,::1/128,100.64.0.0/10,fd7a:115c:a1e0::/48,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12",
+)
+_TRUSTED_NETWORKS = tuple(
+    ipaddress.ip_network(cidr.strip(), strict=False)
+    for cidr in _allowlist_env.split(",") if cidr.strip()
+)
+
+
+class IPAllowlistMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        client_host = request.client.host if request.client else None
+        if client_host:
+            try:
+                addr = ipaddress.ip_address(client_host)
+                if not any(addr in net for net in _TRUSTED_NETWORKS):
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        {"detail": "Forbidden: source IP not in trusted network"},
+                        status_code=403,
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
+
+
+app.add_middleware(IPAllowlistMiddleware)
+logger.info("IP allowlist active: %s", _allowlist_env)
 
 # Include route modules with rate limiting applied at router level (audit #2)
 _rate_dep = [Depends(check_rate_limit)]
