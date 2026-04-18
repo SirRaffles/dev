@@ -40,9 +40,9 @@ High-quality audio and video transcription powered by OpenAI Whisper Large-V3 vi
    brew install ffmpeg
    ```
 
-2. **HuggingFace Token** (required for speaker diarization)
-   - Get your token at: https://huggingface.co/settings/tokens
-   - Accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
+2. **HuggingFace Token** (required for speaker diarization rate limits)
+   - Get a read-only token at: https://huggingface.co/settings/tokens
+   - The model at https://huggingface.co/pyannote/speaker-diarization-community-1 is open-source — no terms acceptance required
 
 3. **Environment Setup**
    ```bash
@@ -323,8 +323,8 @@ whisper-transcription-app/
 - Check port 8000 is free: `lsof -i:8000`
 
 ### Speaker diarization not working
-- Verify HF_TOKEN is set correctly
-- Accept model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1
+- Verify HF_TOKEN is set correctly (a read-only token suffices)
+- Confirm network access to https://huggingface.co/pyannote/speaker-diarization-community-1 (open-source, no terms acceptance)
 
 ### Frontend can't connect to backend
 - Ensure backend is running: `curl http://localhost:8000/health`

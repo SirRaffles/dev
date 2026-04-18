@@ -125,9 +125,9 @@ async def lifespan(app: FastAPI):
         logger.info("Note: Diarization model loads in subprocess to keep server responsive")
         state.diarization_pipeline = True
     else:
-        logger.warning("HF_TOKEN not set. Speaker diarization requires a HuggingFace token.")
-        logger.warning("Get your token at: https://huggingface.co/settings/tokens")
-        logger.warning("Then accept the model terms at: https://huggingface.co/pyannote/speaker-diarization-community-1")
+        logger.warning("HF_TOKEN not set. Speaker diarization requires a HuggingFace token for rate limits.")
+        logger.warning("Get a (read-only) token at: https://huggingface.co/settings/tokens")
+        logger.warning("Model: https://huggingface.co/pyannote/speaker-diarization-community-1 (no terms acceptance required)")
 
     # Check for refinement availability
     if state.refinement_available:

@@ -87,8 +87,9 @@ def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List
             )
         elif "403" in error_msg or "gated" in error_msg.lower():
             logger.warning(
-                "Diarization failed (license): %s — Accept license at "
-                "https://huggingface.co/pyannote/speaker-diarization-community-1", error_msg
+                "Diarization failed (access): %s — Check HF connectivity. "
+                "Model at https://huggingface.co/pyannote/speaker-diarization-community-1 "
+                "is open-source (no terms acceptance required).", error_msg
             )
         else:
             logger.exception("Diarization failed: %s", e)
