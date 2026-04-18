@@ -7,12 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend/venv/bin/uvicorn</string>
-        <string>main:app</string>
-        <string>--host</string>
-        <string>0.0.0.0</string>
-        <string>--port</string>
-        <string>8000</string>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec /Users/davidmarchesseau/Development/apps/whisper-transcription-app/scripts/start-backend.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -24,6 +21,8 @@
         <string>1</string>
         <key>PATH</key>
         <string>/Users/davidmarchesseau/Development/apps/whisper-transcription-app/backend/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>UVICORN_HOST</key>
+        <string>0.0.0.0</string>
     </dict>
 
     <!-- Start automatically on login -->
