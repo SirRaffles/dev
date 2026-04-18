@@ -53,10 +53,20 @@ def run_diarization(audio_path: str, num_speakers: Optional[int] = None) -> List
 
         logger.info("Running diarization (in-process singleton)...")
 
+        # Pre-load audio as an in-memory tensor so pyannote-audio 4.x
+        # doesn't rely on torchcodec (which ABI-breaks against torch 2.8
+        # on this venv). soundfile is already a transitive dep.
+        import soundfile as sf
+        import torch
+        audio_np, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
+        # pyannote expects (channel, time) float32 torch tensor
+        waveform = torch.from_numpy(audio_np.T)
+        audio_input = {"waveform": waveform, "sample_rate": sample_rate}
+
         if num_speakers and num_speakers > 0:
-            diarization = pipeline(audio_path, num_speakers=num_speakers)
+            diarization = pipeline(audio_input, num_speakers=num_speakers)
         else:
-            diarization = pipeline(audio_path)
+            diarization = pipeline(audio_input)
 
         speakers = []
         if hasattr(diarization, 'speaker_diarization'):
