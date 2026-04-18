@@ -234,13 +234,12 @@ function RecordingsView() {
     status, sortBy, q: query,
   });
 
-  // When filtering to "processed", default sort to completed_at; otherwise date.
+  // "completed_at" only makes sense for processed rows — clamp back to
+  // "date" when the current filter isn't Processed.
   const effectiveSortBy: RecordingsSort = useMemo(
     () => (status === 'processed' ? sortBy : 'date'),
     [status, sortBy]
   );
-
-  const showProcessedSort = status === 'processed';
 
   const hitRename = (r: JPRRecording) => setRenamingPath(r.path);
   const onRenameDone = (newPath?: string) => {
@@ -303,20 +302,18 @@ function RecordingsView() {
             className="w-full pl-10 pr-3 py-2 text-sm rounded-lg border border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
           />
         </div>
-        {showProcessedSort && (
-          <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <ArrowUpDown className="w-4 h-4" aria-hidden="true" />
-            <span>Sort by</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as RecordingsSort)}
-              className="px-2 py-1.5 text-sm rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:border-blue-400 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-            >
-              <option value="completed_at">Processing date</option>
-              <option value="date">Recording date</option>
-            </select>
-          </label>
-        )}
+        <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <ArrowUpDown className="w-4 h-4" aria-hidden="true" />
+          <span>Sort by</span>
+          <select
+            value={effectiveSortBy}
+            onChange={(e) => setSortBy(e.target.value as RecordingsSort)}
+            className="px-2 py-1.5 text-sm rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:border-blue-400 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+          >
+            <option value="date">Recording date</option>
+            {status === 'processed' && <option value="completed_at">Processing date</option>}
+          </select>
+        </label>
       </div>
 
       {/* Error banner */}
@@ -340,16 +337,27 @@ function RecordingsView() {
         </div>
       ) : (
         <div className="space-y-2">
+          {/* Column header (desktop only) */}
+          <div className="hidden sm:flex items-center gap-3 px-3 pb-2 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+            <div className="w-5 flex-shrink-0" aria-hidden="true" />
+            <div className="flex-1 min-w-0">File</div>
+            <div className="flex-shrink-0 w-36 text-right">
+              {effectiveSortBy === 'completed_at' ? 'Processed' : 'Recorded'}
+            </div>
+            <div className="flex-shrink-0 w-16 text-right">Size</div>
+            <div className="flex-shrink-0 w-[112px] text-right" aria-hidden="true" />
+          </div>
           {recordings.map((rec) => {
             const isRenaming = renamingPath === rec.path;
             const canOpenTranscript = rec.transcript_exists;
+            const effectiveStatus = rec.effective_status || rec.status;
             const whenShown = effectiveSortBy === 'completed_at' ? rec.completed_at : rec.date;
             return (
               <div
                 key={rec.path}
                 className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               >
-                <div className="flex-shrink-0"><StatusIcon status={rec.status} /></div>
+                <div className="flex-shrink-0"><StatusIcon status={effectiveStatus} /></div>
 
                 {isRenaming ? (
                   <RenameInline rec={rec} onDone={onRenameDone} />
@@ -362,14 +370,17 @@ function RecordingsView() {
                     className={`flex-1 min-w-0 text-left ${canOpenTranscript ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
                   >
                     <p className="text-sm font-medium truncate">{rec.filename}</p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate sm:hidden">
                       {formatDate(whenShown)}
                       {' · '}
                       {(rec.size_bytes / 1024 / 1024).toFixed(1)} MB
-                      {rec.speakers && rec.speakers.length > 0 && (
-                        <> {' · '} <span className="text-purple-600 dark:text-purple-400">{rec.speakers.length} speaker{rec.speakers.length === 1 ? '' : 's'}</span></>
-                      )}
                     </p>
+                    {rec.speakers && rec.speakers.length > 0 && (
+                      <p className="text-xs text-purple-600 dark:text-purple-400 truncate">
+                        {rec.speakers.length} speaker{rec.speakers.length === 1 ? '' : 's'}
+                        {rec.speakers.length <= 4 && `: ${rec.speakers.join(', ')}`}
+                      </p>
+                    )}
                     {rec.transcript_preview && query && (
                       <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 italic line-clamp-2">
                         “{rec.transcript_preview.replace(/\s+/g, ' ').trim()}”
@@ -378,8 +389,20 @@ function RecordingsView() {
                   </button>
                 )}
 
+                {/* Dedicated date + size columns (hidden on narrow screens) */}
+                {!isRenaming && (
+                  <>
+                    <div className="hidden sm:block flex-shrink-0 text-right w-36 text-xs text-slate-500 dark:text-slate-400">
+                      {formatDate(whenShown)}
+                    </div>
+                    <div className="hidden sm:block flex-shrink-0 text-right w-16 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                      {(rec.size_bytes / 1024 / 1024).toFixed(1)} MB
+                    </div>
+                  </>
+                )}
+
                 <div className="flex items-center gap-1 flex-shrink-0">
-                  <StatusBadge status={rec.status} />
+                  <StatusBadge status={effectiveStatus} />
                   {!isRenaming && (
                     <>
                       {canOpenTranscript && (

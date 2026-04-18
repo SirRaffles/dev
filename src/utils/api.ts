@@ -495,7 +495,8 @@ export interface JPRRecording {
   date: string;                 // ISO timestamp of the recording (file mtime)
   date_folder?: string;         // legacy; kept for back-compat
   size_bytes: number;
-  status: string;               // unprocessed | completed | processing | pending_submission | failed | permanently_failed | unknown
+  status: string;               // raw watcher status
+  effective_status?: string;    // UI-facing: completed | processing | failed | unprocessed (driven by transcript_exists OR watcher)
   job_id?: string | null;
   transcript_exists: boolean;
   transcript_preview?: string | null;

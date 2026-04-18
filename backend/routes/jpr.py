@@ -203,6 +203,20 @@ async def list_recordings(
         transcript_exists = f.with_suffix(".txt").exists()
         speakers = _job_speakers(file_status.get("job_id")) if file_status.get("job_id") else []
 
+        # UI-facing "effective" status: a file with a sibling .txt is
+        # functionally processed even if the watcher never tracked it (e.g.
+        # web-UI uploads don't update watcher_state). Keeps the badge/icon
+        # rendering consistent with the filter logic.
+        raw_status = file_status.get("status", "unprocessed")
+        if raw_status == "completed" or transcript_exists:
+            effective_status = "completed"
+        elif raw_status in ("pending_submission", "processing"):
+            effective_status = "processing"
+        elif raw_status in ("failed", "permanently_failed"):
+            effective_status = "failed"
+        else:
+            effective_status = "unprocessed"
+
         entries.append({
             "filename": f.name,
             "path": str(f.relative_to(JPR_WATCH_PATH)),
@@ -211,6 +225,7 @@ async def list_recordings(
             "transcript_exists": transcript_exists,
             "transcript_preview": (txt_preview_full[:_PREVIEW_CHARS] if txt_preview_full else None),
             "speakers": speakers,
+            "effective_status": effective_status,
             **file_status,
         })
 
