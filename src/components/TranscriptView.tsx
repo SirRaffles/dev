@@ -13,6 +13,8 @@ interface TranscriptResult {
   speakers?: string[];
   segments?: Segment[];
   result?: string;
+  source?: string;            // "youtube_captions" | undefined
+  is_generated?: boolean;     // true for YouTube auto-generated captions
 }
 
 interface TranscriptViewProps {
@@ -285,6 +287,23 @@ function TranscriptView({
             <span className="text-slate-500 dark:text-slate-300">Speakers:</span>
             <span className="font-medium">{speakers.length}</span>
           </div>
+        )}
+        {result.source === 'youtube_captions' && (
+          <span
+            role="status"
+            aria-label={
+              result.is_generated
+                ? 'Source: YouTube auto-generated captions (lower quality)'
+                : 'Source: YouTube human-authored captions'
+            }
+            className={
+              result.is_generated
+                ? 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400'
+                : 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/20 text-green-700 dark:text-green-400'
+            }
+          >
+            {result.is_generated ? 'Auto-generated captions' : 'YouTube captions'}
+          </span>
         )}
       </div>
 

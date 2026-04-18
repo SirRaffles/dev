@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
 import { X } from 'lucide-react';
 
-const YOUTUBE_PATTERN = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/)|youtu\.be\/|music\.youtube\.com\/watch\?)/;
+// KEEP IN SYNC WITH backend/services/youtube.py YOUTUBE_URL_RE
+// Requires an 11-char video id in every variant (current YouTube spec).
+const YOUTUBE_URL_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=[A-Za-z0-9_-]{11}|shorts\/[A-Za-z0-9_-]{11}|live\/[A-Za-z0-9_-]{11}|embed\/[A-Za-z0-9_-]{11})|youtu\.be\/[A-Za-z0-9_-]{11}|music\.youtube\.com\/watch\?(?:[^#]*&)?v=[A-Za-z0-9_-]{11})/;
 
 interface YouTubeInputProps {
   url: string;
@@ -18,7 +20,7 @@ function YouTubeInput({
 }: YouTubeInputProps) {
   const isValid = useMemo(() => {
     if (!url) return null;
-    return YOUTUBE_PATTERN.test(url);
+    return YOUTUBE_URL_RE.test(url);
   }, [url]);
 
   const borderClass = isValid === null

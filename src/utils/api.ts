@@ -30,10 +30,14 @@ export interface JobStatus {
     text?: string;
     segments?: Segment[];
     language?: string;
+    source?: string;           // "youtube_captions" | undefined for audio engines
+    is_generated?: boolean;    // true for YouTube auto-captions
   };
   error?: string;
   filename?: string;
   created_at?: string;
+  is_generated?: boolean;      // mirrored at top level by the captions fast-path
+  source?: string;
 }
 
 export interface Segment {

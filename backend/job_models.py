@@ -27,6 +27,8 @@ class TranscriptionJob:
         self.language_probability = None
         self.segments = []
         self.speakers = []  # Speaker diarization results
+        self.is_generated = False  # True when transcript came from auto-generated YT captions
+        self._from_captions = False  # True when the job used the YouTube captions fast-path
 
 
 class BatchJob:

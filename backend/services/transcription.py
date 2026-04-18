@@ -243,7 +243,7 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
             break
 
         # Extract chunk as WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(prefix="whisper-vox-chunk-", suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen, Layers } from 'lucide-react';
 import { LANGUAGES, MODEL_SIZES, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS } from '../utils/api';
 
@@ -60,6 +60,15 @@ function SettingsPanel({
   const isVoxtralApi = engine === 'voxtral-api';
   const isVoxtralLocal = engine === 'voxtral-local';
   const isWhisper = engine === 'whisper';
+
+  // Audit #12: backend silently drops two_pass when engine != voxtral-api.
+  // When the user flips engines, reset twoPass so stale state can't leak into
+  // the next submission.
+  useEffect(() => {
+    if (!isVoxtralApi && twoPass) {
+      onSettingsChange?.({ ...settings, twoPass: false });
+    }
+  }, [isVoxtralApi, twoPass]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Helper: does the current `language` work with a given Parakeet/model entry?
   // Accepts either the legacy single-language `languageRestriction` or the

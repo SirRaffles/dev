@@ -163,7 +163,7 @@ async def transcribe_file(
             detail=f"Unsupported file type '{file_ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}"
         )
 
-    temp_dir = tempfile.mkdtemp()
+    temp_dir = tempfile.mkdtemp(prefix="whisper-upload-")
     input_path = os.path.join(temp_dir, f"input{file_ext}")
 
     max_size = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
@@ -321,20 +321,25 @@ async def transcribe_youtube(
             job.result = transcript["text"]
             job.language = transcript["language"]
             job.language_probability = 1.0
+            # Surface is_generated so the frontend captions badge can reflect
+            # whether these are human-authored or auto-generated captions.
+            job.is_generated = bool(transcript.get("is_generated", False))
+            job._from_captions = True
             state.jobs.update(job)
 
             return {
                 "job_id": job_id,
                 "status": "completed",
                 "source": "youtube_captions",
+                "is_generated": transcript.get("is_generated", False),
                 "language": transcript["language"],
                 "segment_count": len(transcript["segments"]),
             }
 
-    temp_dir = tempfile.mkdtemp()
+    temp_dir = tempfile.mkdtemp(prefix="whisper-yt-")
 
     try:
-        job.status = "downloading"
+        job.status = "processing"
         job.progress_message = "Downloading audio from YouTube..."
         state.jobs.update(job)
 
@@ -381,7 +386,7 @@ async def transcribe_youtube(
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         job.status = "failed"
-        job.error = str(e)
+        job.error = "YouTube transcription failed"
         state.jobs.update(job)
         logger.error(f"YouTube transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="YouTube transcription failed. The video may be unavailable or an internal error occurred.")
@@ -449,7 +454,7 @@ async def transcribe_batch(
         job_id = str(uuid.uuid4())
         job = TranscriptionJob(job_id)
 
-        temp_dir = tempfile.mkdtemp()
+        temp_dir = tempfile.mkdtemp(prefix="whisper-batch-")
         file_ext = Path(file.filename).suffix.lower() if file.filename else ".tmp"
         input_path = os.path.join(temp_dir, f"input{file_ext}")
         audio_path = os.path.join(temp_dir, "audio.wav")
@@ -610,12 +615,18 @@ async def get_job_status(job_id: str):
     }
 
     if job.status == "completed":
+        # Derive source: captions fast-path jobs have the `_from_captions`
+        # marker set; audio-engine jobs don't. Frontend uses this to pick
+        # the right badge.
+        source = "youtube_captions" if getattr(job, "_from_captions", False) else None
         response.update({
             "result": job.result,
             "segments": job.segments,
             "speakers": list(set(s.get("speaker") for s in job.segments if s.get("speaker"))),
             "language": job.language,
             "language_probability": job.language_probability,
+            "is_generated": bool(getattr(job, "is_generated", False)),
+            "source": source,
         })
     elif job.status == "failed":
         response["error"] = job.error
@@ -733,7 +744,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
 
     if youtube_url:
         # Re-download and transcribe YouTube
-        temp_dir = tempfile.mkdtemp()
+        temp_dir = tempfile.mkdtemp(prefix="whisper-yt-retry-")
         new_job.status = "downloading"
         new_job.progress_message = "Downloading audio from YouTube..."
         state.jobs.create(new_job, youtube_url=youtube_url, settings=stored_settings)
