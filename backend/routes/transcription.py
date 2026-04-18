@@ -109,7 +109,7 @@ async def transcribe_file(
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
     enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
-    model_size: str = Query("voxtral-mini-3b", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3, parakeet, parakeet-en-v2, parakeet-multi-v3, voxtral-mini-3b, voxtral-mini-3b-4bit"),
+    model_size: str = Query("voxtral-realtime-4b", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3, parakeet, parakeet-en-v2, parakeet-multi-v3, voxtral-realtime-4b, voxtral-mini-3b, voxtral-mini-3b-4bit"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language -> English)"),
     speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
@@ -136,7 +136,7 @@ async def transcribe_file(
     effective_model = model_size
     if engine == "voxtral-local":
         if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-mini-3b"
+            effective_model = "voxtral-realtime-4b"
         if language not in VOXTRAL_LOCAL_LANGUAGES:
             raise HTTPException(
                 status_code=400,
@@ -238,7 +238,7 @@ async def transcribe_file(
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
-    model_size: str = Query("voxtral-mini-3b", description="Model size"),
+    model_size: str = Query("voxtral-realtime-4b", description="Model size"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers"),
     use_captions: bool = Query(True, description="Try YouTube captions first"),
@@ -267,7 +267,7 @@ async def transcribe_youtube(
     effective_model = model_size
     if engine == "voxtral-local":
         if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-mini-3b"
+            effective_model = "voxtral-realtime-4b"
         if request.language not in VOXTRAL_LOCAL_LANGUAGES:
             raise HTTPException(
                 status_code=400,
@@ -394,7 +394,7 @@ async def transcribe_batch(
     language: str = Query("auto", description="Language code"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers"),
-    model_size: str = Query("voxtral-mini-3b", description="Model size"),
+    model_size: str = Query("voxtral-realtime-4b", description="Model size"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     translate_to_english: bool = Query(False, description="Translate output to English"),
     speed_priority: bool = Query(False, description="Optimize for speed"),
@@ -422,7 +422,7 @@ async def transcribe_batch(
     effective_model = model_size
     if engine == "voxtral-local":
         if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-mini-3b"
+            effective_model = "voxtral-realtime-4b"
         if language not in VOXTRAL_LOCAL_LANGUAGES:
             raise HTTPException(
                 status_code=400,

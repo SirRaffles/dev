@@ -94,15 +94,27 @@ VOXTRAL_MODELS = {
     },
 }
 
-# Voxtral local models (via mlx-audio on Apple Silicon)
+# Voxtral local models (via mlx-audio on Apple Silicon).
+# Architecture flag distinguishes the 3B 2507 family (original audio-LM,
+# bf16 or 4-bit) from the 4B Realtime 2602 family, which uses a separate
+# generator path and takes a transcription_delay_ms parameter. In batch
+# mode with delay=2400ms, the 4B Realtime matches Voxtral Transcribe V2
+# quality (~4% WER FLEURS avg) — roughly half the WER of 3B 2507.
 VOXTRAL_LOCAL_MODELS = {
+    "voxtral-realtime-4b": {
+        "path": "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit",
+        "description": "Best quality (~4% WER, Transcribe V2 class), 4-bit (~3.2GB)",
+        "architecture": "realtime",
+    },
     "voxtral-mini-3b": {
         "path": "mlx-community/Voxtral-Mini-3B-2507-bf16",
-        "description": "Best accuracy (~4% WER), 13 languages (~9.4GB)",
+        "description": "Legacy 3B 2507 audio-LM (~7-8% WER, 9.4GB)",
+        "architecture": "audio_lm",
     },
     "voxtral-mini-3b-4bit": {
         "path": "mzbac/voxtral-mini-3b-4bit-mixed",
-        "description": "Best accuracy (~4% WER), lower memory (~3.2GB)",
+        "description": "Legacy 3B 2507, lower memory (~3.2GB)",
+        "architecture": "audio_lm",
     },
 }
 

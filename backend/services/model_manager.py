@@ -56,7 +56,10 @@ class ModelConfig:
         },
         ModelName.VOXTRAL_LOCAL: {
             "priority": 1,  # Same tier as Whisper — primary transcription engine
-            "memory_mb": 10000,  # Voxtral Mini 3B fp16; 4-bit variant uses ~3500MB
+            # Default assumes 4B Realtime 4-bit (~3.2GB). Legacy 3B bf16 is
+            # 9.4GB; if a user selects that variant the actual footprint is
+            # larger but _can_load_model accounting is only a heuristic.
+            "memory_mb": 3500,
             "unloadable": True,
             "load_timeout": 120,
         },

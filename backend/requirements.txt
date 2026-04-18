@@ -9,9 +9,9 @@ psutil>=5.9.0,<7.0
 # Transcription engines
 faster-whisper>=1.1.0,<2.0
 mlx-whisper>=0.4.0,<1.0
-mlx-audio>=0.2.4,<1.0
+mlx-audio>=0.4.2,<1.0  # >=0.4.2 required for Voxtral-Mini-4B-Realtime-2602 arch
 parakeet-mlx>=0.4.0,<1.0
-transformers>=4.45.0,<4.50  # pin below 5.0 — RC has breaking compat with mlx-audio
+transformers>=5.5,<6.0  # mlx-audio 0.4.x requires transformers 5.x
 
 # YouTube
 yt-dlp>=2024.12.6,<2026.0

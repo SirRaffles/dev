@@ -194,11 +194,15 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     CHUNK_DURATION = 30  # seconds — Voxtral encoder max (WhisperFeatureExtractor chunk_length)
     MAX_TOKENS_PER_CHUNK = 4096
 
-    # Determine which model variant to use
-    model_key = settings.model_size if settings.model_size in VOXTRAL_LOCAL_MODELS else "voxtral-mini-3b"
-    model_path = VOXTRAL_LOCAL_MODELS[model_key]["path"]
+    # Determine which model variant to use. Default to the 4B Realtime
+    # model which matches Voxtral Transcribe V2 quality at batch delay.
+    default_key = "voxtral-realtime-4b"
+    model_key = settings.model_size if settings.model_size in VOXTRAL_LOCAL_MODELS else default_key
+    model_info = VOXTRAL_LOCAL_MODELS[model_key]
+    model_path = model_info["path"]
+    architecture = model_info.get("architecture", "audio_lm")
 
-    logger.info("Transcribing with Voxtral Local (%s)...", model_path)
+    logger.info("Transcribing with Voxtral Local (%s, arch=%s)...", model_path, architecture)
 
     # Audit #12: route through ModelManager so memory accounting is respected.
     manager = get_model_manager()
@@ -250,6 +254,9 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
             gen_kwargs = {"max_tokens": MAX_TOKENS_PER_CHUNK}
             if language:
                 gen_kwargs["language"] = language
+            if architecture == "realtime":
+                # 2400ms ≈ Voxtral Transcribe V2 parity in batch mode.
+                gen_kwargs["transcription_delay_ms"] = 2400
 
             result = model.generate(tmp_path, **gen_kwargs)
 

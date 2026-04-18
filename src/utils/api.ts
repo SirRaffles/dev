@@ -170,8 +170,9 @@ export const VOXTRAL_MODELS: Record<string, ModelInfo> = {
 
 // Voxtral local models (via mlx-audio on Apple Silicon)
 export const VOXTRAL_LOCAL_MODELS: Record<string, ModelInfo> = {
-  'voxtral-mini-3b': { label: 'Voxtral Mini 3B', description: 'Best accuracy (~4% WER), 13 languages (~9.4GB)' },
-  'voxtral-mini-3b-4bit': { label: 'Voxtral Mini 3B (4-bit)', description: 'Best accuracy (~4% WER), lower memory (~3.2GB)' },
+  'voxtral-realtime-4b': { label: 'Voxtral Realtime 4B', description: 'Best quality (~4% WER, Transcribe V2 class), 4-bit (~3.2GB)' },
+  'voxtral-mini-3b': { label: 'Voxtral Mini 3B (legacy)', description: 'Legacy 3B 2507 audio-LM (~7-8% WER, 9.4GB)' },
+  'voxtral-mini-3b-4bit': { label: 'Voxtral Mini 3B 4-bit (legacy)', description: 'Legacy 3B 2507, lower memory (~3.2GB)' },
 };
 
 // Export formats
@@ -242,7 +243,7 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     language: options.language || 'auto',
     enable_diarization: String(options.enableDiarization ?? true),
     enable_noise_reduction: String(options.enableNoiseReduction ?? false),
-    model_size: options.modelSize || 'voxtral-mini-3b',
+    model_size: options.modelSize || 'voxtral-realtime-4b',
     word_timestamps: String(options.wordTimestamps ?? false),
     translate_to_english: String(options.translateToEnglish ?? false),
     speed_priority: String(options.speedPriority ?? false),
@@ -292,7 +293,7 @@ export async function submitMultiModalProcessing(file: File, options: Transcript
 export async function submitYouTubeTranscription(url: string, options: TranscriptionOptions = {}): Promise<{ job_id: string; status?: string }> {
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
-    model_size: options.modelSize || 'voxtral-mini-3b',
+    model_size: options.modelSize || 'voxtral-realtime-4b',
     word_timestamps: String(options.wordTimestamps ?? false),
     speed_priority: String(options.speedPriority ?? false),
     engine: options.engine || 'voxtral-local',
@@ -401,7 +402,7 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
   const params = new URLSearchParams({
     language: options.language || 'auto',
     enable_diarization: String(options.enableDiarization ?? true),
-    model_size: options.modelSize || 'voxtral-mini-3b',
+    model_size: options.modelSize || 'voxtral-realtime-4b',
     word_timestamps: String(options.wordTimestamps ?? false),
     translate_to_english: String(options.translateToEnglish ?? false),
     speed_priority: String(options.speedPriority ?? false),

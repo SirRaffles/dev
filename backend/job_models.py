@@ -375,7 +375,7 @@ class TranscriptionSettings(BaseModel):
     enable_diarization: bool = True
     num_speakers: Optional[int] = None
     enable_noise_reduction: bool = False
-    model_size: str = "voxtral-mini-3b"
+    model_size: str = "voxtral-realtime-4b"
     translate_to_english: bool = False
     engine: str = "voxtral-local"
     context_terms: Optional[List[str]] = None
