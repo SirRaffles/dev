@@ -249,6 +249,12 @@ async def transcribe_youtube(
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
+    # Fail fast with 400 (not 500) on malformed URLs — checks the canonical
+    # YOUTUBE_URL_RE before any download/captions work.
+    from services.youtube import YOUTUBE_URL_RE
+    if not YOUTUBE_URL_RE.match(request.url):
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
     if output_mode not in ("verbatim", "readable"):
         raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
 

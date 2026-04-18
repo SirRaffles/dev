@@ -1,78 +1,418 @@
-import React from 'react';
-import { Mic, CheckCircle, Clock, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
-import useRecordings from '../hooks/useRecordings';
+import React, { useState, useMemo } from 'react';
+import {
+  Mic, CheckCircle, Clock, AlertCircle, Loader2, RefreshCw,
+  Search, Edit3, FileText, X, Check, Users, ArrowUpDown,
+} from 'lucide-react';
+import useRecordings, { RecordingsStatus, RecordingsSort } from '../hooks/useRecordings';
+import {
+  JPRRecording, JPRTranscript, fetchJPRTranscript, renameJPRRecording,
+} from '../utils/api';
+
+const STATUS_FILTERS: { key: RecordingsStatus; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'unprocessed', label: 'Unprocessed' },
+  { key: 'processed', label: 'Processed' },
+  { key: 'processing', label: 'Processing' },
+  { key: 'failed', label: 'Failed' },
+];
+
+function StatusIcon({ status }: { status: string }) {
+  const className = 'w-5 h-5';
+  switch (status) {
+    case 'completed':
+      return <CheckCircle className={`${className} text-green-500 dark:text-green-400`} aria-label="Processed" />;
+    case 'processing':
+    case 'pending_submission':
+      return <Loader2 className={`${className} text-blue-500 dark:text-blue-400 animate-spin`} aria-label="Processing" />;
+    case 'failed':
+    case 'permanently_failed':
+      return <AlertCircle className={`${className} text-red-500 dark:text-red-400`} aria-label="Failed" />;
+    default:
+      return <Clock className={`${className} text-slate-500 dark:text-slate-400`} aria-label="Unprocessed" />;
+  }
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const common = 'text-xs px-2 py-1 rounded-full font-medium';
+  if (status === 'completed') {
+    return <span className={`${common} bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400`}>Processed</span>;
+  }
+  if (status === 'processing' || status === 'pending_submission') {
+    return <span className={`${common} bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400`}>Processing</span>;
+  }
+  if (status === 'failed' || status === 'permanently_failed') {
+    return <span className={`${common} bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400`}>Failed</span>;
+  }
+  return <span className={`${common} bg-slate-100 text-slate-600 dark:bg-slate-600 dark:text-slate-300`}>Unprocessed</span>;
+}
+
+function formatDate(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function RenameInline({
+  rec, onDone,
+}: { rec: JPRRecording; onDone: (newPath?: string) => void }) {
+  const stem = rec.filename.replace(/\.m4a$/i, '');
+  const [value, setValue] = useState(stem);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === stem) {
+      onDone();
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await renameJPRRecording(rec.path, trimmed);
+      onDone(res.new_path);
+    } catch (e: any) {
+      setErr(e?.message || 'Rename failed');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          autoFocus
+          disabled={saving}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSave();
+            if (e.key === 'Escape') onDone();
+          }}
+          aria-label="New recording name"
+          className="flex-1 min-w-0 px-2 py-1 text-sm rounded border border-blue-400 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <span className="text-xs text-slate-500">.m4a</span>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          aria-label="Save name"
+          className="p-2 min-w-[40px] min-h-[40px] rounded text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50 flex items-center justify-center"
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" aria-hidden="true" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDone()}
+          disabled={saving}
+          aria-label="Cancel rename"
+          className="p-2 min-w-[40px] min-h-[40px] rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 flex items-center justify-center"
+        >
+          <X className="w-4 h-4" aria-hidden="true" />
+        </button>
+      </div>
+      {err && <p role="alert" className="text-xs text-red-500 mt-1">{err}</p>}
+    </div>
+  );
+}
+
+function TranscriptModal({
+  rec, onClose,
+}: { rec: JPRRecording; onClose: () => void }) {
+  const [data, setData] = useState<JPRTranscript | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await fetchJPRTranscript(rec.path);
+        if (!cancelled) setData(t);
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || 'Failed to load transcript');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [rec.path]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Transcript for ${rec.filename}`}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div
+        className="relative w-full max-w-3xl max-h-[85vh] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText className="w-5 h-5 text-blue-500 flex-shrink-0" aria-hidden="true" />
+            <h2 className="text-lg font-semibold truncate">{rec.filename}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close transcript"
+            className="p-2 min-w-[40px] min-h-[40px] rounded hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center"
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading && (
+            <div className="flex items-center justify-center py-12 text-slate-500 dark:text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" aria-hidden="true" /> Loading transcript…
+            </div>
+          )}
+          {err && (
+            <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-300 p-3 rounded text-sm">
+              {err}
+            </div>
+          )}
+          {data && !loading && (
+            <>
+              {(data.speakers && data.speakers.length > 0) && (
+                <div className="mb-3 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                  <Users className="w-4 h-4" aria-hidden="true" />
+                  <span>Speakers: {data.speakers.join(', ')}</span>
+                </div>
+              )}
+              {data.segments && data.segments.length > 0 ? (
+                <div className="space-y-3">
+                  {data.segments.map((seg: any, i: number) => (
+                    <div key={i} className="flex gap-3 text-sm">
+                      <span className="text-slate-500 dark:text-slate-400 font-mono flex-shrink-0 w-20">
+                        {typeof seg.start === 'number' ? new Date(seg.start * 1000).toISOString().substring(14, 19) : ''}
+                      </span>
+                      <div className="flex-1">
+                        {seg.speaker && (
+                          <span className="text-purple-600 dark:text-purple-400 font-medium mr-2">
+                            {seg.speaker}:
+                          </span>
+                        )}
+                        <span className="text-slate-700 dark:text-slate-200">{seg.text}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : data.transcript_text ? (
+                <pre className="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200 font-sans">
+                  {data.transcript_text}
+                </pre>
+              ) : (
+                <p className="text-slate-500 dark:text-slate-400 text-sm">No transcript available yet.</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RecordingsView() {
-  const { recordings, total, loading, error, refresh } = useRecordings();
+  const [status, setStatus] = useState<RecordingsStatus>('all');
+  const [sortBy, setSortBy] = useState<RecordingsSort>('date');
+  const [query, setQuery] = useState('');
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [viewingTranscript, setViewingTranscript] = useState<JPRRecording | null>(null);
+
+  const { recordings, total, loading, error, refresh } = useRecordings({
+    status, sortBy, q: query,
+  });
+
+  // When filtering to "processed", default sort to completed_at; otherwise date.
+  const effectiveSortBy: RecordingsSort = useMemo(
+    () => (status === 'processed' ? sortBy : 'date'),
+    [status, sortBy]
+  );
+
+  const showProcessedSort = status === 'processed';
+
+  const hitRename = (r: JPRRecording) => setRenamingPath(r.path);
+  const onRenameDone = (newPath?: string) => {
+    setRenamingPath(null);
+    if (newPath) refresh();
+  };
 
   return (
     <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <Mic className="w-6 h-6 text-blue-400" />
+          <Mic className="w-6 h-6 text-blue-500 dark:text-blue-400" aria-hidden="true" />
           <h2 className="text-xl font-semibold">Just Press Record</h2>
-          <span className="text-sm text-slate-400">({total} recordings)</span>
+          <span className="text-sm text-slate-500 dark:text-slate-400">({total} {total === 1 ? 'recording' : 'recordings'})</span>
         </div>
         <button
+          type="button"
           onClick={refresh}
-          className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          aria-label="Refresh recordings"
+          className="p-2.5 min-w-[44px] min-h-[44px] rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center justify-center"
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
         </button>
       </div>
 
+      {/* Filter pills */}
+      <div
+        role="tablist"
+        aria-label="Recordings status filter"
+        className="flex flex-wrap gap-2 mb-3"
+      >
+        {STATUS_FILTERS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={status === key}
+            onClick={() => setStatus(key)}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              status === key
+                ? 'bg-blue-500 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Search + sort row */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search filenames, transcripts, speakers…"
+            aria-label="Search recordings"
+            className="w-full pl-10 pr-3 py-2 text-sm rounded-lg border border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+          />
+        </div>
+        {showProcessedSort && (
+          <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <ArrowUpDown className="w-4 h-4" aria-hidden="true" />
+            <span>Sort by</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as RecordingsSort)}
+              className="px-2 py-1.5 text-sm rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:border-blue-400 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+            >
+              <option value="completed_at">Processing date</option>
+              <option value="date">Recording date</option>
+            </select>
+          </label>
+        )}
+      </div>
+
+      {/* Error banner */}
       {error && (
-        <div className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-4 text-red-400 text-sm">
+        <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-3 mb-3 text-red-600 dark:text-red-300 text-sm">
           {error}
         </div>
       )}
 
+      {/* List */}
       {loading && recordings.length === 0 ? (
-        <div className="flex items-center justify-center py-12 text-slate-400">
-          <Loader2 className="w-6 h-6 animate-spin mr-2" />
-          Loading recordings...
+        <div className="flex items-center justify-center py-12 text-slate-500 dark:text-slate-400">
+          <Loader2 className="w-6 h-6 animate-spin mr-2" aria-hidden="true" />
+          Loading recordings…
         </div>
       ) : recordings.length === 0 ? (
-        <div className="text-center py-12 text-slate-400">
-          <Mic className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p>No recordings found</p>
-          <p className="text-sm mt-1">New Just Press Record files will appear here automatically</p>
+        <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+          <Mic className="w-12 h-12 mx-auto mb-3 opacity-50" aria-hidden="true" />
+          <p>No recordings match this filter.</p>
+          {query && <p className="text-sm mt-1">Try a different search term.</p>}
         </div>
       ) : (
         <div className="space-y-2">
-          {recordings.map((rec) => (
-            <div
-              key={rec.path}
-              className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-            >
-              <div className="flex-shrink-0">
-                {rec.status === 'completed' ? (
-                  <CheckCircle className="w-5 h-5 text-green-400" />
-                ) : rec.status === 'processing' ? (
-                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-                ) : rec.status === 'failed' ? (
-                  <AlertCircle className="w-5 h-5 text-red-400" />
+          {recordings.map((rec) => {
+            const isRenaming = renamingPath === rec.path;
+            const canOpenTranscript = rec.transcript_exists;
+            const whenShown = effectiveSortBy === 'completed_at' ? rec.completed_at : rec.date;
+            return (
+              <div
+                key={rec.path}
+                className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              >
+                <div className="flex-shrink-0"><StatusIcon status={rec.status} /></div>
+
+                {isRenaming ? (
+                  <RenameInline rec={rec} onDone={onRenameDone} />
                 ) : (
-                  <Clock className="w-5 h-5 text-slate-400" />
+                  <button
+                    type="button"
+                    onClick={() => canOpenTranscript && setViewingTranscript(rec)}
+                    disabled={!canOpenTranscript}
+                    title={canOpenTranscript ? 'Open transcript' : 'No transcript yet'}
+                    className={`flex-1 min-w-0 text-left ${canOpenTranscript ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
+                  >
+                    <p className="text-sm font-medium truncate">{rec.filename}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {formatDate(whenShown)}
+                      {' · '}
+                      {(rec.size_bytes / 1024 / 1024).toFixed(1)} MB
+                      {rec.speakers && rec.speakers.length > 0 && (
+                        <> {' · '} <span className="text-purple-600 dark:text-purple-400">{rec.speakers.length} speaker{rec.speakers.length === 1 ? '' : 's'}</span></>
+                      )}
+                    </p>
+                    {rec.transcript_preview && query && (
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 italic line-clamp-2">
+                        “{rec.transcript_preview.replace(/\s+/g, ' ').trim()}”
+                      </p>
+                    )}
+                  </button>
                 )}
+
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <StatusBadge status={rec.status} />
+                  {!isRenaming && (
+                    <>
+                      {canOpenTranscript && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingTranscript(rec)}
+                          aria-label={`Open transcript for ${rec.filename}`}
+                          className="p-2 min-w-[40px] min-h-[40px] rounded-lg text-slate-500 dark:text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center justify-center"
+                          title="Open transcript"
+                        >
+                          <FileText className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => hitRename(rec)}
+                        aria-label={`Rename ${rec.filename}`}
+                        className="p-2 min-w-[40px] min-h-[40px] rounded-lg text-slate-500 dark:text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center justify-center"
+                        title="Rename"
+                      >
+                        <Edit3 className="w-4 h-4" aria-hidden="true" />
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{rec.filename}</p>
-                <p className="text-xs text-slate-400">{rec.date_folder} &middot; {(rec.size_bytes / 1024 / 1024).toFixed(1)} MB</p>
-              </div>
-              <div className="flex-shrink-0">
-                <span className={`text-xs px-2 py-1 rounded-full ${
-                  rec.status === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
-                  rec.status === 'processing' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
-                  rec.status === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                  'bg-slate-100 text-slate-600 dark:bg-slate-600 dark:text-slate-300'
-                }`}>
-                  {rec.status}
-                </span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+
+      {viewingTranscript && (
+        <TranscriptModal rec={viewingTranscript} onClose={() => setViewingTranscript(null)} />
       )}
     </div>
   );

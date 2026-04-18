@@ -492,11 +492,38 @@ export interface ContextTree {
 export interface JPRRecording {
   filename: string;
   path: string;
-  date_folder: string;
+  date: string;                 // ISO timestamp of the recording (file mtime)
+  date_folder?: string;         // legacy; kept for back-compat
   size_bytes: number;
-  status: string;
-  job_id?: string;
+  status: string;               // unprocessed | completed | processing | pending_submission | failed | permanently_failed | unknown
+  job_id?: string | null;
   transcript_exists: boolean;
+  transcript_preview?: string | null;
+  speakers?: string[];
+  submitted_at?: string | null;
+  completed_at?: string | null;
+  error?: string | null;
+  transcript_path?: string | null;
+}
+
+export interface JPRListParams {
+  limit?: number;
+  offset?: number;
+  status?: 'all' | 'unprocessed' | 'processed' | 'processing' | 'failed';
+  sort_by?: 'date' | 'completed_at';
+  sort_dir?: 'asc' | 'desc';
+  q?: string;
+}
+
+export interface JPRTranscript {
+  path: string;
+  filename: string;
+  transcript_text: string | null;
+  segments: Segment[];
+  speakers: string[];
+  language: string | null;
+  job_id: string | null;
+  status: string | null;
 }
 
 export interface SpeakerDetail extends Speaker {
@@ -720,9 +747,40 @@ export async function updateContextFile(path: string, filename: string, content:
 
 // --- JPR Recordings API ---
 
-export async function fetchJPRRecordings(limit = 50, offset = 0): Promise<{ recordings: JPRRecording[]; total: number }> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await fetchWithTimeout(`${API_URL}/jpr/recordings?${params}`);
+export async function fetchJPRRecordings(params: JPRListParams = {}): Promise<{
+  recordings: JPRRecording[];
+  total: number;
+  watcher_status?: { available: boolean; completed?: number; pending?: number; failed?: number };
+}> {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params.limit ?? 50));
+  qs.set('offset', String(params.offset ?? 0));
+  if (params.status) qs.set('status', params.status);
+  if (params.sort_by) qs.set('sort_by', params.sort_by);
+  if (params.sort_dir) qs.set('sort_dir', params.sort_dir);
+  if (params.q && params.q.trim()) qs.set('q', params.q.trim());
+  const response = await fetchWithTimeout(`${API_URL}/jpr/recordings?${qs}`);
   if (!response.ok) throw new Error('Failed to fetch recordings');
+  return response.json();
+}
+
+export async function fetchJPRTranscript(path: string): Promise<JPRTranscript> {
+  const url = `${API_URL}/jpr/recordings/${encodeURI(path)}/transcript`;
+  const response = await fetchWithTimeout(url);
+  if (!response.ok) throw new Error('Failed to fetch transcript');
+  return response.json();
+}
+
+export async function renameJPRRecording(path: string, newName: string): Promise<{ status: string; old_path: string; new_path: string }> {
+  const url = `${API_URL}/jpr/recordings/${encodeURI(path)}/rename`;
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Rename failed' }));
+    throw new Error(err.detail || 'Rename failed');
+  }
   return response.json();
 }
