@@ -115,6 +115,7 @@ async def transcribe_file(
     speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
+    context_path: Optional[str] = Query(None, description="Path under CONTEXTS_DIR to a .md context document"),
     two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
@@ -213,6 +214,7 @@ async def transcribe_file(
             translate_to_english=translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
+            context_path=context_path,
             two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
@@ -245,6 +247,7 @@ async def transcribe_youtube(
     speed_priority: bool = Query(False, description="Optimize for speed"),
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral"),
+    context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
@@ -372,6 +375,7 @@ async def transcribe_youtube(
             translate_to_english=request.translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
+            context_path=context_path,
             two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
@@ -411,6 +415,7 @@ async def transcribe_batch(
     speed_priority: bool = Query(False, description="Optimize for speed"),
     engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
     context_terms: Optional[str] = Query(None, description="Context terms for Voxtral"),
+    context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     two_pass: bool = Query(False, description="Two-pass mode (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
@@ -479,6 +484,7 @@ async def transcribe_batch(
             translate_to_english=translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
+            context_path=context_path,
             two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )

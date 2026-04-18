@@ -381,6 +381,7 @@ class TranscriptionSettings(BaseModel):
     translate_to_english: bool = False
     engine: str = "voxtral-local"
     context_terms: Optional[List[str]] = None
+    context_path: Optional[str] = None  # Relative path under CONTEXTS_DIR to a .md context document
     two_pass: bool = False
     output_mode: str = "verbatim"  # "verbatim" or "readable"
 

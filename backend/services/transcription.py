@@ -3,14 +3,16 @@ Core transcription logic: MLX-Whisper, Parakeet, Voxtral engines.
 """
 
 import os
+import re
 import asyncio
 import logging
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import List, Optional
 
-from config import MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS, VOXTRAL_LOCAL_MODELS
+from config import ICLOUD_BASE_PATH, MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS, VOXTRAL_LOCAL_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
 from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
@@ -18,6 +20,94 @@ from services.postprocess import normalize_segments, apply_readable_mode
 import state
 
 logger = logging.getLogger(__name__)
+
+# Cap the context document at ~4 KB of text; enough for a dense glossary, and
+# keeps downstream prompt-length limits satisfied (MLX-Whisper tolerates
+# ~224 tokens, we clamp further at use sites).
+_CONTEXT_MAX_CHARS = 4000
+# A context term is a word starting with an uppercase letter or digit, or any
+# consecutive-uppercase acronym (SDG, SAFc, etc.). Used to derive Voxtral
+# `context_bias[]` terms from a narrative markdown context.
+_CONTEXT_TERM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]{2,}(?:-[A-Za-z0-9]+)*\b|\b[A-Z]{2,}[0-9]*\b")
+
+
+def load_context_document(context_path: Optional[str]) -> Optional[str]:
+    """Load a user-selected context document from ICLOUD_BASE_PATH/contexts.
+
+    `context_path` may point at either a specific .md file or a context
+    folder. If a folder, we prefer `{folder}/context.md`; otherwise we
+    pick the first top-level .md alphabetically. Returns None if the path
+    is empty, unsafe, or unreadable.
+    """
+    if not context_path:
+        return None
+    rel = context_path.strip().lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        logger.warning("Rejected context path: %s", context_path)
+        return None
+    contexts_root = (ICLOUD_BASE_PATH / "contexts").resolve()
+    target = (contexts_root / rel).resolve()
+    if not str(target).startswith(str(contexts_root)):
+        logger.warning("Context path escapes CONTEXTS_DIR: %s", context_path)
+        return None
+
+    # Directory? Auto-discover the primary .md inside.
+    if target.is_dir():
+        candidate = target / "context.md"
+        if not candidate.is_file():
+            md_files = sorted(
+                p for p in target.iterdir()
+                if p.is_file() and p.suffix.lower() == ".md" and not p.name.startswith(".")
+            )
+            candidate = md_files[0] if md_files else None  # type: ignore
+        if candidate is None or not candidate.is_file():
+            logger.warning("No .md file found in context folder: %s", target)
+            return None
+        target = candidate
+
+    if not target.is_file():
+        logger.warning("Context file not found: %s", target)
+        return None
+    try:
+        text = target.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        logger.warning("Failed to read context %s: %s", target, exc)
+        return None
+    if not text.strip():
+        return None
+    return text[:_CONTEXT_MAX_CHARS]
+
+
+def derive_context_terms(context_text: Optional[str], limit: int = 100) -> List[str]:
+    """Extract domain terms (proper nouns, acronyms) from a context document.
+
+    Used as the `context_bias[]` list for the Voxtral cloud API when the
+    caller didn't provide an explicit terms list.
+    """
+    if not context_text:
+        return []
+    seen = []
+    seen_lower = set()
+    for match in _CONTEXT_TERM_RE.finditer(context_text):
+        term = match.group(0).strip()
+        if 2 <= len(term) <= 40 and term.lower() not in seen_lower:
+            seen_lower.add(term.lower())
+            seen.append(term)
+            if len(seen) >= limit:
+                break
+    return seen
+
+
+def build_initial_prompt(context_text: Optional[str], max_chars: int = 900) -> Optional[str]:
+    """Build a short initial_prompt from a context doc, clamped to Whisper's
+    token budget (Whisper decoder ctx is 448 tokens; half for input keeps
+    headroom for audio). ~900 chars ≈ ~200 tokens for English; shorter for
+    many European languages.
+    """
+    if not context_text:
+        return None
+    cleaned = " ".join(context_text.split())
+    return cleaned[:max_chars] if cleaned else None
 
 # Parakeet model keys accepted by the `model_size` setting.
 # "parakeet" is a legacy alias for the English v2 model.
@@ -130,6 +220,21 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
 
     language = None if settings.language == "auto" else settings.language
 
+    # Merge explicit context_terms with terms derived from the selected
+    # context document, deduped case-insensitive.
+    merged_terms: List[str] = list(settings.context_terms or [])
+    context_text = load_context_document(settings.context_path)
+    derived = derive_context_terms(context_text)
+    if derived:
+        seen_lower = {t.lower() for t in merged_terms}
+        for t in derived:
+            if t.lower() not in seen_lower:
+                merged_terms.append(t)
+                seen_lower.add(t.lower())
+                if len(merged_terms) >= 100:
+                    break
+    effective_terms = merged_terms or None
+
     # Two-pass mode: get both timestamps and language accuracy (2x API cost)
     if settings.two_pass and language:
         logger.info("Transcribing with Voxtral Mini (cloud API, two-pass mode)...")
@@ -138,7 +243,7 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
             language=language,
             enable_diarization=settings.enable_diarization,
             word_timestamps=settings.word_timestamps,
-            context_terms=settings.context_terms,
+            context_terms=effective_terms,
         )
     else:
         logger.info("Transcribing with Voxtral Mini (cloud API)...")
@@ -147,7 +252,7 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
             language=language or "auto",
             enable_diarization=settings.enable_diarization,
             word_timestamps=settings.word_timestamps,
-            context_terms=settings.context_terms,
+            context_terms=effective_terms,
         )
 
     return result
@@ -225,6 +330,13 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
 
     language = settings.language if settings.language != "auto" else None
 
+    # Load user-selected context document (if any). Voxtral-style models
+    # take an initial_prompt that biases the decoder toward domain terms.
+    context_text = load_context_document(settings.context_path)
+    initial_prompt = build_initial_prompt(context_text)
+    if initial_prompt:
+        logger.info("Using context document (%d chars of prompt)", len(initial_prompt))
+
     # Get total duration to determine chunking
     total_duration = _get_audio_duration(audio_path)
     if total_duration <= 0:
@@ -257,8 +369,17 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
             if architecture == "realtime":
                 # 2400ms ≈ Voxtral Transcribe V2 parity in batch mode.
                 gen_kwargs["transcription_delay_ms"] = 2400
+            # mlx-audio accepts `prompt` on some model classes; pass only if
+            # we have one so we don't accidentally regress older variants.
+            if initial_prompt:
+                gen_kwargs["prompt"] = initial_prompt
 
-            result = model.generate(tmp_path, **gen_kwargs)
+            try:
+                result = model.generate(tmp_path, **gen_kwargs)
+            except TypeError:
+                # Some mlx-audio versions don't accept `prompt`; retry without.
+                gen_kwargs.pop("prompt", None)
+                result = model.generate(tmp_path, **gen_kwargs)
 
             # Parse chunk result
             chunk_text = ""
@@ -439,6 +560,17 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 model_path = model_info["path"]
                 logger.info("Using model: %s (%s)", settings.model_size, model_path)
 
+                # Use the user-selected context document as initial_prompt.
+                # Whisper's decoder has a 448-token context; ~900 chars is a
+                # safe budget that leaves room for actual audio tokens.
+                context_text = load_context_document(settings.context_path)
+                initial_prompt = build_initial_prompt(context_text)
+                if initial_prompt:
+                    logger.info(
+                        "Using context document as initial_prompt (%d chars)",
+                        len(initial_prompt),
+                    )
+
                 result = mlx_whisper.transcribe(
                     audio_path,
                     path_or_hf_repo=model_path,
@@ -448,6 +580,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                     condition_on_previous_text=True,
                     no_speech_threshold=0.6,
                     compression_ratio_threshold=2.4,
+                    initial_prompt=initial_prompt,
                     verbose=False,
                     fp16=True,
                 )

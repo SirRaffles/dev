@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
-import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen, Layers } from 'lucide-react';
-import { LANGUAGES, MODEL_SIZES, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS } from '../utils/api';
+import React, { useEffect, useState } from 'react';
+import { FileAudio, Languages, Globe, Users, Clock, Volume2, VolumeX, Cloud, Cpu, BookOpen, Layers, FolderOpen } from 'lucide-react';
+import { LANGUAGES, MODEL_SIZES, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS, fetchContextTree, ContextTree } from '../utils/api';
 
 interface Settings {
   modelSize?: string;
@@ -13,6 +13,7 @@ interface Settings {
   speedPriority?: boolean;
   engine?: string;
   contextTerms?: string;
+  contextPath?: string;        // path under CONTEXTS_DIR to a .md file or folder
   twoPass?: boolean;
   outputMode?: string;
   [key: string]: any;
@@ -49,6 +50,7 @@ function SettingsPanel({
     speedPriority = false,
     engine = 'voxtral-local',
     contextTerms = '',
+    contextPath = '',
     twoPass = false,
     outputMode = 'verbatim',
   } = settings;
@@ -56,6 +58,29 @@ function SettingsPanel({
   const handleChange = (key: string, value: any) => {
     onSettingsChange?.({ ...settings, [key]: value });
   };
+
+  // Lazily fetch the context tree so the dropdown can offer available
+  // context folders / files. Errors are silent — the dropdown just stays
+  // empty and the user can still submit without a context.
+  const [contextOptions, setContextOptions] = useState<{ path: string; label: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchContextTree()
+      .then((tree) => {
+        if (cancelled) return;
+        const flat: { path: string; label: string }[] = [];
+        const walk = (node: ContextTree, depth = 0) => {
+          if (node.path) {
+            flat.push({ path: node.path, label: `${'· '.repeat(depth - 1)}${node.name}`.trim() });
+          }
+          (node.children || []).forEach((child) => walk(child, depth + 1));
+        };
+        tree.forEach((n) => walk(n, 1));
+        setContextOptions(flat);
+      })
+      .catch(() => { /* ignore; dropdown stays empty */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const isVoxtralApi = engine === 'voxtral-api';
   const isVoxtralLocal = engine === 'voxtral-local';
@@ -380,7 +405,33 @@ function SettingsPanel({
           </div>
         )}
 
-        {/* Context Terms — Voxtral Cloud only */}
+        {/* Context Document — applies to any engine */}
+        <div>
+          <label
+            htmlFor="context-path-select"
+            className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2"
+          >
+            <FolderOpen className="w-4 h-4" aria-hidden="true" />
+            Context
+          </label>
+          <select
+            id="context-path-select"
+            value={contextPath}
+            onChange={(e) => handleChange('contextPath', e.target.value)}
+            disabled={disabled}
+            className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white focus:outline-none focus:border-violet-400 disabled:opacity-50"
+          >
+            <option value="">None — no context document</option>
+            {contextOptions.map((c) => (
+              <option key={c.path} value={c.path}>{c.label || c.path}</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Attach a context document (glossary, acronyms, background) from your Contexts library to bias transcription. Optional.
+          </p>
+        </div>
+
+        {/* Context Terms — Voxtral Cloud only (free-form bias terms) */}
         {isVoxtralApi && (
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
@@ -395,7 +446,7 @@ function SettingsPanel({
               placeholder="e.g. FastAPI, MLX, Voxtral"
               className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-violet-400 disabled:opacity-50"
             />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Comma-separated domain terms for better accuracy (max 100)</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Comma-separated domain terms for better accuracy (max 100). Merged with terms auto-derived from the Context document.</p>
           </div>
         )}
 

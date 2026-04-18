@@ -73,6 +73,7 @@ export interface TranscriptionOptions {
   outputMode?: string;
   numSpeakers?: number;
   contextTerms?: string;
+  contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
 }
 
 export interface EngineInfo {
@@ -264,6 +265,10 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     params.append('context_terms', options.contextTerms);
   }
 
+  if (options.contextPath) {
+    params.append('context_path', options.contextPath);
+  }
+
   const response = await fetchWithTimeout(`${API_URL}/transcribe/file?${params}`, {
     method: 'POST',
     body: formData,
@@ -311,6 +316,10 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
 
   if (options.contextTerms) {
     params.append('context_terms', options.contextTerms);
+  }
+
+  if (options.contextPath) {
+    params.append('context_path', options.contextPath);
   }
 
   // Body contains YouTubeRequest fields
@@ -421,6 +430,10 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
 
   if (options.contextTerms) {
     params.append('context_terms', options.contextTerms);
+  }
+
+  if (options.contextPath) {
+    params.append('context_path', options.contextPath);
   }
 
   const response = await fetchWithTimeout(`${API_URL}/transcribe/batch?${params}`, {
