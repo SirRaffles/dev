@@ -48,3 +48,85 @@ def apply_noise_reduction(audio_path: str, output_path: str) -> str:
         return output_path
     except Exception as e:
         raise RuntimeError(f"Noise reduction failed: {e}")
+
+
+import logging
+from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Cached silero-vad model handle. None means "not yet attempted" or "load failed".
+_SILERO_CACHE: Optional[Tuple[object, object]] = None
+
+
+def _get_silero_model():
+    """Lazily load silero-vad via torch.hub. Returns (model, get_speech_timestamps) or None on failure."""
+    global _SILERO_CACHE
+    if _SILERO_CACHE is not None:
+        return _SILERO_CACHE
+    try:
+        import torch  # noqa: F401 — required for torch.hub
+        model, utils = torch.hub.load(
+            "snakers4/silero-vad",
+            "silero_vad",
+            trust_repo=True,
+        )
+        get_speech_timestamps = utils[0]
+        _SILERO_CACHE = (model, get_speech_timestamps)
+        return _SILERO_CACHE
+    except Exception as exc:
+        logger.warning("silero-vad unavailable, skipping leading-silence trim: %s", exc)
+        _SILERO_CACHE = None
+        return None
+
+
+def find_first_speech_offset(audio_path: str, min_silence_s: float = 0.5) -> float:
+    """Return seconds of leading silence to trim before transcription.
+
+    Returns 0.0 if:
+      - silero-vad cannot be loaded,
+      - the audio cannot be read,
+      - no speech is detected at all,
+      - or the detected leading silence is below `min_silence_s`.
+
+    Never raises; all failures degrade to 0.0 with a logged warning.
+    """
+    try:
+        loaded = _get_silero_model()
+        if loaded is None:
+            return 0.0
+        model, get_speech_timestamps = loaded
+
+        import soundfile as sf
+        import numpy as np
+        import torch
+
+        audio_np, sample_rate = sf.read(audio_path, dtype="float32", always_2d=False)
+        if audio_np.ndim > 1:
+            audio_np = audio_np.mean(axis=1)
+        if sample_rate != 16000:
+            # silero expects 16 kHz; resample crudely via linear interpolation.
+            ratio = 16000 / sample_rate
+            new_len = int(len(audio_np) * ratio)
+            audio_np = np.interp(
+                np.linspace(0, len(audio_np) - 1, new_len),
+                np.arange(len(audio_np)),
+                audio_np,
+            ).astype("float32")
+            sample_rate = 16000
+
+        tensor = torch.from_numpy(audio_np)
+        timestamps = get_speech_timestamps(
+            tensor,
+            model,
+            threshold=0.5,
+            sampling_rate=sample_rate,
+            min_silence_duration_ms=400,
+        )
+        if not timestamps:
+            return 0.0
+        first_start_s = timestamps[0]["start"] / sample_rate
+        return first_start_s if first_start_s >= min_silence_s else 0.0
+    except Exception as exc:
+        logger.warning("VAD lead-silence detection failed: %s", exc)
+        return 0.0
