@@ -134,3 +134,23 @@ def find_first_speech_offset(audio_path: str, min_silence_s: float = 0.5) -> flo
     except Exception as exc:
         logger.warning("VAD lead-silence detection failed: %s", exc)
         return 0.0
+
+
+def make_trimmed_audio(audio_path: str, trim_offset: float) -> str:
+    """Write a copy of `audio_path` with the first `trim_offset` seconds removed.
+
+    Returns the path of the trimmed WAV file (caller is responsible for cleanup
+    via the temp directory). Original file is left untouched.
+    """
+    import soundfile as sf
+    import os
+    import tempfile
+
+    audio_np, sample_rate = sf.read(audio_path, dtype="float32", always_2d=False)
+    start_sample = int(trim_offset * sample_rate)
+    trimmed = audio_np[start_sample:]
+
+    fd, out_path = tempfile.mkstemp(suffix="_trimmed.wav")
+    os.close(fd)
+    sf.write(out_path, trimmed, sample_rate, subtype="PCM_16")
+    return out_path

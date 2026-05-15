@@ -140,3 +140,24 @@ def test_failed_load_is_not_retried(tmp_path):
 
     # Only the FIRST call should have invoked torch.hub.load.
     assert mock_loader.call_count == 1
+
+
+def test_make_trimmed_audio_writes_offset_slice(tmp_path):
+    """Trimmed file starts at `offset` seconds and is shorter by that amount."""
+    import soundfile as sf
+    from services import audio
+
+    sr = 16000
+    full = np.linspace(0, 1, 10 * sr, dtype="float32")  # 10s ramp 0→1
+    src = tmp_path / "src.wav"
+    sf.write(str(src), full, sr, subtype="PCM_16")
+
+    out = audio.make_trimmed_audio(str(src), trim_offset=2.5)
+    assert out != str(src)
+
+    audio_out, sr_out = sf.read(out, dtype="float32")
+    assert sr_out == sr
+    expected_len = 10 * sr - int(2.5 * sr)
+    assert abs(len(audio_out) - expected_len) <= 1
+    # First sample of the trimmed file equals the original at t=2.5s (within fp noise).
+    assert audio_out[0] == pytest.approx(full[int(2.5 * sr)], abs=1e-3)
