@@ -98,6 +98,69 @@ def derive_context_terms(context_text: Optional[str], limit: int = 100) -> List[
     return seen
 
 
+def load_speakers_context(speaker_ids: Optional[List[str]]) -> Optional[str]:
+    """Concatenate the personality.md of every expected speaker into one blob.
+
+    Used to seed transcription with domain/biographical context the user
+    already knows about the people likely on the recording — spellings of
+    names, recurring topics, jargon they use — which helps Whisper / Voxtral
+    get proper nouns right on the first pass.
+    """
+    if not speaker_ids:
+        return None
+    speakers_root = (ICLOUD_BASE_PATH / "speakers").resolve()
+    pieces: List[str] = []
+    for sid in speaker_ids:
+        if not sid:
+            continue
+        try:
+            speaker = state.speaker_store.get(sid)
+        except Exception:
+            speaker = None
+        if not speaker:
+            continue
+        name = speaker.get("name", "").strip()
+        if not name:
+            continue
+        # Safe-resolve the speaker's folder first; reject any name that
+        # resolves outside the speakers tree (defense-in-depth on names).
+        speaker_dir = (speakers_root / name).resolve()
+        if not str(speaker_dir).startswith(str(speakers_root)):
+            continue
+        # Merge the 4 profile files (3 markdown + we skip the .npy voice
+        # file). Order matches the product spec: bio → explicit → implicit.
+        # Legacy personality.md is a fallback for older data that was never
+        # migrated in this session.
+        sections: List[str] = []
+        for fname in ("profile.md", "explicit_insights.md", "implicit_insights.md", "personality.md"):
+            try:
+                fpath = speaker_dir / fname
+                if not fpath.is_file():
+                    continue
+                chunk = fpath.read_text(encoding="utf-8", errors="ignore").strip()
+                # Skip placeholder scaffolding so we don't pollute the prompt.
+                if not chunk or "will land here" in chunk or "*No personality insights yet" in chunk:
+                    continue
+                sections.append(chunk)
+            except OSError:
+                continue
+        if sections:
+            joined = "\n\n".join(sections)
+            pieces.append(f"# Speaker: {name}\n\n{joined}")
+    if not pieces:
+        return None
+    combined = "\n\n---\n\n".join(pieces)
+    return combined[: _CONTEXT_MAX_CHARS * 2]  # allow a bit more headroom
+
+
+def merge_context_sources(*texts: Optional[str]) -> Optional[str]:
+    """Concatenate multiple context blobs (context doc + speakers) into one."""
+    parts = [t.strip() for t in texts if t and t.strip()]
+    if not parts:
+        return None
+    return "\n\n---\n\n".join(parts)
+
+
 def build_initial_prompt(context_text: Optional[str], max_chars: int = 900) -> Optional[str]:
     """Build a short initial_prompt from a context doc, clamped to Whisper's
     token budget (Whisper decoder ctx is 448 tokens; half for input keeps
@@ -223,7 +286,10 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
     # Merge explicit context_terms with terms derived from the selected
     # context document, deduped case-insensitive.
     merged_terms: List[str] = list(settings.context_terms or [])
-    context_text = load_context_document(settings.context_path)
+    context_text = merge_context_sources(
+        load_context_document(settings.context_path),
+        load_speakers_context(settings.speaker_ids),
+    )
     derived = derive_context_terms(context_text)
     if derived:
         seen_lower = {t.lower() for t in merged_terms}
@@ -287,7 +353,7 @@ def _extract_audio_chunk(audio_path: str, start: float, duration: float, output_
         return False
 
 
-def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettings) -> dict:
+def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettings, job=None) -> dict:
     """Transcribe audio using Voxtral Mini 3B locally via mlx-audio.
 
     Automatically chunks audio into 30-second segments (the encoder's max)
@@ -332,7 +398,12 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
 
     # Load user-selected context document (if any). Voxtral-style models
     # take an initial_prompt that biases the decoder toward domain terms.
-    context_text = load_context_document(settings.context_path)
+    # Expected-speaker context also gets merged in so the decoder knows how
+    # their names are spelled and what topics they typically cover.
+    context_text = merge_context_sources(
+        load_context_document(settings.context_path),
+        load_speakers_context(settings.speaker_ids),
+    )
     initial_prompt = build_initial_prompt(context_text)
     if initial_prompt:
         logger.info("Using context document (%d chars of prompt)", len(initial_prompt))
@@ -367,7 +438,11 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
             if language:
                 gen_kwargs["language"] = language
             if architecture == "realtime":
-                # 2400ms ≈ Voxtral Transcribe V2 parity in batch mode.
+                # 2400ms is the documented batch-parity setting for Voxtral
+                # Realtime; lower values (240ms, 1000ms) made generate()
+                # hang indefinitely during smoke testing on 2026-04-19.
+                # Accept the ~1 min/chunk cost for now; a faster engine for
+                # long audio is a separate discussion.
                 gen_kwargs["transcription_delay_ms"] = 2400
             # mlx-audio accepts `prompt` on some model classes; pass only if
             # we have one so we don't accidentally regress older variants.
@@ -401,6 +476,20 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
                 all_text_parts.append(chunk_text)
 
             logger.info("Chunk %d/%d (%.0fs-%.0fs): %d chars", i + 1, num_chunks, chunk_start, chunk_start + chunk_dur, len(chunk_text))
+
+            # Stream per-chunk progress back to the UI so the bar actually
+            # moves during long jobs. We reserve 20% (entry) → 70% (hand-off
+            # to downstream post-processing) for the decoder loop.
+            if job is not None and num_chunks > 0:
+                try:
+                    pct = 20 + int(50 * (i + 1) / num_chunks)
+                    _update_job(
+                        job,
+                        progress=min(pct, 69),
+                        message=f"Transcribing chunk {i + 1}/{num_chunks} (Voxtral Local)…",
+                    )
+                except Exception:  # non-fatal — never let progress kill transcription
+                    logger.warning("progress update failed", exc_info=True)
 
         finally:
             try:
@@ -519,7 +608,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 _update_job(job, progress=20, message="Transcribing with Voxtral Local (~4% WER)...")
                 logger.info("Using Voxtral Local for transcription")
 
-                result = transcribe_with_voxtral_local(audio_path, settings)
+                result = transcribe_with_voxtral_local(audio_path, settings, job=job)
 
                 job.language = result.get("language", "auto")
                 job.language_probability = 0.99
@@ -560,10 +649,14 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 model_path = model_info["path"]
                 logger.info("Using model: %s (%s)", settings.model_size, model_path)
 
-                # Use the user-selected context document as initial_prompt.
-                # Whisper's decoder has a 448-token context; ~900 chars is a
-                # safe budget that leaves room for actual audio tokens.
-                context_text = load_context_document(settings.context_path)
+                # Use the user-selected context document as initial_prompt,
+                # plus any expected-speaker context. Whisper's decoder has a
+                # 448-token context; ~900 chars is a safe budget that leaves
+                # room for actual audio tokens.
+                context_text = merge_context_sources(
+                    load_context_document(settings.context_path),
+                    load_speakers_context(settings.speaker_ids),
+                )
                 initial_prompt = build_initial_prompt(context_text)
                 if initial_prompt:
                     logger.info(
@@ -576,10 +669,12 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                     path_or_hf_repo=model_path,
                     language=language,
                     task="translate" if settings.translate_to_english else "transcribe",
-                    word_timestamps=settings.word_timestamps,
-                    condition_on_previous_text=True,
+                    word_timestamps=True,                          # A1: forced on; needed by A3
+                    condition_on_previous_text=False,              # A1: stop error propagation
                     no_speech_threshold=0.6,
                     compression_ratio_threshold=2.4,
+                    logprob_threshold=-1.0,                        # A1: trigger temperature fallback
+                    temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),    # A1: decoding fallback ladder
                     initial_prompt=initial_prompt,
                     verbose=False,
                     fp16=True,
@@ -598,7 +693,10 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                         "text": segment["text"].strip(),
                     }
 
-                    if settings.word_timestamps and "words" in segment:
+                    # A1: always carry words through internally — A3 needs them to split at
+                    # speaker-turn boundaries. They are stripped at emission time below
+                    # (after stitch_speaker_turns) if the user opted out.
+                    if segment.get("words"):
                         seg_data["words"] = [
                             {
                                 "word": w.get("word", w.get("text", "")),
@@ -630,6 +728,14 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             if speakers:
                 transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
                 transcription_segments = stitch_speaker_turns(transcription_segments)
+
+        # A1: strip per-word data from emitted segments if user opted out.
+        # Words were carried internally so A3 could split at speaker-turn
+        # boundaries; they're not part of the user-facing contract unless
+        # settings.word_timestamps is True.
+        if not settings.word_timestamps:
+            for seg in transcription_segments:
+                seg.pop("words", None)
 
         _update_job(job, progress=70, message="Processing segments...")
 
