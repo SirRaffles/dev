@@ -53,7 +53,7 @@ Speaker context:
 ```
 
 - `routes/refinement.py:_run_refinement` is updated to load the same context bundle that `transcription.py` already loads (`load_speakers_context`, `load_context_document`, `derive_context_terms`, plus the new global glossary loader from B4). Reuse the existing helpers; do not duplicate.
-- Subprocess timeout in `_run_claude` raised from 120 to 240 seconds (Sonnet on full-length transcripts can exceed 120).
+- Subprocess timeout in `_run_claude` raised from 120 to **300 seconds** (Sonnet on full-length transcripts typically takes 60-180s; 300s leaves margin under load. No retry path today — accept the timeout as a hard failure, log it, mark `refinement_status=failed`).
 
 **Why this works**: Claude already has the corrections schema; we're just feeding it the data it needs to decide *correctness*. The existing `confidence` field in the JSON schema does the rest — high-confidence corrections get applied, low-confidence ones don't.
 
@@ -72,14 +72,23 @@ should_auto_refine = (
     or (settings.auto_refine is None and (settings.speaker_ids or settings.context_path))
 )
 if should_auto_refine and state.refinement_available:
-    # Run refinement in the same executor that the manual route uses
+    # Use the same executor pattern as A1/A2/A3 background work, NOT
+    # FastAPI BackgroundTasks (the request that submitted the job has
+    # long returned). The existing manual route /refine/job/{id} delegates
+    # to `_run_refinement(job_id)` — extract the shared body into
+    # routes/refinement.py:_run_refinement_for_job(job_id) so both callers
+    # (manual route + auto-trigger here) share one implementation.
     state.transcription_executor.submit(
         _run_refinement_for_job, job_id, settings.speaker_ids, settings.context_path
     )
 ```
 
-- The job's `status` stays `completed`; a new field `refinement_status: Optional[str] = None` on `TranscriptionJob` tracks the auto-refine state (`pending`, `processing`, `done`, `failed`). The UI polls this to show the indicator (B6).
-- Frontend `routes/transcription.py` GET `/job/{job_id}` returns `refinement_status` so the UI can render the indicator.
+- New fields on `TranscriptionJob` (in `job_models.py`):
+  - `refinement_status: Optional[str] = None` — tracks auto-refine state (`pending`, `processing`, `done`, `failed`)
+  - `auto_speaker_matches: Optional[Dict[str, Dict]] = None` — populated by B5 inline auto-match
+  - `learning_summary: Optional[Dict[str, int]] = None` — populated by B7 after refinement completes; keys: `embeddings_updated`, `insights_added`, `terms_learned`
+  - `learning_status: Optional[str] = None` — `ok` (≥1 worker succeeded), `partial` (some workers failed), `failed` (all workers failed). Distinguishes "ran but learned nothing" from "all workers crashed".
+- All four fields are serialized by the existing `/job/{job_id}` GET response. UI polls this for indicators (B6).
 
 **Why not block the job completion on refinement**: the job is *transcribed* even before refinement; users can read the verbatim immediately. Refinement is an enhancement, not a gate.
 
@@ -123,53 +132,42 @@ def append_auto_learned_term(term: str, source_job_id: str, context_phrase: str)
 
 **Why a section in one file vs many files**: keeps the glossary a single artifact that's easy to edit, version (via iCloud history), and inspect. The "pending review" subsection draws a clear boundary between user-curated and auto-learned content.
 
-### B5 — Auto-match speakers via embedding
+### B5 — Auto-match speakers via embedding (inline, post-diarization)
 
-**Files**: `backend/services/speaker_embedding.py`, `backend/services/diarization.py`, `backend/services/transcription.py`
+**Files**: `backend/services/transcription.py`, `backend/job_models.py`
 
-**Change**:
+**Important**: `auto_identify_speakers()` is **already implemented** at `backend/services/speaker_embedding.py:357-442` with full scoping logic (`restrict_to_ids`, `prefer_ids`, unknown staging, source tagging). It's already wired to the post-job endpoint `POST /job/{job_id}/speakers/auto-identify` (`routes/transcription.py:1274`). The scope resolver `_resolve_match_scope` (`routes/transcription.py:1217`) decides between strict-restrict and bias-prefer modes.
 
-- After pyannote diarization returns turns, extract per-speaker embeddings:
-
-```python
-def compute_speaker_embeddings(audio_path: str, speakers: List[dict]) -> Dict[str, np.ndarray]:
-    """For each unique SPEAKER_XX label, compute a mean embedding from
-    the audio segments where that speaker is active. Returns
-    {label: embedding}. Uses pyannote's speechbrain model (already loaded
-    by the diarization pipeline)."""
-```
-
-- Compare each computed embedding against the registry:
+**B5's actual change** — call the existing service **inline during `_run_transcription_sync`** instead of waiting for a separate manual API call:
 
 ```python
-def auto_match_speakers(
-    computed: Dict[str, np.ndarray],
-    threshold: float = 0.75,
-) -> Dict[str, Tuple[str, float]]:
-    """For each pyannote label, find the best-matching registered speaker
-    by cosine similarity. Returns {label: (speaker_id, confidence)} only
-    for matches >= threshold. Labels with no match aren't included
-    (caller keeps SPEAKER_XX)."""
+# After diarization joins and A3 segment-to-speaker assignment:
+if speakers and state.refinement_available:  # service depends on embedding extractor
+    restrict_ids, prefer_ids, _scope_label = _resolve_match_scope({
+        "speaker_ids": settings.speaker_ids,
+    })
+    try:
+        auto_matches = state.embedding_service.auto_identify_speakers(
+            audio_path=audio_path,           # original audio, not trimmed
+            speaker_turns=speakers,
+            job_id=job_id,
+            restrict_to_ids=restrict_ids,
+            prefer_ids=prefer_ids,
+        )
+        job.auto_speaker_matches = auto_matches  # for UI
+        # Apply matches to segments — replace SPEAKER_XX with name when matched=True
+        for seg in transcription_segments:
+            lbl = seg.get("speaker", "")
+            m = auto_matches.get(lbl)
+            if m and m.get("matched"):
+                seg["speaker"] = m["name"]
+    except Exception:
+        logger.exception("Auto-match failed for job %s; keeping SPEAKER_XX labels", job_id)
 ```
 
-- In `_run_transcription_sync`, after diarization joins:
-
-```python
-if speakers:
-    transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
-    transcription_segments = stitch_speaker_turns(transcription_segments)
-
-    # B5: auto-match if no explicit speaker_ids OR if some pyannote labels
-    # still unresolved after explicit assignment.
-    auto_matches = auto_match_speakers_for_job(audio_path, speakers, registry)
-    apply_auto_matches(transcription_segments, auto_matches, threshold=0.75)
-    job.auto_speaker_matches = auto_matches  # for UI display + audit
-```
-
-- `TranscriptionJob.auto_speaker_matches: Optional[Dict[str, Dict]] = None` field added — shape `{SPEAKER_00: {speaker_id: "...", name: "...", confidence: 0.87}}`. UI uses this to render the auto-match badges (B6).
-- The user can override via existing `/job/{job_id}/speakers/assign` route — manual override always wins.
-
-**Threshold rationale**: 0.75 matches the existing `SPEAKER_MATCH_THRESHOLD` constant in `config.py`. Falls in the "high confidence" range for speechbrain embeddings; lower than that, false positives outweigh benefit.
+- `TranscriptionJob.auto_speaker_matches: Optional[Dict[str, Dict]] = None` field added — exact shape returned by `auto_identify_speakers`.
+- **Precedence rule, explicit**: when `settings.speaker_ids` is provided, the existing `_resolve_match_scope` returns `restrict_to_ids=speaker_ids` (strict-scope mode). The auto-match then only picks names from that set. When `speaker_ids` is empty, the resolver returns `(None, None, "all")` and the matcher searches the full registry. This matches today's manual `/job/{id}/speakers/auto-identify` route behavior — same semantics, just inline.
+- B5 implementation: ~30 lines in `_run_transcription_sync` + the field declaration. The bulk of the heavy lifting was already done.
 
 ### B6 — UX audit + improvements
 
@@ -210,15 +208,20 @@ For each B1-B5 capability, document the impacted user touchpoints:
 def record_event(event_type: str, **fields) -> None:
     """Append a JSON line to ICLOUD_BASE/learning_log.jsonl. Never raises."""
 
-def update_speaker_embeddings(job_id: str, segments: List[dict], registry) -> int:
-    """For each speaker assigned (manually or via B5) with >= 60s of speech,
-    extract a mean embedding from their segments and merge into
-    speakers/<id>/embedding.npy via duration-weighted rolling average:
+def update_speaker_embeddings(job_id: str, audio_path: str, speaker_turns: List[dict],
+                              assignments: Dict[str, str]) -> int:
+    """For each pyannote label `lbl` mapped to a registered speaker name in
+    `assignments` (manual `speaker_ids` or B5 auto-match with matched=True),
+    if total speaking duration is >= 60s, extract a fresh embedding from
+    the audio across that speaker's turns and merge it into the registry
+    via the existing EMA pattern:
 
-        new_emb = (existing_emb * existing_dur + new_emb * new_dur) /
-                  (existing_dur + new_dur)
+        embedding_service.update_embedding(name, new_embedding, alpha=0.3)
 
-    Where existing_dur is read from speaker.total_speaking_time_seconds.
+    This reuses speaker_embedding.py:279 (the same path used today by
+    routes/transcription.py post-call). Don't reinvent the math; just
+    move the trigger from manual to automatic.
+
     Returns count of speakers updated. Records 'embedding_update' events."""
 
 def extract_insights_auto(job_id: str, segments: List[dict], registry) -> int:
@@ -238,33 +241,52 @@ def learn_glossary_terms(job_id: str, corrections: List[dict]) -> int:
 **Orchestrator**: at the end of `_run_refinement_for_job` (B2's background task), after corrections are applied:
 
 ```python
-def _run_post_refinement_learning(job_id: str, segments: List[dict], analysis: dict):
+def _run_post_refinement_learning(job_id: str, audio_path: str, segments: List[dict], analysis: dict):
+    successes = 0
+    failures = 0
+    emb_count = ins_count = glo_count = 0
+
+    # Build assignments map {pyannote_label: speaker_name} from segments
+    assignments = {seg.get("speaker"): seg.get("speaker") for seg in segments if seg.get("speaker") and not seg["speaker"].startswith("SPEAKER_")}
+
     try:
-        emb_count = learning.update_speaker_embeddings(job_id, segments, state.speaker_store)
+        emb_count = learning.update_speaker_embeddings(job_id, audio_path, segments, assignments)
+        successes += 1
     except Exception:
         logger.exception("Embedding update failed for job %s", job_id)
-        emb_count = 0
+        failures += 1
     try:
         ins_count = learning.extract_insights_auto(job_id, segments, state.speaker_store)
+        successes += 1
     except Exception:
         logger.exception("Insights extraction failed for job %s", job_id)
-        ins_count = 0
+        failures += 1
     try:
         glo_count = learning.learn_glossary_terms(job_id, analysis.get("corrections", []))
+        successes += 1
     except Exception:
         logger.exception("Glossary learning failed for job %s", job_id)
-        glo_count = 0
-    # Stamp a learning_summary onto the job for UI polling
+        failures += 1
+
+    # Stamp learning_summary + learning_status onto the job for UI polling
     job = state.jobs.get(job_id)
     job.learning_summary = {
         "embeddings_updated": emb_count,
         "insights_added": ins_count,
         "terms_learned": glo_count,
     }
+    if successes == 3:
+        job.learning_status = "ok"
+    elif successes >= 1:
+        job.learning_status = "partial"
+    else:
+        job.learning_status = "failed"
     state.jobs.update(job)
 ```
 
-**`learning_log.jsonl` location**: `~/Library/Mobile Documents/com~apple~CloudDocs/Davrine Transcription/learning_log.jsonl` (iCloud — cross-device, version-historied). Append-only, never edited in place.
+**`learning_log.jsonl` location**: `~/Library/Mobile Documents/com~apple~CloudDocs/Davrine Transcription/learning_log.jsonl` (iCloud — cross-device, version-historied). Append-only, never edited in place. **Concurrency**: `record_event` must hold an `fcntl.LOCK_EX` advisory lock during open+append+close; iCloud has no transactional guarantees. Followed by `fsync()` to ensure the line is on disk before unlocking.
+
+**Glossary append normalization**: idempotent term matching uses case-insensitive comparison **plus** Unicode normalization (NFC), whitespace collapse, and trailing-punctuation strip. "DMG Mori" ≡ "DMG  Mori" ≡ "dmg mori." for de-dup purposes — but the canonical form (first-seen casing/spacing) is what gets stored.
 
 **Schema** (one JSON object per line):
 ```json
@@ -275,13 +297,11 @@ def _run_post_refinement_learning(job_id: str, segments: List[dict], analysis: d
 
 **Endpoint**: `GET /learning/log?since=...&type=...` (paginated, used by B6e Activity timeline)
 
-### B8 — Voxtral default verification + alignment
+### B8 — Voxtral default (confirmed already set) + engine compatibility doc
 
-**Files**: `backend/config.py`, `backend/job_models.py`
+**Audit result (already verified)**: `backend/job_models.py:380` sets `model_size: str = "voxtral-realtime-4b"` and `engine: str = "voxtral-local"` as the `TranscriptionSettings` defaults. Commit `261ddf9 Add Voxtral Realtime 4B as default local engine` already landed this. **No code change needed for B8**.
 
-**Audit step** (first task of plan 1): inspect the default `model_size` resolution for `engine=voxtral-local`. Confirm whether commit `261ddf9` already set `voxtral-realtime-4b` as default. Output is a one-paragraph audit note appended to this design doc.
-
-**Fix step** (if audit shows mismatch): set `voxtral-realtime-4b` as the default `model_size` when `engine=voxtral-local` and no explicit `model_size` is provided. One-line config change, possibly already done.
+**B8's actual change** — ship the engine-compatibility documentation table (below) so users understand which fixes apply to which engine. Add it to the README or a new `docs/engines.md`. ~5 lines of YAML/Markdown total.
 
 **Engine compatibility documentation**: a new section in the project README (or `docs/engines.md`) clarifying:
 
@@ -377,7 +397,7 @@ Per-task tests are detailed in each plan. High-level coverage:
 | Embedding update: rolling avg vs buffer of N? | **Duration-weighted rolling average** — simpler, more stable across recording conditions |
 | Glossary auto-add: direct vs pending review section? | **Pending review section** in `_global.md` — clean separation from user-curated content |
 | `learning_log.jsonl` location: local vs iCloud? | **iCloud** — cross-device, version-historied via iCloud |
-| Refinement timeout for Sonnet on long transcripts | **240 seconds** (up from 120) |
+| Refinement timeout for Sonnet on long transcripts | **300 seconds** (up from 120) — leaves margin under load; no retry path |
 | `auto_refine` default behavior | `None` → auto-on when `speaker_ids` or `context_path` is provided, else off |
 
 ## Out of scope (post-B', future)
@@ -391,8 +411,12 @@ Per-task tests are detailed in each plan. High-level coverage:
 
 This spec maps to three implementation plans, executed in order. Each plan ships independently, gets manual validation, before the next plan starts.
 
-1. **Plan 1 — Backend foundation (B1, B2, B3, B4, B5, B8 audit)**: refinement gets context, auto-runs, switches to Sonnet, global glossary helper, speaker auto-match. ~5-7 tasks.
-2. **Plan 2 — Learning system (B7)**: post-refinement learning orchestrator, three workers, learning_log, audit/learning routes. ~4-5 tasks.
-3. **Plan 3 — UX audit + frontend (B6)**: UX touchpoint audit, then components in order: refinement indicator, auto-match badges, glossary editor, post-job toast, activity timeline, settings progressive disclosure. ~6-8 tasks.
+1. **Plan 1 — Backend foundation**: B4 (glossary helper + ship template `_global.md`) → B1 (refinement receives context — depends on B4's loader) → B3 (Sonnet + 300s timeout) → B2 (auto-run wiring with executor pattern) → B5 (inline auto-match call, ~30 lines reusing existing service) → B8 (ship engine-compatibility doc, 5 lines). ~5-6 tasks.
+2. **Plan 2 — Learning system (B7)**: post-refinement learning orchestrator with three failure-isolated workers, `learning_log.jsonl` with fcntl locking, GET `/learning/log` route, glossary append normalization. ~4-5 tasks.
+3. **Plan 3 — UX (B6 — audit first, then implementations)**: **Task 1 produces `docs/superpowers/audits/2026-05-15-ux-touchpoints.md` and gates all subsequent tasks** (Tasks 2-7 cannot start until Task 1 is reviewed and accepted by the user). Then in order: B6a refinement indicator, B6b auto-match badges + accept/reject, B6c `_global.md` editor, B6d post-job toast, B6e activity timeline, B6f settings progressive disclosure. ~7 tasks.
 
 Manual validation gate at the end of each plan re-runs the Pascal Weber audio (or a representative sample) to measure progress against the proper-noun acceptance criterion.
+
+**Cross-plan dependencies**:
+- Plan 2 depends on Plan 1 (B7 reads `analysis["corrections"]` from B1's refinement output and uses `auto_speaker_matches` from B5)
+- Plan 3 depends on Plan 1 + Plan 2 (UI reads `refinement_status`, `auto_speaker_matches`, `learning_summary`, `learning_status`, `learning_log.jsonl`)
