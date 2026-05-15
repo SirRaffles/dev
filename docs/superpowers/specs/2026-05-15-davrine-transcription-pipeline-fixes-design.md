@@ -35,6 +35,7 @@ This spec addresses (1)-(4) as three sub-changes (A1, A2, A3). Out of scope: ref
 - Improving accuracy on proper nouns / domain terms (addressed by B', requires refinement changes)
 - UI changes to surface new settings (everything ships with sensible defaults; advanced settings remain hidden)
 - Touching Voxtral local or Parakeet code paths (A1's params are Whisper-specific)
+- Tuning pyannote itself or swapping the diarization model — A3 only changes how diarization output is *applied* to Whisper segments
 - Reducing run-time (acceptable to slow down 5-15 % on clean audio in exchange for quality)
 
 ## Design
@@ -53,7 +54,7 @@ result = mlx_whisper.transcribe(
     task="translate" if settings.translate_to_english else "transcribe",
     word_timestamps=True,                          # forced on; needed by A3
     condition_on_previous_text=False,              # stop error propagation
-    no_speech_threshold=0.4,
+    no_speech_threshold=0.6,                       # unchanged; lowering risks more hallucinations on silence
     compression_ratio_threshold=2.4,
     logprob_threshold=-1.0,                        # new: triggers temp fallback
     temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),    # new: decoding fallback ladder
@@ -64,13 +65,37 @@ result = mlx_whisper.transcribe(
 ```
 
 **Behavior**:
-- `word_timestamps=True` is forced — it was previously a user setting. The runtime cost is small (~5 %) and we need word-level times for A3. The existing `settings.word_timestamps` flag now controls whether words are *emitted* downstream, not whether they're *computed*.
+- `word_timestamps=True` is forced — it was previously a user setting. The runtime cost is small (~5 %) and we need word-level times for A3.
 - `condition_on_previous_text=False` matches OpenAI's recommendation for long-form audio with silences.
 - `temperature` as a tuple triggers mlx-whisper's built-in fallback: if a chunk's average logprob is below `logprob_threshold` or its compression ratio exceeds `compression_ratio_threshold`, it retries at the next higher temperature.
 
+**Required change to emission gating (transcription.py:692-703)**:
+The current code only populates `seg_data["words"]` when `settings.word_timestamps` is True. Since A3 needs `words` internally regardless of the user setting, this gating must be **decoupled**:
+
+```python
+# Always carry words through internally so A3 can split by speaker turn.
+seg_data["words"] = [
+    {"word": w.get("word", w.get("text", "")),
+     "start": w["start"], "end": w["end"],
+     "probability": w.get("probability", 1.0)}
+    for w in segment.get("words", [])
+]
+transcription_segments.append(seg_data)
+```
+
+Then, **after** A3 and `stitch_speaker_turns`, strip `words` from emitted segments if the user opted out:
+
+```python
+if not settings.word_timestamps:
+    for seg in transcription_segments:
+        seg.pop("words", None)
+```
+
+This preserves the existing public contract (output unchanged when `word_timestamps=False`) while enabling internal use.
+
 **Edge cases**:
-- If the user explicitly set `settings.word_timestamps=False` for output formatting reasons, the existing code path that strips per-word data from emitted segments still runs (lines 692-701). Internal use is unaffected.
 - mlx-whisper's `temperature` accepts both a scalar and an iterable — passing a tuple is supported.
+- `no_speech_threshold` deliberately kept at 0.6 — lowering it would increase emissions on silent regions, which A2 is independently trying to suppress upstream. Two changes pulling opposite directions = bad.
 
 ### A2 — VAD-based leading silence trim (silero-vad)
 
@@ -128,6 +153,8 @@ if trim_offset > 0:
 **Helper `_make_trimmed_audio`**: writes a trimmed WAV to a temp file (cleaned up in the existing `finally` block by extending the temp-dir cleanup logic to include the trimmed file).
 
 **Why Whisper-only**: Voxtral and Parakeet don't have the same auto-language-detection flaw (they handle the whole file as one). Adding VAD trim there is unnecessary complexity for no benefit.
+
+**Diarization stays on the original audio**: pyannote runs concurrently against `audio_path` (not `audio_path_for_whisper`). Whisper segment timestamps are restored to the original time base before A3 runs, so the two streams stay in sync. Do not pass the trimmed file to diarization — it would silently shift speaker turns relative to the original audio.
 
 **Why not just default `language="en"`**: David's calls are bilingual FR/EN and will include all-French recordings. Forcing English breaks those. VAD trim fixes the root cause without restricting use cases.
 
@@ -201,8 +228,12 @@ def assign_speakers_to_segments(segments: list, speakers: list) -> list:
 **Edge cases**:
 - A segment with no words list (Voxtral, Parakeet) falls through to existing midpoint behavior
 - A segment fully inside one speaker turn produces one output sub-segment (no degradation)
-- Punctuation attached to words: `w.get("word", "")` preserves whatever mlx-whisper emits, joined with spaces. Existing `normalize_segments` step (called after this) fixes spacing around punctuation.
+- Punctuation attached to words: mlx-whisper emits per-word strings like `" Hello"`, `" ,"`, `" world"`, `" ."` (with leading spaces). After `.strip()` + `" ".join(...)`, the intermediate text is `"Hello , world ."`. The downstream `normalize_transcript_text` (postprocess.py:31) applies `re.sub(r"\s+([.!?,;:])", r"\1", text)` which correctly collapses these to `"Hello, world."`. **A3 unit test must include a punctuation case** to guard this contract.
 - Empty speakers list: early return, unchanged from current behavior
+
+**Known limitations** (acceptable in v1, tracked for follow-up):
+- `speaker_at(t)` uses linear scan with `start <= t < end`. If a word's start time falls in a gap between two pyannote turns (small gaps are common at ~10 ms granularity), it returns `"Unknown"` and forces a spurious split. Mitigation: `stitch_speaker_turns` re-merges adjacent same-speaker turns, so an `"Unknown"` sub-segment between two identical neighbors collapses cleanly only if it's same-speaker on both sides — which it usually is. Worst case: one extra "Unknown" sub-segment per gap, still vastly better than current behavior.
+- Overlapping speaker turns (pyannote can emit them for cross-talk) are resolved by first-match in list order, not by dominance. Acceptable since cross-talk is rare in 1-on-1 business calls and previously not handled at all.
 
 ## Data Flow After Changes
 
@@ -239,10 +270,13 @@ audio file
 
 ### New tests
 1. **A1 unit**: mock `mlx_whisper.transcribe`, verify kwargs include `condition_on_previous_text=False`, `temperature=(0.0, ...)`, `logprob_threshold=-1.0`, `word_timestamps=True`
-2. **A2 unit**: given a synthetic 5 s silence + 10 s speech audio, `find_first_speech_offset` returns ≈ 5.0. Given pure speech, returns 0.0. Given silero unavailable (mock `torch.hub.load` to raise), returns 0.0 and logs warning.
-3. **A3 unit**: synthetic segment with words spanning two speaker turns → produces two sub-segments with correct boundary
-4. **A3 unit**: segment with no `words` → midpoint fallback works (parity with current)
-5. **A3 unit**: empty speakers → no-op
+2. **A1 emission-gating unit**: with `settings.word_timestamps=False`, A3 still receives populated `words` internally; emitted segments have `words` stripped after stitching
+3. **A2 unit**: given a synthetic 5 s silence + 10 s speech audio, `find_first_speech_offset` returns ≈ 5.0. Given pure speech, returns 0.0. Given silero unavailable (mock `torch.hub.load` to raise), returns 0.0 and logs warning.
+4. **A3 unit — basic split**: synthetic segment with words spanning two speaker turns → produces two sub-segments with correct boundary
+5. **A3 unit — punctuation**: words `[" Hello", " ,", " world", " ."]` produce text `"Hello, world."` after `normalize_transcript_text` runs
+6. **A3 unit — gap between turns**: a word with start time in the gap between two pyannote turns is labeled "Unknown" but `stitch_speaker_turns` re-merges same-speaker neighbors
+7. **A3 unit — no words fallback**: segment with no `words` key → midpoint fallback works (parity with current)
+8. **A3 unit — empty speakers**: no-op
 
 ### Manual validation (gate for "done")
 - Re-run on `Tests/15-29-21.m4a` (Pascal Weber call) with diarization + speaker tags for "David Marchesseau" and "Pascal Weber" pre-registered
@@ -263,7 +297,8 @@ Single PR on the `dev` branch. Manual validation gate before merge to main. No f
 
 ## Open Questions
 
-None at design time. Implementation may surface mlx-whisper API quirks around the `temperature` tuple — if so, fallback is to set `temperature=0.0` and accept reduced robustness on the first iteration, file a follow-up.
+- mlx-whisper API quirks around the `temperature` tuple — if implementation hits an issue, fallback is to set `temperature=0.0` and accept reduced robustness on the first iteration, file a follow-up.
+- silero-vad first call requires a network round-trip (torch.hub.load downloads the ~2 MB model and caches it under `~/.cache/torch/hub/`). First-run on a fresh install with no internet logs a warning and returns 0.0 (graceful degradation to current behavior). Acceptable for now; pre-bundling the silero weights into the repo is a follow-up if needed.
 
 ## Follow-ups (Out of Scope for This Spec)
 
