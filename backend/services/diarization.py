@@ -144,19 +144,60 @@ def stitch_speaker_turns(segments: List[dict], max_gap_ms: float = 600) -> List[
 
 
 def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> List[dict]:
-    """Assign speaker labels to transcription segments."""
+    """Assign speaker labels to transcription segments.
+
+    If per-word timestamps are available on a segment, the segment is split at
+    speaker-turn boundaries so each output sub-segment has exactly one speaker.
+    If word timestamps are absent (Voxtral/Parakeet path), falls back to the
+    midpoint-of-segment heuristic.
+    """
     if not speakers:
         return segments
 
-    for segment in segments:
-        seg_mid = (segment["start"] + segment["end"]) / 2
+    def speaker_at(t: float) -> str:
+        for turn in speakers:
+            if turn["start"] <= t < turn["end"]:
+                return turn["speaker"]
+        return "Unknown"
 
-        assigned_speaker = None
-        for speaker_turn in speakers:
-            if speaker_turn["start"] <= seg_mid <= speaker_turn["end"]:
-                assigned_speaker = speaker_turn["speaker"]
-                break
+    out: List[dict] = []
+    for seg in segments:
+        words = seg.get("words") or []
 
-        segment["speaker"] = assigned_speaker or "Unknown"
+        if not words:
+            mid = (seg.get("start", 0) + seg.get("end", 0)) / 2
+            new_seg = dict(seg)
+            new_seg["speaker"] = speaker_at(mid)
+            out.append(new_seg)
+            continue
 
-    return segments
+        current_speaker = speaker_at(words[0].get("start", seg.get("start", 0)))
+        buf_words: List[dict] = []
+        buf_start = words[0].get("start", seg.get("start", 0))
+
+        def _flush(end_time: float):
+            if not buf_words:
+                return
+            text = " ".join(w.get("word", "").strip() for w in buf_words if w.get("word", "").strip())
+            out.append({
+                "start": buf_start,
+                "end": end_time,
+                "text": text,
+                "speaker": current_speaker,
+                "words": list(buf_words),
+            })
+
+        for w in words:
+            t = w.get("start", w.get("end", buf_start))
+            w_speaker = speaker_at(t)
+            if w_speaker != current_speaker and buf_words:
+                _flush(buf_words[-1].get("end", buf_start))
+                current_speaker = w_speaker
+                buf_words = []
+                buf_start = t
+            buf_words.append(w)
+
+        if buf_words:
+            _flush(buf_words[-1].get("end", seg.get("end", buf_start)))
+
+    return out
