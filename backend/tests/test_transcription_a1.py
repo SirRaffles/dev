@@ -33,7 +33,6 @@ def test_whisper_called_with_a1_kwargs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(transcription.state, "jobs",
                         MagicMock(get=MagicMock(return_value=job_obj), update=MagicMock()))
-    monkeypatch.setattr(transcription.state, "mlx_whisper_available", True, raising=False)
     monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
 
     with patch("mlx_whisper.transcribe", side_effect=fake_transcribe):
@@ -83,7 +82,6 @@ def test_emitted_segments_strip_words_when_user_opted_out(tmp_path, monkeypatch)
 
     monkeypatch.setattr(transcription.state, "jobs",
                         MagicMock(get=MagicMock(return_value=job_obj), update=MagicMock()))
-    monkeypatch.setattr(transcription.state, "mlx_whisper_available", True, raising=False)
     monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
 
     with patch("mlx_whisper.transcribe", return_value=fake_result):
@@ -130,7 +128,6 @@ def test_emitted_segments_keep_words_when_user_opted_in(tmp_path, monkeypatch):
 
     monkeypatch.setattr(transcription.state, "jobs",
                         MagicMock(get=MagicMock(return_value=job_obj), update=MagicMock()))
-    monkeypatch.setattr(transcription.state, "mlx_whisper_available", True, raising=False)
     monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
 
     with patch("mlx_whisper.transcribe", return_value=fake_result):
