@@ -1,0 +1,330 @@
+[4.0] Unknown: person
+
+[14.1] SPEAKER_00: person for accepting for this short, impromptu connect between us. So I know that, I know how it is to do, you know, to be in a startup and, you know, how busy you can be at the moment. So really, you know, saving time for things like that. Thank you very much.
+
+[34.4] Unknown: You're
+
+[34.9] SPEAKER_01: welcome. Please give me a quick like a hat up on the context because somehow I tried looking at It's fine. Absolutely.
+
+[43.8] SPEAKER_00: I just want the call
+
+[44.3] SPEAKER_01: text. All right. Sorry for that. Yeah,
+
+[46.3] SPEAKER_00: no, no, no, for sure. Absolutely. It's a fair question. So first of all, I'm currently based in Singapore. Okay?
+
+[53.6] SPEAKER_01: Yeah.
+
+[54.0] SPEAKER_00: Yeah. And I'm relocating to Zurich over the summer. I was in Zurich already at the end of April.
+
+[62.4] SPEAKER_00: And it was really great. The weather was perfect.
+
+[68.0] Unknown: So
+
+[68.5] SPEAKER_00: obviously the right time to come and visit. and prepare for settling in. So that's... And so basically, I'm looking to settle in and also to connect with the ecosystem. I spent 10 years in Singapore.
+
+[85.5] SPEAKER_00: And so I don't have really an ecosystem in connections in Zurich. So this light is blinking, just one second.
+
+[96.2] SPEAKER_00: And so, yes, and I saw your startup, which is being well promoted, I would say. And Greater Zurich as a whole is doing a great job. And other satellite, I would say, organization around deep tech are doing a great job promoting the ecosystem locally. and so that's how I started to really understand what was there and on my side I worked most of the
+
+[130.3] Unknown: I
+
+[130.9] SPEAKER_00: spent 17 years at SAP and I was in charge of discrete manufacturing for quite a while at SAP so dealing with the type of customers that you are dealing with and talking to them about industry 4.0, 5.0, and everything you can do to improve quality, to improve efficiency, and all of that, right? So when I saw what you were doing, of course, it resonated quite well.
+
+[160.1] SPEAKER_00: So if I want to summarize a bit what I've been doing, because I don't want to give you the whole, you know, resume, but lastly, industrial AI.
+
+[173.3] SPEAKER_00: in areas so asset intensive industries uh areas like enterprise asset management field service management manufacturing where i work for ifs i don't know if you know ifs as a company
+
+[191.4] SPEAKER_01: um
+
+[192.2] Unknown: it rings
+
+[193.5] SPEAKER_01: a bell it's it's a swedish
+
+[195.2] SPEAKER_00: company it's a swedish company originally
+
+[198.6] SPEAKER_00: but now it's mostly in London.
+
+[203.1] SPEAKER_00: So this company, they have an ERP but they also are very much, very, very strong in enterprise asset management,
+
+[211.9] SPEAKER_00: field service management and manufacturing and they are going full in on AI,
+
+[222.9] SPEAKER_00: acquiring companies the one after the other. So it's a fast growing company. They do 1.5 billion, um, annual recurring revenue. And they've been growing, growing very fast, uh, more than, you know, 30, 40 % a year in the past year. So very fast, uh, growth. And now, yes, as I said, full, fully with AI. So I'm deep in AI.
+
+[246.0] SPEAKER_00: Um, I'm also involved in other, other things, uh, around, around AI, Adjantic AI.
+
+[254.0] SPEAKER_00: And, um, uh, yeah, so I felt, you know, it was, it would be interesting to understand what you're doing, where you are, uh, at the moment in your, in your development. I saw you raised money last year.
+
+[268.2] SPEAKER_00: Uh, and, um, I saw you were, I'm not too sure about the stage, uh, in terms of the product readiness and, and your, uh, push to the market. but yeah I felt it's an interesting field you probably are not thinking deep today about you know go to market at scale or value selling or this type of things I don't know I don't know where you are but that's more my thing I know you are more technical for me I'm more on the sales side, I've been in consultative setting, engaging big accounts.
+
+[309.0] SPEAKER_00: How do you get a seat at the table of, you know, big tier one customers, but also worked on volume, volume approaches, SMEs at SAP.
+
+[322.9] SPEAKER_00: I launched solutions like industry cloud solutions that was mainly via partners. So, you know, channel, volume and so on. And my role, my last role at SAP was to do the industry go to market and to equip the sales across the globe with the best assets, the best methodologies to actually engage and, you know, open the doors and generate demand and then, you know, engage properly and close the deals. So that's what I do. Yeah, that's about me.
+
+[360.6] SPEAKER_01: Okay.
+
+[361.4] Unknown: Cool,
+
+[362.0] SPEAKER_01: cool, interesting. Yeah, let me maybe click through the slides I have, because we are fundraising at the moment. Ah, you are fundraising, okay.
+
+[369.1] Unknown: Yeah,
+
+[369.5] SPEAKER_01: so all the context is here, so that I mean, at least I have in my mind. So it's good to have also division representation. So yeah, maybe let me start with us, just kind of the background, right? So I mean, I co -founded the company with Daniel, and we met during our PhD. So we basically were at ETH, the professor was pioneering basically AI application in computational science and engineering. So really large scale simulations and then AI in order to do whatever application we did. So to maybe improve the speed of the simulator or to infer certain quantities like a control law in order to control the system. and there was different several applications and
+
+[417.8] SPEAKER_00: and
+
+[418.1] SPEAKER_01: so yeah we were with him and then he decided not to retire yet in switzerland you have to and in the us you don't right so he moved the chair to harvard and and that was also kind of where me and donnie and basically spent uh time together
+
+[433.1] SPEAKER_01: sharing a flat and where kind of the idea for monocargo was born um yeah by now we are 16 people in the team, mainly engineers, so regarding the question where do we stand, so we basically have our initial product that is kind of currently in an MVP phase, so we have it rolled out with nine customers and are continuously testing and improving the system to become operational at these customer sites. and the other plan is to finish this in summer and
+
+[470.3] Unknown: then start kind of let's say selling
+
+[473.0] SPEAKER_01: the product more broadly on the market.
+
+[476.4] Unknown: I
+
+[477.1] SPEAKER_01: think the other aspect you mentioned was about kind of how we think maybe about go to market and see at the moment we focus a lot on basically on the let's say direct sales So we built basically a system framework initially that kind of allows to like a scrape ICP qualified leads and qualify them and then do like multi -channel outbound and then basically record calls and basically use the voice of customer to improve the messaging to again improve potentially on the scraping side. what ICPs we contact and then also of course in the outbound sequence so we can make sure that we have some kind of closed loop and that's kind of the direct sales of what we are doing now and and I think that the market is quite interesting whether is you probably know right it's not it's not an old it's an old market it's not a new market so there is hundreds of consulting companies that do services in order to help you set up any software system and And so that's, I think, also our, let's say, next channel to go via the software resellers.
+
+[559.3] SPEAKER_01: So we already have ongoing partnerships with Siemens, et cetera, that are basically kind of the SAPs in the space. And then, of course, also their distributors and integration partners. The idea is to progress the go -to market along these dimensions. so to make sure we can have at some point in the end some kind of account sales whether you have basically one contact person that works for example with the people at x data make sure they know how to sell and then they're happy and understanding everything and then they sell to their hundreds of clients they have internally right so to have kind of this um also
+
+[607.1] SPEAKER_01: basically hierarchy of and not not do everything with direct sales because it's a huge market like yes
+
+[614.8] SPEAKER_00: hundred
+
+[615.3] SPEAKER_01: thousands of companies so you cannot do like direct sales otherwise you're gonna just end up end up in chaos yeah
+
+[623.0] SPEAKER_00: and i mean it's important to get flagship customers that support you as you said like the siemens of the world of course i would say uh yeah if you have logos that everybody can recognize that's always good but then it should not prevent you from scaling with you know using different channels and different ways for sure but there definitely some I guess you have those nine nine customers that you have they are probably your development partners as well in a way helping you yeah exactly yeah
+
+[659.4] SPEAKER_01: exactly so we use kind of the same process to define it like how we kind of go from discovery to demo onboarding and so since the beginning we basically used the same that's a script or we evolved the kind of final playbook for sales but of course initially you you sell yeah it's basically convincing them into a code of a paid co -development partnership but but still with kind of the normal let's say legal framework and also pricing so we can evaluate like really the willingness to pay and not some like just random numbers they give you in some surgery. Yes. Right. Yeah.
+
+[701.7] Unknown: Okay.
+
+[703.8] SPEAKER_00: So today in terms of technology, are you, is it fully preparatory? I mean, it's your own technology from the university, It's like a spin -off as you say, right? And so, and you're not developing on the business technology platform of SAP or these kind of things.
+
+[728.2] SPEAKER_00: I mean,
+
+[729.1] SPEAKER_01: we do work with the CAM providers. So it's basically integrated in the CAM software.
+
+[736.7] Unknown: So
+
+[737.3] SPEAKER_01: the user can use it in the normal environment he's used to using. so no new like kind of process required so it's all in this in the existing process chain uh like if you think about the sap where that is i can add into to sap but in the sap being this camp systems yeah okay
+
+[758.2] SPEAKER_00: all right and and um so do you because i i looked a bit uh i fully understand your value proposition uh what you are doing uh with the cam and cnc and helping find those patterns and and
+
+[776.4] SPEAKER_00: accelerating uh the programming and these kind of things um uh do you have like some kind of an error model or something where you can quickly if you go at any prospect i don't know and what you say to those prospects that we saw before on the channels, but you have a value statement, uh, uh, you know, proven, proven benefits that you, that you, uh,
+
+[803.0] Unknown: not, not,
+
+[804.0] SPEAKER_01: not yet. I mean, it's still too early. We don't yet have like strong numbers, but we like basically try to, um, tie the value creation along these two dimensions that I show here. right? So one is basically the time savings, so more standardized processes, less time spent on overhead, on searching, and whatever, right? And the other one is really on improved overall equipment efficiency, so that you can basically, well, either reduce the cycle time or make sure there is less idle time for the machines. I mean, it's a very broad topic, right? The OEE kind of stands for everything. So it's kind of this aspect and this here is more like kind of
+
+[854.2] SPEAKER_01: material savings, like less cost basically. So here it's about okay, save like work preparation time
+
+[863.8] SPEAKER_01: and then you save on maybe tools that you don't need but you still like because you have like non -standardized processes you buy too many tools that you're not like wouldn't be necessary. So here is really, I think, cost saving and here it's about increasing overall equipment efficiency. And these are kind of the two directions where we try to do in the discovery, right? So when we start with the intro call, which is really just broadly getting the main KPIs, like number of machines, programmers, camp system, blah, blah, blah. and then we go into the discovery call where we really try to dive into this like value problem like ask them okay so you're super interested in reducing your programming time but why right what is your reason to why you want to have this problem solved is it again right your machines are idle because they're waiting for the programmer is it because you feel you have thousands of tools and and there shouldn't be an easier way to do the stuff, is it because you're like a big international corporate that wants to have standardization, right? You're selling this luxury, whatever goods, and somehow depending on which factory the good comes from, it's kind of different. So you try to maybe enhance standardization and et cetera, right? So this is really something we try to figure out and then try to also demonstrate this specific use case in a live demo, so where they can send us data and we demonstrate how our software works on their data.
+
+[965.9] SPEAKER_01: So they can really get, I mean, that's really important because it's an unsolved problem since 30 years, right? So customers are a bit skeptic. They're like, yeah, yeah, okay, everyone promises AI is going to solve everything, but show me, right?
+
+[980.1] Unknown: That's
+
+[980.3] SPEAKER_01: right. And yeah, since we are early stage, right, currently we go by an onboarding project because we cannot yet sell the license because the product is not yet like in this readiness level where we can just like talk and play and it runs yeah
+
+[993.3] SPEAKER_00: so
+
+[993.7] SPEAKER_01: we do an onboarding project where the customer basically pays
+
+[997.4] Unknown: for
+
+[997.9] SPEAKER_01: us like installing and basically educating his users to actually use the the product and this is kind of our let's say engine where we also inform the development team and basically make sure we kind of have a targeted, basically progression of the product.
+
+[1019.5] SPEAKER_00: Okay.
+
+[1020.1] Unknown: Yes.
+
+[1021.0] SPEAKER_00: And so currently,
+
+[1022.5] Unknown: what
+
+[1023.4] SPEAKER_00: are the things that you said you are raising money?
+
+[1027.4] SPEAKER_00: So currently, I don't know if it's your main problem or not, and your main focus at the moment, or if it's something else. What is the thing that is, you know, at the moment keeping you from sleeping, right?
+
+[1042.2] SPEAKER_00: At night or that, you know, the main thing that is, is it on the product roadmap side? Is it on acquiring a few more logos where you can test your value prop? And is it about that, you know, funding again? And so what is really the thing that is the main obstacle at the moment? for you it's yeah i
+
+[1067.1] SPEAKER_01: think it's currently it's kind of scalability currently a lot of the handover from like kind of development to customer is
+
+[1076.4] SPEAKER_00: is
+
+[1076.8] SPEAKER_01: founder lab so it's me my co -founder that you have thousands other things to do that are always in the loop and always responsible and and then then all always also the people forgetting and yeah not properly following up So
+
+[1093.1] SPEAKER_00: really
+
+[1094.1] SPEAKER_01: the idea is to automate these aspects. So A, I mean, of course, first get people to take it away from us. So have dedicated technical sales that can help with the preparation of the demos, for example, so that we don't have to do it. And then, of course, automate it continuously.
+
+[1111.2] SPEAKER_01: So they define the process, refine the process and then automate the process.
+
+[1115.4] SPEAKER_00: And
+
+[1115.9] SPEAKER_01: the same also with customer success. So to also have dedicated person that really is the voice of the customer and makes sure that they are happy and they get regular updates and feedback and merge and whatever other engagement strategies they want to. and then also that should kind of of course evolve into into an automatic
+
+[1140.7] SPEAKER_01: process where the customer can maybe I mean that's the big
+
+[1144.2] Unknown: long
+
+[1144.7] SPEAKER_01: vision right that you have like this onboarding wizard yeah that is like a service
+
+[1150.0] SPEAKER_01: yeah yeah exactly and then he goes through the configuration and then he has a system that works and then yeah and have almost
+
+[1158.9] SPEAKER_00: like almost yeah maybe something like a try and buy kind of thing where you can download, set it up, test it and after some time adopt it and buy it. Yeah,
+
+[1175.9] SPEAKER_01: exactly. I mean, the holy grail would be to kind of have an SAP like model, right? And like, okay, yes, they installed, buy it and they're in, they want it so much that they are willing to pay another 100k to basically customize and make it nice, because that, I think, is very important in the go -to -market, right? Because if you think about it, the distributors, like your main advocates for people buying your solutions are the distributors. And why do they like, for example, to sell SAP? Because they can charge,
+
+[1212.9] Unknown: their
+
+[1213.4] SPEAKER_01: business model is basically, well, in the end, providing the services for setting up SAP.
+
+[1220.5] SPEAKER_01: That's, I think, how the model, like how you make a distributor or a reseller -led sales strategy work if you intensive,
+
+[1231.2] SPEAKER_01: you don't just give them some realities, but you give them an opportunity to kind of like do service with the customer and for every customer earn money for supporting them, right? But then I think this is important here, that you have like this kind of quick onboarding so they can get started quickly. But then they realize, ah, but I would like to have this and that and that. And that's kind of customization that then is kind of done by the distributor.
+
+[1260.7] SPEAKER_00: Yeah, exactly. So they need to, you know, there needs to be something for them in there for sure. And your solution is on -prem, an on -prem solution, right? That you deploy on -site and you run on -site. And in terms of the IP and you have concerns about, you know, the solution being, because you train customers, as you said, you onboard customers, you do things. At the moment, you collaborate intensively with them to finalize the solution. and what prevents them from developing the same internally? What's the added value of these package solutions from you?
+
+[1305.4] Unknown: I
+
+[1306.0] SPEAKER_01: mean, in the end, it's a tough problem that has been around since 30 years. If you look at the market, I mean, I think neither in the product organization of the existing providers, existing camp players, nor in the competing startups, you find basically PhD level people from Harvard that have like this level of research background. And it's not just us, right, as the founding team, but of course our relation to ETH also allows to attract talent.
+
+[1344.0] SPEAKER_00: And
+
+[1344.4] SPEAKER_01: I mean, that's I think really, because it's a highly technical problem. you have to find a good technical solution and this replicating this is just not trivial.
+
+[1355.4] Unknown: I
+
+[1355.9] SPEAKER_01: mean the extreme analogy I always do, think about the grid provider for the electricity.
+
+[1363.7] SPEAKER_01: Their business is selling electricity, so why don't they build the fusion reactor? Why is there a fusion reactor startup that does it or why is there an external? So that's kind of the same challenge here. Yes, the market knows that they want a faster, better CNC programming, but it's just not a trivial task. You need a dedicated team with the skills to actually do it. And also from an economic perspective, it
+
+[1396.0] SPEAKER_00: just makes more
+
+[1396.7] SPEAKER_01: sense. We built the system currently for four CAM providers. we are onboarding two more, a third in negotiation.
+
+[1405.5] SPEAKER_01: So basically we can kind of distribute our R &E cost across seven systems.
+
+[1411.1] Unknown: And
+
+[1411.7] SPEAKER_01: that allows us to have like kind of, like if you do very the monkey math, right, we can have a seven times as large team because we can distribute across all this. Like if you compare, like say the effort we spent, yeah, is better distributed. and it's just economically makes more sense to have a dedicated technology partner that does this and only this and do not do it yourself okay
+
+[1438.6] SPEAKER_00: and then also your customers today they are in switzerland or it's mainly around around in this in your ecosystem at the moment and the proximity we
+
+[1451.2] SPEAKER_01: focus on the reason is like twofold right i think dach has the highest density of target customers in our industry. There is no place on the planet where you have a higher density of highly specialized high precision machine shops and is historically grown. All the top machinery producers are German or Swiss companies and then the whole... It's very strong. If you think about BMG Mori, it's half German, half Japan. If you think about Grob, if you think about Stara, if like yeah i go through the list of the top machine manufacturers like many of them are or have historic historic footprint in germany or switzerland yeah
+
+[1492.3] SPEAKER_00: and then
+
+[1492.7] SPEAKER_01: also if you think about all the top oems right very often they they are in the in the region and so it's just for us it's like i think we are just exactly in the right location to do that and there is no need yet to like say go to the us prematurely because in the end like the reference customers are here and not anywhere else. Right.
+
+[1513.8] SPEAKER_00: Or Asia, which is still the workshop of the world,
+
+[1518.6] Unknown: but
+
+[1519.1] SPEAKER_00: they are more like the users. But yeah, I mean, yeah. That's
+
+[1522.9] SPEAKER_01: the thing, right? I think if it comes about developing the technology, the production technology and defining the process, it still happens in Europe. For
+
+[1531.3] SPEAKER_00: sure.
+
+[1531.8] SPEAKER_01: And for high precision machining, it happens, I think, in the dark region, mostly. like if you go to like reference, like if you want to kind of explore the new technology and you want to know what is kind of the current state of the art, it's the dock region where you're going to go and look and not yet in China or Asia. right they say of course they they have the scale yes
+
+[1558.2] SPEAKER_00: um
+
+[1558.6] SPEAKER_01: but i think they're still like a little bit behind and that's also like ip protection not all companies they right they have been moving all the their expertise to china or asia i mean china is
+
+[1573.1] SPEAKER_00: more china is the the most problematic i would say in that sense but for the rest i mean uh if you think think Japan or you think Korea, you think, you know, Singapore, Singapore is 20, 20 % of the GDP is manufacturing. But, and they, they have this ambition to have like a high,
+
+[1595.9] SPEAKER_00: to be high in the value chain and be the hub for the rest of the region. But, and I mean, which they do, but still, still not at the level of your current ecosystem. I agree.
+
+[1609.6] Unknown: Okay.
+
+[1610.4] SPEAKER_01: Yeah, I mean, and yes, I mean, this is expansion strategy, right? I think the next step is then U. S. And I mean, I think what is important is kind of, and it sounds a bit stupid because it's a bit like kind of World War II, but still, I mean, there is, I think this global divide in East and West still, right? And then there is, okay, Asian countries like Japan, et cetera, that maybe are rather considered closer to the US as kind of say the anchor for the West.
+
+[1640.2] SPEAKER_01: And so, yeah, I mean, expansion is actually going forward is also US and then of course also certain selected countries in the East or in Asia.
+
+[1650.6] Unknown: Okay.
+
+[1651.5] SPEAKER_00: And so your immediate next step is raise money, as you said, to get the bandwidth and the scale that you want, that you need and that you explain. I mean, okay, very good. So it's
+
+[1664.4] SPEAKER_01: a classic seed round, right? I want to go from, so from like in the end, I needed pre -seed from technology to MVP, and now we need seed from MVP to product, and then yeah, like kind of all the proof points for Series A, because then we can show it's a product, it is scalable, and now we just need money to actually scale.
+
+[1684.8] SPEAKER_00: Okay. I did some VCPE program at Columbia.
+
+[1691.9] SPEAKER_00: uh, some, uh, two years ago. And, um, so, uh,
+
+[1699.1] Unknown: uh,
+
+[1699.9] SPEAKER_00: I could read if you have a pitch, uh, and you are ready to, um, to share. I mean, I can also look at it for, for the my lens, the length of, uh, um, you know, the Columbia framework, uh, basically, which is around the three P's. She's the people, I mean, the problem, the people, um, the progress and the price. and you know these kind of things and so there are you know things that you know
+
+[1727.5] SPEAKER_00: common things but you did run round already so you I guess you already you are aware yeah
+
+[1734.1] SPEAKER_01: we received the first term sheet so we already like quite well progress with the round so it's just now we start closing the round so okay okay
+
+[1743.9] SPEAKER_00: cool very good not much to do anymore on this one okay perfect okay great great i mean i wish you i wish you a lot of success for this uh round because it can open up you know the next phase it can really yeah so that's that's that's quite uh quite exciting um and uh so okay so for me i i'll be back in in zurich uh end of june end of june until the 10th of July. Um, I will also go to the Davos Tech Summit, which is early, early July. Um, uh, but otherwise I will be, uh, I will be in Zurich, uh, home hunting mainly, but, uh, and so, uh, yeah, we could, we could grab a coffee. Uh, then after that, uh, I will move for, for good end of July.
+
+[1797.0] Unknown: So,
+
+[1797.7] SPEAKER_00: uh,
+
+[1798.5] Unknown: uh,
+
+[1799.7] SPEAKER_00: I think about what you, what you said and, uh, what I, what I could, I could find also about, um, uh, Manuk AI. And so, uh, and I tell you, cause you know, I was so interested and I'm already doing it. I'm helping, you know, some startups, um, uh, to, uh,
+
+[1820.6] Unknown: you
+
+[1821.0] SPEAKER_00: know, I've got nothing to sell i'm not i don't have i'm not a consultant i don't want to be a consultant to be honest at this stage maybe later you know something like uh cero cmo fractional i don't know if you heard about the the fractional fractional concept but it's gaining ground quite a lot and um why not at some point it could be something because for you also it could be uh cheaper than you know just hiring someone especially in the phase you're in because you you may not need, you know, the full time person, but, uh, and it's different than, uh, than consulting because there's more skin in the game for that person. Right.
+
+[1859.9] Unknown: So
+
+[1860.3] SPEAKER_00: yeah,
+
+[1860.8] SPEAKER_01: sure.
+
+[1861.2] SPEAKER_00: Yes. So that's another option. So I think, yeah, let's keep in touch. I really like, you know, the environment in which you operate, you know, what you do. And so, um, uh, very, uh, very happy, uh, very, uh, interested in keeping, uh, keeping in touch and seeing how this progress for you.
+
+[1879.8] Unknown: yeah
+
+[1880.3] SPEAKER_01: it would be interesting i mean just for me to understand i think i didn't catch that so you're working at ifs yeah
+
+[1887.7] SPEAKER_00: so okay
+
+[1889.0] SPEAKER_01: so you're gonna transition yes i'm transitioning yeah
+
+[1892.9] SPEAKER_00: because my wife my wife i mean i'm following my wife in this context my wife i got a nice opportunity work opportunity she works in the pharma industry and at that time uh beginning of the year uh ifs They wanted me to go to Saudi Arabia to. And so I made the choice to follow my wife instead.
+
+[1916.4] SPEAKER_00: And so that's why I saw with with IFS. I'm now consulting with them on a deal by deal basis.
+
+[1924.8] SPEAKER_00: So what I did is I helped them with the go to market industry and I go to market overall at global level. So based in Singapore, but, you know, with a global role.
+
+[1935.2] SPEAKER_00: but they are closing their office here in Singapore and they wanted me to go to Riyadh in Saudi Arabia because they are investing a lot in the Middle East because the HQ for this region is in Dubai and Saudi Arabia is a top priority for them and
+
+[1955.9] SPEAKER_00: but I said no so and with Zurich I'm talking to the CEO for Europe now. Let's see what can be done but nothing is confirmed. So they at the moment they want me to be more consulting because I've been supporting some opportunities that they didn't want me to let go and they want me to use me this way but it was more the people in this part of the world, Australia, New Zealand and Singapore. So in Europe we we did not really um uh agree on anything at this stage so i'm open to any kind of opportunities and
+
+[1999.4] SPEAKER_00: even if it's you know not full time to be honest yeah
+
+[2006.2] SPEAKER_01: yeah it's fine it's like we are currently a bit reorganizing like ourselves so i mean we have tried last year to to um well start with the dedicated growth lead and yeah I realize it's probably too early because it just requires still founder -led sales because yeah it's like too complex for like already and the product is not ready yet so to kind of just have like a full -time salesperson yeah but I think that
+
+[2040.7] SPEAKER_01: like we probably maybe maybe we would be interesting to spar with you and exactly so
+
+[2046.2] SPEAKER_00: for instance you very concretely, very concretely, if you need connections, I mean, I guess you've got a background and the visibility that I guess opens you many doors. I think what you're doing and the positioning that you are, that you are in the niche that you are targeting, I think you can access people. But I've got also a network of people in manufacturing in SAP in Europe and globally.
+
+[2074.5] SPEAKER_00: and of course also at IFS.
+
+[2077.7] SPEAKER_00: And so at some point can always, you know, activate, you know, some contact or, you know, on target customers. I mean, depending on what you need at the moment, right? Once again, you're probably not yet looking to scale, you know, full speed because as you said, you need that seeding round to really finalize the product and organize to be able to do that and deliver. but but um you may need another prospect i don't know what at the moment you know i mean because you're already dealing with demons and others but at some point i can i can speak to people in the manufacturing space at sap and uh easily right so that's also something so uh
+
+[2124.6] Unknown: yeah
+
+[2125.2] SPEAKER_00: so let's see yeah
+
+[2127.2] SPEAKER_01: yeah let's see i mean let me know when you're around yes and see whether very fine time to grab a coffee and then maybe also I can loop in Donya and my co -founder so I can also meet you and then we can take it from there. Perfect.
+
+[2140.6] SPEAKER_00: Pascal, thanks a lot. Amazing. Thanks a lot. Have a great day ahead and see you soon. Cheers. Bye -bye. You too. See
+
+[2145.9] SPEAKER_01: you around.
+
+[2146.2] SPEAKER_00: Bye -bye. Bye.
+
+[2161.6] Unknown: Thank you.
+

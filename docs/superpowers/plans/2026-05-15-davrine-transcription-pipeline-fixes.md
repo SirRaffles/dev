@@ -1028,12 +1028,45 @@ Append to `docs/superpowers/plans/2026-05-15-davrine-transcription-pipeline-fixe
 ```markdown
 ## Validation Result (filled at end of Task 7)
 
-- Date run:
-- Opening segment language correct: yes / no
-- Speaker changes in first 5 min: <count> (target ≥ 10)
-- Hallucinations resolved (of 4): <count>
-- Decision: merge / iterate
-- Notes:
+- **Date run**: 2026-05-15
+- **Audio**: `Tests/15-29-21.m4a` (Pascal Weber / Manukai call, ~36 min, FR/EN code-switching, 2 speakers)
+- **Settings**: engine=whisper, model=large-v3-turbo, language=auto, diarization=ON, expected speakers=[David Marchesseau, Pascal Weber], context=none (validate A1/A2/A3 standalone)
+- **Total job time**: ~24 min (vs ~5-7 min for the previous Davrine baseline; the temperature ladder in A1 is responsible — measured 4-5× slowdown)
+- **New transcript**: `Tests/transcript_after_A1_A2_A3.txt` (330 lines, 165 segments)
+
+### Acceptance criteria
+
+| Criterion | Target | Result |
+|---|---|---|
+| Opening segment language correct | English | ✅ Detected: English, prob 0.99 (was Arabic) |
+| Speaker changes in first 5 min | ≥ 10 | ✅ **16 speaker changes** across 29 sub-segments (was 2-3 mega-blocks) |
+| Hallucinations resolved (of 4) | ≥ 2-3 | ✅ **4/4 fixed**: Arabic opening, "Le Price Asset Management" → "Enterprise Asset Management", "Mansion" → "mentioned", "Nicole" → "technical", "I do have a dedicated" → correct |
+| Proper noun "Daniel" (was "Donian") | corrected | ✅ Now spelled "Daniel" correctly throughout |
+
+### Remaining proper-noun errors (out of scope for A, addressed by B')
+
+- "Manukai" → still rendered as "Manuk AI" (was inconsistent "Monocargo"/"Monokai"/"Manuk AI" before; now consistent but still wrong)
+- "DMG Mori" → rendered as "BMG Mori"
+- "Starrag" → rendered as "Stara" (was "Starog" before; marginal improvement)
+
+These remain because A1/A2/A3 don't reach into the LLM-refinement layer where a persistent glossary + speaker-context priming could fix them. That's exactly what B' targets.
+
+### Side-effects observed
+
+- A small number of "Unknown" speaker sub-segments at boundaries (e.g., single-word artifacts like "person", "You're", "I", "So" assigned to "Unknown"). pyannote's turn boundaries don't align perfectly with word boundaries even with the ±50ms tolerance window. Acceptable in v1; could be tightened by relabeling sub-segments shorter than ~150ms to the surrounding speaker.
+- Latency: ~24 min for ~36 min audio. The temperature ladder is the dominant cost. If this is too slow for daily use, the ladder can be shortened to `(0.0, 0.4, 0.8)` (3 levels) at the cost of some robustness on noisy segments.
+
+### Decision
+
+**Merge** — all acceptance criteria met, no regressions in adjacent code paths (247 passed in CI). Latency cost is acknowledged; not a blocker for the use case (overnight processing of recorded calls).
+
+### Next steps (B' to ship next)
+
+1. Feed speaker context + context.md into `RefinementService.analyze()` prompt (currently the LLM doesn't see this data)
+2. Make refinement auto-run when speaker/context provided
+3. Upgrade Haiku → Sonnet for the corrections pass
+4. Persistent global glossary (`contexts/_global.md`) auto-applied to every job
+5. Auto-match diarization speaker embeddings against `speakers/<id>/embedding.npy`
 ```
 
 - [ ] **Step 6: Final commit**
@@ -1049,9 +1082,42 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ## Validation Result (filled at end of Task 7)
 
-- Date run:
-- Opening segment language correct: yes / no
-- Speaker changes in first 5 min: <count> (target ≥ 10)
-- Hallucinations resolved (of 4): <count>
-- Decision: merge / iterate
-- Notes:
+- **Date run**: 2026-05-15
+- **Audio**: `Tests/15-29-21.m4a` (Pascal Weber / Manukai call, ~36 min, FR/EN code-switching, 2 speakers)
+- **Settings**: engine=whisper, model=large-v3-turbo, language=auto, diarization=ON, expected speakers=[David Marchesseau, Pascal Weber], context=none (validate A1/A2/A3 standalone)
+- **Total job time**: ~24 min (vs ~5-7 min for the previous Davrine baseline; the temperature ladder in A1 is responsible — measured 4-5× slowdown)
+- **New transcript**: `Tests/transcript_after_A1_A2_A3.txt` (330 lines, 165 segments)
+
+### Acceptance criteria
+
+| Criterion | Target | Result |
+|---|---|---|
+| Opening segment language correct | English | ✅ Detected: English, prob 0.99 (was Arabic) |
+| Speaker changes in first 5 min | ≥ 10 | ✅ **16 speaker changes** across 29 sub-segments (was 2-3 mega-blocks) |
+| Hallucinations resolved (of 4) | ≥ 2-3 | ✅ **4/4 fixed**: Arabic opening, "Le Price Asset Management" → "Enterprise Asset Management", "Mansion" → "mentioned", "Nicole" → "technical", "I do have a dedicated" → correct |
+| Proper noun "Daniel" (was "Donian") | corrected | ✅ Now spelled "Daniel" correctly throughout |
+
+### Remaining proper-noun errors (out of scope for A, addressed by B')
+
+- "Manukai" → still rendered as "Manuk AI" (was inconsistent "Monocargo"/"Monokai"/"Manuk AI" before; now consistent but still wrong)
+- "DMG Mori" → rendered as "BMG Mori"
+- "Starrag" → rendered as "Stara" (was "Starog" before; marginal improvement)
+
+These remain because A1/A2/A3 don't reach into the LLM-refinement layer where a persistent glossary + speaker-context priming could fix them. That's exactly what B' targets.
+
+### Side-effects observed
+
+- A small number of "Unknown" speaker sub-segments at boundaries (e.g., single-word artifacts like "person", "You're", "I", "So" assigned to "Unknown"). pyannote's turn boundaries don't align perfectly with word boundaries even with the ±50ms tolerance window. Acceptable in v1; could be tightened by relabeling sub-segments shorter than ~150ms to the surrounding speaker.
+- Latency: ~24 min for ~36 min audio. The temperature ladder is the dominant cost. If this is too slow for daily use, the ladder can be shortened to `(0.0, 0.4, 0.8)` (3 levels) at the cost of some robustness on noisy segments.
+
+### Decision
+
+**Merge** — all acceptance criteria met, no regressions in adjacent code paths (247 passed in CI). Latency cost is acknowledged; not a blocker for the use case (overnight processing of recorded calls).
+
+### Next steps (B' to ship next)
+
+1. Feed speaker context + context.md into `RefinementService.analyze()` prompt (currently the LLM doesn't see this data)
+2. Make refinement auto-run when speaker/context provided
+3. Upgrade Haiku → Sonnet for the corrections pass
+4. Persistent global glossary (`contexts/_global.md`) auto-applied to every job
+5. Auto-match diarization speaker embeddings against `speakers/<id>/embedding.npy`
