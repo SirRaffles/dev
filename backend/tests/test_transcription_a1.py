@@ -137,3 +137,57 @@ def test_emitted_segments_keep_words_when_user_opted_in(tmp_path, monkeypatch):
     assert final_segments
     for seg in final_segments:
         assert "words" in seg, f"emitted segment must contain 'words' when user opted in: {seg}"
+
+
+def test_vad_trim_restores_segment_timestamps(tmp_path, monkeypatch):
+    """When VAD finds a 3s lead, Whisper sees the trimmed file and segment
+    timestamps are restored to the original time base."""
+    from job_models import TranscriptionSettings
+    from services import transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    fake_whisper_result = {
+        "segments": [{"start": 0.0, "end": 2.0, "text": "hi", "words": []}],
+        "text": "hi",
+        "language": "en",
+    }
+
+    settings = TranscriptionSettings(
+        model_size="large-v3-turbo",
+        language="en",
+        word_timestamps=True,
+        enable_diarization=False,
+        enable_noise_reduction=False,
+        engine="whisper",
+    )
+
+    job_obj = MagicMock()
+    job_obj.status = "pending"
+    job_obj._retry_of = None
+    job_obj.segments = None
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job_obj), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
+
+    trimmed_path = str(tmp_path / "trimmed.wav")
+    # Force a 3s trim offset and intercept the trim call.
+    monkeypatch.setattr("services.audio.find_first_speech_offset", lambda p, **kw: 3.0)
+    monkeypatch.setattr("services.audio.make_trimmed_audio", lambda p, trim_offset: trimmed_path)
+
+    received_paths = []
+
+    def capture_path(audio_arg, **_kw):
+        received_paths.append(audio_arg)
+        return fake_whisper_result
+
+    with patch("mlx_whisper.transcribe", side_effect=capture_path):
+        transcription._run_transcription_sync("job-vad", str(audio_path), settings)
+
+    assert received_paths == [trimmed_path], \
+        f"Whisper must receive the trimmed file, got {received_paths}"
+    segs = job_obj.segments or []
+    assert segs and segs[0]["start"] == 3.0 and segs[0]["end"] == 5.0, \
+        f"Timestamps must be restored to original time base, got {segs}"

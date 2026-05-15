@@ -641,6 +641,18 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             else:
                 import mlx_whisper
 
+                # A2: trim leading silence before Whisper so language detection sees real speech.
+                # On phone calls the first 30s often contains jingles or silence, which
+                # confuses Whisper's auto language detector (we saw arabic on an EN call).
+                from services.audio import find_first_speech_offset, make_trimmed_audio
+                trim_offset = find_first_speech_offset(audio_path)
+                audio_path_for_whisper = audio_path
+                trimmed_temp_path = None
+                if trim_offset > 0:
+                    logger.info("A2: trimming %.2fs of leading silence before transcription", trim_offset)
+                    trimmed_temp_path = make_trimmed_audio(audio_path, trim_offset)
+                    audio_path_for_whisper = trimmed_temp_path
+
                 _update_job(job, progress=20, message="Transcribing with MLX-Whisper (GPU-accelerated)...")
 
                 language = None if settings.language == "auto" else settings.language
@@ -665,7 +677,7 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                     )
 
                 result = mlx_whisper.transcribe(
-                    audio_path,
+                    audio_path_for_whisper,
                     path_or_hf_repo=model_path,
                     language=language,
                     task="translate" if settings.translate_to_english else "transcribe",
@@ -679,6 +691,15 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                     verbose=False,
                     fp16=True,
                 )
+
+                # A2: restore segment timestamps to the original time base.
+                if trim_offset > 0:
+                    for segment in result.get("segments", []):
+                        segment["start"] = segment.get("start", 0.0) + trim_offset
+                        segment["end"] = segment.get("end", 0.0) + trim_offset
+                        for w in segment.get("words", []) or []:
+                            w["start"] = w.get("start", 0.0) + trim_offset
+                            w["end"] = w.get("end", 0.0) + trim_offset
 
                 job.language = result.get("language", "unknown")
                 job.language_probability = 0.99
@@ -765,6 +786,12 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         logger.exception("Transcription failed for job %s", job_id)
 
     finally:
+        try:
+            # A2: clean up the VAD-trimmed temp file if one was created.
+            if 'trimmed_temp_path' in locals() and trimmed_temp_path and os.path.exists(trimmed_temp_path):
+                os.remove(trimmed_temp_path)
+        except Exception:
+            pass
         # Audit #16: retries re-use the same file_path. Don't rmtree if this
         # job was created from a retry — the parent dir is still wanted by any
         # subsequent retry attempt.
