@@ -90,3 +90,53 @@ def test_returns_zero_and_logs_when_silero_unavailable(tmp_path, caplog):
     assert offset == 0.0
     assert any("silero" in r.message.lower() or "vad" in r.message.lower()
                for r in caplog.records)
+
+
+def test_resample_branch_runs_for_non_16khz_input(tmp_path):
+    """Audio at 8kHz must be resampled to 16kHz before silero is called; the
+    detected offset is expressed in original-file seconds and within tolerance."""
+    import soundfile as sf
+    from services import audio
+
+    wav = tmp_path / "8k.wav"
+    samples = np.zeros(10 * 8000, dtype="float32")  # 10s of silence at 8 kHz
+    sf.write(str(wav), samples, 8000, subtype="PCM_16")
+
+    captured_kwargs = {}
+
+    def _load_with_capture(*_a, **_k):
+        model, utils = _fake_silero_load()
+        def _capturing_gst(tensor, model, **kw):
+            captured_kwargs.update(kw)
+            captured_kwargs["tensor_len"] = len(tensor)
+            return [{"start": 5 * 16000, "end": 8 * 16000}]
+        utils = (_capturing_gst, MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        return model, utils
+
+    audio._SILERO_CACHE = None
+    with patch("torch.hub.load", side_effect=_load_with_capture):
+        offset = audio.find_first_speech_offset(str(wav), min_silence_s=0.5)
+
+    # After resample to 16 kHz, get_speech_timestamps was called with sampling_rate=16000.
+    assert captured_kwargs.get("sampling_rate") == 16000
+    # Tensor length must be ~160000 samples (10s × 16000) not 80000.
+    assert abs(captured_kwargs.get("tensor_len", 0) - 160000) <= 1
+    # Offset is computed against the (resampled) sample rate.
+    assert offset == pytest.approx(5.0, abs=0.05)
+
+
+def test_failed_load_is_not_retried(tmp_path):
+    """After a failed load, subsequent calls must not retry torch.hub.load."""
+    from services import audio
+
+    wav = tmp_path / "any.wav"
+    _write_wav(wav, 5.0)
+
+    audio._SILERO_CACHE = None
+    mock_loader = MagicMock(side_effect=RuntimeError("no network"))
+    with patch("torch.hub.load", mock_loader):
+        audio.find_first_speech_offset(str(wav))
+        audio.find_first_speech_offset(str(wav))
+
+    # Only the FIRST call should have invoked torch.hub.load.
+    assert mock_loader.call_count == 1

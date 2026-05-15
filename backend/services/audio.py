@@ -51,21 +51,25 @@ def apply_noise_reduction(audio_path: str, output_path: str) -> str:
 
 
 import logging
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Cached silero-vad model handle. None means "not yet attempted" or "load failed".
-_SILERO_CACHE: Optional[Tuple[object, object]] = None
+# Sentinel: load attempted and failed. None means "not yet attempted".
+_SILERO_FAILED = object()
+_SILERO_CACHE: Optional[Tuple[Any, Callable[..., list]]] = None
 
 
 def _get_silero_model():
-    """Lazily load silero-vad via torch.hub. Returns (model, get_speech_timestamps) or None on failure."""
+    """Lazily load silero-vad via torch.hub. Returns (model, get_speech_timestamps),
+    None if not yet attempted, or _SILERO_FAILED if a prior attempt failed."""
     global _SILERO_CACHE
+    if _SILERO_CACHE is _SILERO_FAILED:
+        return None
     if _SILERO_CACHE is not None:
         return _SILERO_CACHE
     try:
-        import torch  # noqa: F401 — required for torch.hub
+        import torch
         model, utils = torch.hub.load(
             "snakers4/silero-vad",
             "silero_vad",
@@ -76,7 +80,7 @@ def _get_silero_model():
         return _SILERO_CACHE
     except Exception as exc:
         logger.warning("silero-vad unavailable, skipping leading-silence trim: %s", exc)
-        _SILERO_CACHE = None
+        _SILERO_CACHE = _SILERO_FAILED
         return None
 
 
