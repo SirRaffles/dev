@@ -1,8 +1,6 @@
 """A3 unit tests: word-boundary speaker assignment."""
 
-import pytest
-
-from services.diarization import assign_speakers_to_segments, stitch_speaker_turns
+from services.diarization import assign_speakers_to_segments
 from services.postprocess import normalize_transcript_text
 
 
@@ -59,30 +57,53 @@ def test_punctuation_join_normalizes_correctly():
     assert cleaned == "Hello, world."
 
 
-def test_gap_between_pyannote_turns_is_handled_by_stitch():
-    """A 50ms gap between two same-speaker turns causes one Unknown sub-segment;
-    stitch_speaker_turns must not collapse it across different speakers."""
+def test_gap_between_same_speaker_turns_is_absorbed():
+    """A 50ms gap between two same-speaker pyannote turns must be absorbed by
+    the tolerance window in speaker_at — no Unknown sub-segment leaks out."""
     segments = [{
         "start": 0.0,
         "end": 3.0,
         "text": "one two three",
         "words": [
             _word(" one", 0.0, 0.5),
-            _word(" two", 1.0, 1.5),  # falls in the 50ms gap
+            _word(" two", 0.97, 1.5),  # falls inside the [0.95, 1.0) gap
             _word(" three", 2.0, 2.5),
         ],
     }]
-    # Two SPEAKER_00 turns with a 50ms gap at [0.95, 1.0).
     speakers = [
         {"start": 0.0, "end": 0.95, "speaker": "SPEAKER_00"},
         {"start": 1.0, "end": 3.0, "speaker": "SPEAKER_00"},
     ]
     out = assign_speakers_to_segments(segments, speakers)
     speakers_observed = [s["speaker"] for s in out]
-    # Either three sub-segs with the middle one Unknown, or — acceptable — the
-    # gap word lands cleanly inside a SPEAKER_00 turn and produces one sub-seg.
-    assert speakers_observed == ["SPEAKER_00", "Unknown", "SPEAKER_00"] or \
-           speakers_observed == ["SPEAKER_00"]
+    # With ±50ms tolerance, the gap-word at t=0.97 maps to SPEAKER_00 (it falls
+    # within [0.95-0.05, 0.95+0.05] = [0.90, 1.00] of the first turn's end).
+    assert speakers_observed == ["SPEAKER_00"], \
+        f"Expected gap to be absorbed into one sub-segment, got {speakers_observed}"
+
+
+def test_large_gap_between_turns_leaks_unknown():
+    """A gap LARGER than the 50ms tolerance must still produce an Unknown
+    sub-segment between turns. Locks in that the tolerance doesn't swallow
+    real silences."""
+    segments = [{
+        "start": 0.0,
+        "end": 4.0,
+        "text": "alpha beta gamma",
+        "words": [
+            _word(" alpha", 0.0, 0.5),
+            _word(" beta", 2.0, 2.5),  # in a wide gap
+            _word(" gamma", 3.5, 4.0),
+        ],
+    }]
+    # 1.5s gap between turns is well beyond the 50ms tolerance.
+    speakers = [
+        {"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"},
+        {"start": 3.0, "end": 4.0, "speaker": "SPEAKER_01"},
+    ]
+    out = assign_speakers_to_segments(segments, speakers)
+    speakers_observed = [s["speaker"] for s in out]
+    assert speakers_observed == ["SPEAKER_00", "Unknown", "SPEAKER_01"]
 
 
 def test_no_words_falls_back_to_midpoint():

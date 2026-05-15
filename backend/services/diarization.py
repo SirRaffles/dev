@@ -154,9 +154,21 @@ def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> L
     if not speakers:
         return segments
 
+    # ±50ms tolerance window to absorb pyannote's typical quantization gaps
+    # between adjacent turns. Avoids producing Unknown sub-segments that
+    # stitch_speaker_turns would not merge (it only merges same-speaker).
+    SPEAKER_GAP_TOLERANCE_S = 0.05
+
     def speaker_at(t: float) -> str:
+        """Return the speaker active at time `t`.
+
+        Searches turns in input order; on overlapping turns (cross-talk),
+        returns the first match. Applies a ±50ms tolerance window to the
+        turn boundaries so words landing in tiny inter-turn gaps don't
+        become Unknown.
+        """
         for turn in speakers:
-            if turn["start"] <= t < turn["end"]:
+            if turn["start"] - SPEAKER_GAP_TOLERANCE_S <= t < turn["end"] + SPEAKER_GAP_TOLERANCE_S:
                 return turn["speaker"]
         return "Unknown"
 
@@ -176,9 +188,16 @@ def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> L
         buf_start = words[0].get("start", seg.get("start", 0))
 
         def _flush(end_time: float):
+            # Closure intentionally late-binds buf_words/buf_start/current_speaker —
+            # each call reads the values at flush time, not at definition time.
             if not buf_words:
                 return
             text = " ".join(w.get("word", "").strip() for w in buf_words if w.get("word", "").strip())
+            if not text:
+                # Skip flushing sub-segments that would have empty text
+                # (happens when all words in the buffer are punctuation-only
+                # tokens that stripped to empty).
+                return
             out.append({
                 "start": buf_start,
                 "end": end_time,
