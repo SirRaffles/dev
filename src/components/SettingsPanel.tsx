@@ -507,25 +507,30 @@ function SettingsPanel({
             </div>
           )}
 
-          {/* Word Timestamps Toggle */}
-          <div>
-            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-              <Clock className="w-4 h-4" />
-              Word Timestamps
-            </label>
-            <button
-              onClick={() => handleChange('wordTimestamps', !wordTimestamps)}
-              disabled={disabled}
-              className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-                wordTimestamps
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
-              }`}
-            >
-              <Clock className="w-4 h-4" />
-              {wordTimestamps ? 'Enabled (slower)' : 'Disabled (faster)'}
-            </button>
-          </div>
+          {/* Word Timestamps Toggle — hidden for engines that ignore it
+              (Voxtral Local + Parakeet log a warning and emit segment-level
+              timestamps only). Whisper uses it for A3 word-boundary speaker
+              splitting; Voxtral Cloud passes it through as an API hint. */}
+          {(isWhisper || isVoxtralApi) && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+                <Clock className="w-4 h-4" />
+                Word Timestamps
+              </label>
+              <button
+                onClick={() => handleChange('wordTimestamps', !wordTimestamps)}
+                disabled={disabled}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                  wordTimestamps
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                {wordTimestamps ? 'Enabled (slower)' : 'Disabled (faster)'}
+              </button>
+            </div>
+          )}
 
           {/* Noise Reduction Toggle */}
           <div>
