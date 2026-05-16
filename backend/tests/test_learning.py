@@ -88,3 +88,125 @@ def test_record_event_concurrent_writes_preserve_all_lines(icloud_base):
     # No truncated / merged lines: every line must parse as valid JSON
     for line in lines:
         json.loads(line)
+
+
+def test_update_speaker_embeddings_skips_when_audio_missing(icloud_base):
+    """No audio = no embedding work; emit a skipped event."""
+    learning = _reload_learning()
+    assignments = {"SPEAKER_00": "Pascal"}
+    speaker_turns = [{"start": 0.0, "end": 120.0, "speaker": "SPEAKER_00"}]
+
+    n = learning.update_speaker_embeddings(
+        job_id="j-skip", audio_path=None,
+        speaker_turns=speaker_turns, assignments=assignments,
+    )
+    assert n == 0
+    log = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8")
+    assert "embedding_skipped" in log
+    assert "audio_unavailable" in log
+
+
+def test_update_speaker_embeddings_skips_short_speakers(icloud_base, tmp_path, monkeypatch):
+    """Speakers with < 60s of speech (sum of turn durations) are skipped."""
+    learning = _reload_learning()
+    fake_audio = tmp_path / "audio.wav"
+    fake_audio.write_bytes(b"\x00" * 1024)
+
+    from unittest.mock import MagicMock
+    fake_emb_service = MagicMock(
+        extract_speaker_embeddings=MagicMock(return_value={}),
+        update_embedding=MagicMock(),
+    )
+    import state
+    monkeypatch.setattr(state, "get_speaker_embedding_service",
+                        lambda: fake_emb_service, raising=False)
+
+    # SPEAKER_00 only has 30s of speech — below threshold
+    speaker_turns = [
+        {"start": 0.0, "end": 10.0, "speaker": "SPEAKER_00"},
+        {"start": 20.0, "end": 40.0, "speaker": "SPEAKER_00"},
+    ]
+    assignments = {"SPEAKER_00": "Pascal"}
+
+    n = learning.update_speaker_embeddings(
+        job_id="j-short", audio_path=str(fake_audio),
+        speaker_turns=speaker_turns, assignments=assignments,
+    )
+    assert n == 0
+    # extract_speaker_embeddings should never be called (filtered out beforehand)
+    fake_emb_service.extract_speaker_embeddings.assert_not_called()
+
+
+def test_update_speaker_embeddings_merges_named_speakers(icloud_base, tmp_path, monkeypatch):
+    """Named speaker with ≥60s of speech: extract fresh embedding + EMA merge."""
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    learning = _reload_learning()
+    fake_audio = tmp_path / "audio.wav"
+    fake_audio.write_bytes(b"\x00" * 1024)
+
+    fresh_emb = np.ones(512, dtype=np.float32) / np.sqrt(512)
+    fake_emb_service = MagicMock(
+        extract_speaker_embeddings=MagicMock(return_value={"SPEAKER_00": fresh_emb}),
+        update_embedding=MagicMock(),
+    )
+    fake_store = MagicMock(
+        get_by_name=MagicMock(return_value={"speaker_id": "sp-pascal", "name": "Pascal"}),
+    )
+    import state
+    monkeypatch.setattr(state, "get_speaker_embedding_service",
+                        lambda: fake_emb_service, raising=False)
+    monkeypatch.setattr(state, "speaker_store", fake_store)
+
+    # 120s of Pascal speech (above threshold)
+    speaker_turns = [
+        {"start": 0.0, "end": 60.0, "speaker": "SPEAKER_00"},
+        {"start": 100.0, "end": 160.0, "speaker": "SPEAKER_00"},
+    ]
+    assignments = {"SPEAKER_00": "Pascal"}
+
+    n = learning.update_speaker_embeddings(
+        job_id="j-merge", audio_path=str(fake_audio),
+        speaker_turns=speaker_turns, assignments=assignments,
+    )
+    assert n == 1
+    fake_emb_service.update_embedding.assert_called_once()
+    call = fake_emb_service.update_embedding.call_args
+    assert call.args[0] == "Pascal"  # name
+    # alpha=0.3 default (positional or keyword)
+    alpha = call.kwargs.get("alpha", call.args[2] if len(call.args) >= 3 else None)
+    assert alpha == 0.3
+
+    log = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8")
+    assert "embedding_update" in log
+    assert "Pascal" in log
+
+
+def test_update_speaker_embeddings_skips_anonymous_labels(icloud_base, tmp_path, monkeypatch):
+    """SPEAKER_XX labels (not in assignments) are ignored."""
+    from unittest.mock import MagicMock
+
+    learning = _reload_learning()
+    fake_audio = tmp_path / "audio.wav"
+    fake_audio.write_bytes(b"\x00" * 1024)
+
+    fake_emb_service = MagicMock(extract_speaker_embeddings=MagicMock(return_value={}),
+                                 update_embedding=MagicMock())
+    import state
+    monkeypatch.setattr(state, "get_speaker_embedding_service",
+                        lambda: fake_emb_service, raising=False)
+
+    # Two anonymous speakers, neither in assignments
+    speaker_turns = [
+        {"start": 0.0, "end": 120.0, "speaker": "SPEAKER_00"},
+        {"start": 120.0, "end": 240.0, "speaker": "SPEAKER_01"},
+    ]
+    assignments = {}  # nothing named
+
+    n = learning.update_speaker_embeddings(
+        job_id="j-anon", audio_path=str(fake_audio),
+        speaker_turns=speaker_turns, assignments=assignments,
+    )
+    assert n == 0
+    fake_emb_service.update_embedding.assert_not_called()

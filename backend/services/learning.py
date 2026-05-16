@@ -59,3 +59,84 @@ def record_event(event_type: str, **fields) -> None:
                     pass
     except OSError as exc:
         logger.warning("learning: record_event(%s) failed: %s", event_type, exc)
+
+
+MIN_LEARNING_DURATION_SEC = 60.0
+EMA_ALPHA = 0.3
+
+
+def update_speaker_embeddings(
+    job_id: str,
+    audio_path: Optional[str],
+    speaker_turns: list,
+    assignments: dict,
+) -> int:
+    """EMA-merge fresh voice embeddings for named speakers with >=60s of speech.
+
+    Args:
+        job_id: For the learning_log event.
+        audio_path: Path to the original audio file. None or missing -> skip.
+        speaker_turns: pyannote diarization [{start, end, speaker}, ...].
+        assignments: {pyannote_label: speaker_name} for speakers we recognized
+            (built by the orchestrator from refined segments).
+
+    Returns: number of speakers whose embedding was updated.
+    Never raises - caller wraps in try/except for the orchestrator's status rollup.
+    """
+    import state
+
+    if not audio_path or not os.path.exists(audio_path):
+        record_event("embedding_skipped", job_id=job_id, reason="audio_unavailable")
+        return 0
+    if not assignments:
+        return 0
+
+    # Build per-label total duration so we can filter short speakers BEFORE
+    # paying for embedding extraction.
+    duration_by_label: dict = {}
+    for turn in speaker_turns:
+        lbl = turn.get("speaker")
+        if not lbl:
+            continue
+        duration_by_label[lbl] = duration_by_label.get(lbl, 0.0) + max(
+            0.0, float(turn.get("end", 0)) - float(turn.get("start", 0))
+        )
+
+    eligible = {
+        lbl: name for lbl, name in assignments.items()
+        if duration_by_label.get(lbl, 0.0) >= MIN_LEARNING_DURATION_SEC
+    }
+    if not eligible:
+        return 0
+
+    # Only request embeddings for eligible labels (extract_speaker_embeddings
+    # uses the longest turn internally, which is what we want here too).
+    eligible_turns = [t for t in speaker_turns if t.get("speaker") in eligible]
+    embedding_service = state.get_speaker_embedding_service()
+    fresh = embedding_service.extract_speaker_embeddings(audio_path, eligible_turns)
+
+    updated = 0
+    for lbl, name in eligible.items():
+        emb = fresh.get(lbl)
+        if emb is None:
+            continue
+        try:
+            embedding_service.update_embedding(name, emb, alpha=EMA_ALPHA)
+            updated += 1
+            speaker = None
+            try:
+                speaker = state.speaker_store.get_by_name(name)
+            except Exception:
+                pass
+            record_event(
+                "embedding_update",
+                job_id=job_id,
+                speaker_id=(speaker or {}).get("speaker_id"),
+                speaker_name=name,
+                duration_sec=round(duration_by_label.get(lbl, 0.0), 2),
+                alpha=EMA_ALPHA,
+            )
+        except Exception:
+            logger.exception("update_embedding failed for %s (job %s)", name, job_id)
+            record_event("embedding_failed", job_id=job_id, speaker_name=name)
+    return updated
