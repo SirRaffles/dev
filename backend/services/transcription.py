@@ -766,6 +766,35 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
                 transcription_segments = stitch_speaker_turns(transcription_segments)
 
+            # B5: inline auto-match — overlay registered speaker names on
+            # diarization labels using the voice-embedding registry. Reuses
+            # the same scope logic as the post-job /speakers/auto-match route.
+            if speakers and state.refinement_available:
+                try:
+                    from routes.transcription import _resolve_match_scope
+                    restrict_ids, prefer_ids, _scope = _resolve_match_scope({
+                        "speaker_ids": settings.speaker_ids,
+                        "num_speakers": settings.num_speakers,
+                    })
+                    embedding_service = state.get_speaker_embedding_service()
+                    auto_matches = embedding_service.auto_identify_speakers(
+                        audio_path=audio_path,
+                        speaker_turns=speakers,
+                        job_id=job_id,
+                        restrict_to_ids=restrict_ids,
+                        prefer_ids=prefer_ids,
+                    )
+                    job.auto_speaker_matches = auto_matches
+                    for seg in transcription_segments:
+                        lbl = seg.get("speaker", "")
+                        m = auto_matches.get(lbl)
+                        if m and m.get("matched"):
+                            seg["speaker"] = m["name"]
+                except Exception:
+                    logger.exception(
+                        "B5 auto-match failed for job %s; keeping SPEAKER_XX labels", job_id
+                    )
+
         # A1: strip per-word data from emitted segments if user opted out.
         # Words were carried internally so A3 could split at speaker-turn
         # boundaries; they're not part of the user-facing contract unless
