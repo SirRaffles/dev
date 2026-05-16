@@ -22,6 +22,24 @@ export interface HealthResponse {
   engines?: Record<string, { available: boolean }>;
 }
 
+export type RefinementStatus = "pending" | "processing" | "done" | "failed" | null;
+export type LearningStatus = "ok" | "partial" | "failed" | null;
+
+export interface LearningSummary {
+  embeddings_updated: number;
+  insights_added: number;
+  terms_learned: number;
+}
+
+export interface AutoSpeakerMatch {
+  name: string | null;
+  confidence: number;
+  speaker_id: string | null;
+  matched: boolean;
+  source?: "pick" | "registry" | null;
+  note?: string;
+}
+
 export interface JobStatus {
   job_id: string;
   status: string;
@@ -38,6 +56,28 @@ export interface JobStatus {
   created_at?: string;
   is_generated?: boolean;      // mirrored at top level by the captions fast-path
   source?: string;
+  // B2 auto-refine fields (populated post-completion by the refinement pipeline).
+  refinement_status?: RefinementStatus;
+  auto_speaker_matches?: Record<string, AutoSpeakerMatch> | null;
+  learning_summary?: LearningSummary | null;
+  learning_status?: LearningStatus;
+}
+
+export async function fetchJobAutoRefineState(jobId: string): Promise<{
+  refinement_status: RefinementStatus;
+  learning_status: LearningStatus;
+  learning_summary: LearningSummary | null;
+  auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
+}> {
+  const res = await fetchWithTimeout(`${API_URL}/job/${jobId}`);
+  if (!res.ok) throw new Error(`fetchJobAutoRefineState failed: ${res.status}`);
+  const j = await res.json();
+  return {
+    refinement_status: j.refinement_status ?? null,
+    learning_status: j.learning_status ?? null,
+    learning_summary: j.learning_summary ?? null,
+    auto_speaker_matches: j.auto_speaker_matches ?? null,
+  };
 }
 
 export interface Segment {
@@ -74,6 +114,7 @@ export interface TranscriptionOptions {
   numSpeakers?: number;
   contextTerms?: string;
   contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
+  speakerIds?: string[];  // Expected speakers — their personality.md is merged into the prompt
 }
 
 export interface EngineInfo {
@@ -269,6 +310,10 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     params.append('context_path', options.contextPath);
   }
 
+  if (options.speakerIds && options.speakerIds.length > 0) {
+    params.append('speaker_ids', options.speakerIds.join(','));
+  }
+
   const response = await fetchWithTimeout(`${API_URL}/transcribe/file?${params}`, {
     method: 'POST',
     body: formData,
@@ -320,6 +365,10 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
 
   if (options.contextPath) {
     params.append('context_path', options.contextPath);
+  }
+
+  if (options.speakerIds && options.speakerIds.length > 0) {
+    params.append('speaker_ids', options.speakerIds.join(','));
   }
 
   // Body contains YouTubeRequest fields
@@ -436,6 +485,10 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
     params.append('context_path', options.contextPath);
   }
 
+  if (options.speakerIds && options.speakerIds.length > 0) {
+    params.append('speaker_ids', options.speakerIds.join(','));
+  }
+
   const response = await fetchWithTimeout(`${API_URL}/transcribe/batch?${params}`, {
     method: 'POST',
     body: formData,
@@ -496,10 +549,18 @@ export interface ContextFolder {
   has_context: boolean;
 }
 
+export interface ContextFile {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified_at: number;
+}
+
 export interface ContextTree {
   name: string;
   path: string;
   children?: ContextTree[];
+  files?: ContextFile[];
 }
 
 export interface JPRRecording {
@@ -541,7 +602,13 @@ export interface JPRTranscript {
 }
 
 export interface SpeakerDetail extends Speaker {
-  personality_md?: string;
+  // 4-part profile. See backend/routes/speakers.py for the file layout.
+  profile_md?: string;                // bio / resume — user-maintained
+  explicit_insights_md?: string;      // LLM: concrete facts captured in transcripts
+  implicit_insights_md?: string;      // LLM: inferred personality / style / values
+  personality_md?: string;            // legacy alias (== implicit_insights_md)
+  has_embedding?: boolean;            // voice profile present?
+  calls?: CallSpeaker[];
 }
 
 export interface RegisterCallResponse {
@@ -607,6 +674,22 @@ export async function deleteSpeaker(speakerId: string): Promise<void> {
   });
   if (!response.ok) throw new Error('Failed to delete speaker');
 }
+
+async function _putSpeakerSection(speakerId: string, section: string, content: string): Promise<void> {
+  const response = await fetchWithTimeout(`${API_URL}/speakers/${speakerId}/${section}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: `Failed to update ${section}` }));
+    throw new Error(err.detail || `Failed to update ${section}`);
+  }
+}
+
+export const updateSpeakerProfile = (id: string, content: string) => _putSpeakerSection(id, 'profile', content);
+export const updateSpeakerExplicit = (id: string, content: string) => _putSpeakerSection(id, 'explicit-insights', content);
+export const updateSpeakerImplicit = (id: string, content: string) => _putSpeakerSection(id, 'implicit-insights', content);
 
 export async function updateSpeakerPersonality(speakerId: string, content: string): Promise<void> {
   const response = await fetchWithTimeout(`${API_URL}/speakers/${speakerId}/personality`, {
@@ -738,9 +821,16 @@ export async function createContextFolder(path: string, description = ''): Promi
   return response.json();
 }
 
+// Backend routes use `{path:path}` which preserves slashes — encodeURI keeps
+// `/` unescaped, unlike encodeURIComponent.
+function _encodeContextPath(folder: string, filename?: string): string {
+  const full = filename ? `${folder}/${filename}` : folder;
+  return encodeURI(full);
+}
+
 export async function fetchContextFile(path: string, filename: string): Promise<string> {
   const response = await fetchWithTimeout(
-    `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
+    `${API_URL}/contexts/files/${_encodeContextPath(path, filename)}`,
   );
   if (!response.ok) throw new Error('Failed to fetch file');
   const data = await response.json();
@@ -749,14 +839,57 @@ export async function fetchContextFile(path: string, filename: string): Promise<
 
 export async function updateContextFile(path: string, filename: string, content: string): Promise<void> {
   const response = await fetchWithTimeout(
-    `${API_URL}/contexts/files/${encodeURIComponent(path)}?filename=${encodeURIComponent(filename)}`,
+    `${API_URL}/contexts/files/${_encodeContextPath(path, filename)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     },
   );
-  if (!response.ok) throw new Error('Failed to update file');
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Failed to update file' }));
+    throw new Error(err.detail || 'Failed to update file');
+  }
+}
+
+export async function deleteContextFile(path: string, filename: string): Promise<void> {
+  const response = await fetchWithTimeout(
+    `${API_URL}/contexts/files/${_encodeContextPath(path, filename)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Failed to delete file' }));
+    throw new Error(err.detail || 'Failed to delete file');
+  }
+}
+
+export async function deleteContextFolder(path: string): Promise<void> {
+  const response = await fetchWithTimeout(
+    `${API_URL}/contexts/folders/${encodeURI(path)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Failed to delete folder' }));
+    throw new Error(err.detail || 'Failed to delete folder');
+  }
+}
+
+// Uploads a .md or .txt file into a context folder by reading its text and
+// PUTing it through the regular write endpoint. Keeps the backend simple
+// (no multipart) at the cost of not supporting binary formats — which we
+// don't accept anyway.
+export async function uploadContextFile(folderPath: string, file: File): Promise<string> {
+  const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] || '';
+  if (!['.md', '.txt'].includes(ext)) {
+    throw new Error('Only .md and .txt files are supported');
+  }
+  // Cap at 1 MB — these are bias prompts, not documents to archive.
+  if (file.size > 1_000_000) {
+    throw new Error('File too large (max 1 MB)');
+  }
+  const text = await file.text();
+  await updateContextFile(folderPath, file.name, text);
+  return file.name;
 }
 
 // --- JPR Recordings API ---
@@ -795,6 +928,104 @@ export async function renameJPRRecording(path: string, newName: string): Promise
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: 'Rename failed' }));
     throw new Error(err.detail || 'Rename failed');
+  }
+  return response.json();
+}
+
+// --- Job-level speaker assignment ---
+
+export interface JobSpeakerLabel {
+  label: string;
+  total_seconds: number;
+  segment_count: number;
+  anonymous: boolean;
+  matched_speaker_id: string | null;
+  can_extract_embedding: boolean;
+}
+
+export async function fetchJobSpeakerLabels(jobId: string): Promise<JobSpeakerLabel[]> {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/speakers/labels`);
+  if (!response.ok) throw new Error('Failed to fetch speaker labels');
+  const data = await response.json();
+  return data.labels || [];
+}
+
+export interface AutoMatchSuggestion {
+  label: string;
+  speaker_id: string | null;
+  speaker_name: string | null;
+  confidence: number;
+  source: 'pick' | 'registry' | null;
+  matched: boolean;
+  total_seconds: number;
+}
+
+export interface AutoMatchResponse {
+  job_id: string;
+  mode: 'scoped' | 'global-prefer' | 'global';
+  suggestions: AutoMatchSuggestion[];
+}
+
+export async function fetchJobAutoMatchSuggestions(jobId: string): Promise<AutoMatchResponse> {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/speakers/auto-match`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Auto-match failed' }));
+    throw new Error(err.detail || 'Auto-match failed');
+  }
+  return response.json();
+}
+
+export interface SpeakerAssignmentInput {
+  label: string;
+  speaker_name: string;
+  create_new: boolean;
+}
+
+export interface AssignSpeakersResponse {
+  job_id: string;
+  assignments: {
+    label: string;
+    speaker_id: string;
+    speaker_name: string;
+    created: boolean;
+    embedding_saved: boolean;
+    speaking_time_seconds: number;
+  }[];
+  insight_extraction_scheduled: boolean;
+  segments: Segment[];
+  speakers: string[];
+}
+
+export async function assignJobSpeakers(
+  jobId: string,
+  assignments: SpeakerAssignmentInput[],
+  extractInsights = true,
+): Promise<AssignSpeakersResponse> {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/speakers/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assignments, extract_insights: extractInsights }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Assignment failed' }));
+    throw new Error(err.detail || 'Assignment failed');
+  }
+  return response.json();
+}
+
+export async function extractJobSpeakerInsights(jobId: string): Promise<{
+  updated: string[];
+  skipped: { speaker: string; reason: string }[];
+  errors: string[];
+}> {
+  const response = await fetchWithTimeout(`${API_URL}/job/${jobId}/speakers/extract-insights`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Insight extraction failed' }));
+    throw new Error(err.detail || 'Insight extraction failed');
   }
   return response.json();
 }
