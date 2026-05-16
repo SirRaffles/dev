@@ -102,7 +102,7 @@ def _run_claude(prompt: str, schema: str, claude_path: str, timeout: int = 120) 
     """
     cmd = [
         claude_path, "-p",
-        "--model", "haiku",
+        "--model", "sonnet",
         "--output-format", "json",
         "--max-turns", "1",
         "--no-session-persistence",

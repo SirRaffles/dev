@@ -1,6 +1,5 @@
 """B1 + B3 unit tests: refinement context injection and model/timeout args."""
 
-import json
 from unittest.mock import patch
 
 
@@ -83,3 +82,45 @@ def test_refine_propagates_context_and_glossary():
     _, kwargs = mock_analyze.call_args
     assert kwargs.get("context_text") == "ctx"
     assert kwargs.get("glossary_terms") == ["t1", "t2"]
+
+
+def test_run_claude_uses_sonnet_and_300s_timeout(monkeypatch):
+    """B3: _run_claude must invoke claude CLI with --model sonnet and accept timeout=300."""
+    import subprocess
+    from services import refinement
+
+    captured = {}
+
+    class _Result:
+        returncode = 0
+        stdout = '{"language": "en", "domain": "", "summary": "", "speakers": [], "corrections": [], "uncertain_terms": []}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["timeout"] = kwargs.get("timeout")
+        return _Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    refinement._run_claude("hi", "{}", "/fake/claude", timeout=300)
+
+    cmd = captured["cmd"]
+    assert "--model" in cmd
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "sonnet", f"expected sonnet, got {cmd[model_idx + 1]!r}"
+    assert captured["timeout"] == 300
+
+
+def test_analyze_passes_300s_timeout_to_run_claude():
+    """B3: analyze() must request the 300s budget for Sonnet on full transcripts."""
+    from unittest.mock import patch
+    svc = _make_service()
+    captured = {}
+    def fake_run(prompt, schema, claude_path, timeout=120):
+        captured["timeout"] = timeout
+        return {"language": "en", "domain": "", "summary": "",
+                "speakers": [], "corrections": [], "uncertain_terms": []}
+    with patch("services.refinement._run_claude", side_effect=fake_run):
+        svc.analyze([{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
+    assert captured["timeout"] == 300
