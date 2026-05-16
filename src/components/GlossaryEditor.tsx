@@ -38,18 +38,17 @@ function promoteLine(body: string, line: string): string {
     if (ln.startsWith('## ')) {
       inPending = ln === PENDING_HEADER;
       inActive = ln === ACTIVE_HEADER;
-      if (inActive) activeEndIdx = -1; // reset; we'll record below
-    }
-    if (inActive && activeEndIdx === -1 && i > 0) {
-      // mark first index after the Active header where we'll insert
     }
     if (inPending && ln.trim() === line.trim()) {
       // Skip this line (remove from Pending).
       continue;
     }
     out.push(ln);
-    if (inActive && ln === ACTIVE_HEADER) {
-      activeEndIdx = out.length;  // index in `out` where we should insert
+    // Record the FIRST `## Active` header position only — stay consistent with
+    // parseSections() which also uses first-match semantics. Duplicate Active
+    // headers are user-error; we don't try to be clever about them.
+    if (inActive && ln === ACTIVE_HEADER && activeEndIdx === -1) {
+      activeEndIdx = out.length;
     }
   }
 
