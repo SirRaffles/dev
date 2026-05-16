@@ -212,10 +212,24 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
             _set_refinement_status(job, "failed")
             return
 
+        # Augment the user's pre-picked speaker_ids with anyone B5 voice
+        # auto-match identified. Without this, the user has to manually pick
+        # both speakers up front for refinement to know who they are — even
+        # though the system has already figured it out acoustically.
+        # B5 results live on job.auto_speaker_matches (Plan 1 Task 9 + the
+        # Plan 3 Task 2 segment overlay propagates the names but not the IDs).
+        matched_ids: List[str] = []
+        if job.auto_speaker_matches:
+            for m in job.auto_speaker_matches.values():
+                sid = m.get("speaker_id") if isinstance(m, dict) else None
+                if m and m.get("matched") and sid:
+                    matched_ids.append(sid)
+        effective_speaker_ids: List[str] = list({*(speaker_ids or []), *matched_ids})
+
         context_text = merge_context_sources(
             load_global_glossary(),
             load_context_document(context_path),
-            load_speakers_context(speaker_ids),
+            load_speakers_context(effective_speaker_ids or None),
         )
         glossary_terms = load_global_glossary_terms() or None
 

@@ -293,3 +293,60 @@ async def test_learning_summary_round_trips_through_api(client, sample_job):
     assert body["learning_summary"] == {
         "embeddings_updated": 1, "insights_added": 2, "terms_learned": 3,
     }
+
+
+def test_run_refinement_for_job_augments_speaker_ids_with_auto_matches(icloud_base, monkeypatch):
+    """B5 voice auto-matches should feed refinement's speaker-context loader
+    even when the user didn't pre-pick them. Otherwise Sonnet refines without
+    knowing who the identified speakers are."""
+    from unittest.mock import MagicMock
+    from job_models import TranscriptionJob
+
+    # Fake completed job with B5 auto-matches populated. User did NOT pre-pick.
+    job = TranscriptionJob("job-aug")
+    job.status = "completed"
+    job.segments = [{"start": 0, "end": 1, "text": "hi", "speaker": "Pascal"}]
+    job.auto_speaker_matches = {
+        "SPEAKER_00": {"name": "Pascal", "confidence": 0.91,
+                        "speaker_id": "sp-pascal", "matched": True, "source": "registry"},
+        "SPEAKER_01": {"name": None, "confidence": 0.2,
+                        "speaker_id": None, "matched": False, "source": None},
+    }
+
+    import state
+    monkeypatch.setattr(state, "job_store", MagicMock(get=MagicMock(return_value=job)))
+    monkeypatch.setattr(state, "jobs", MagicMock(get=MagicMock(return_value=job),
+                                                  update=MagicMock()))
+    monkeypatch.setattr(state, "refinement_store", MagicMock(
+        update_status=MagicMock(), save_result=MagicMock(),
+    ))
+
+    captured_speaker_ids = {}
+
+    def fake_load_speakers_context(speaker_ids):
+        captured_speaker_ids["ids"] = list(speaker_ids) if speaker_ids else None
+        return "# Speaker: Pascal\n\nHead of partnerships at Manukai."
+
+    # Stub the loader the orchestrator calls. We don't need to verify the
+    # context text round-trips — only that the augmented IDs reach the loader.
+    import services.transcription as t
+    monkeypatch.setattr(t, "load_speakers_context", fake_load_speakers_context)
+
+    monkeypatch.setattr(state, "refinement_service",
+                        MagicMock(refine=MagicMock(return_value={
+                            "analysis": {}, "refined_segments": job.segments,
+                            "speaker_mapping": {}, "corrections_applied": 0,
+                            "speakers_identified": 0, "web_searches_performed": 0,
+                        })))
+
+    from routes.refinement import _run_refinement_for_job
+    # User passes speaker_ids=None — but auto-match identified sp-pascal.
+    _run_refinement_for_job("job-aug", speaker_ids=None, context_path=None)
+
+    assert captured_speaker_ids["ids"] is not None, \
+        "load_speakers_context was called with None — auto-match IDs were ignored"
+    assert "sp-pascal" in captured_speaker_ids["ids"], \
+        f"expected sp-pascal in {captured_speaker_ids['ids']}"
+    # Unmatched speakers (matched=False or no speaker_id) must not leak in.
+    assert all(sid for sid in captured_speaker_ids["ids"]), \
+        "no falsy IDs should reach the loader"
