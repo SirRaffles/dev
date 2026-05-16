@@ -129,3 +129,52 @@ def test_assignments_map_excludes_anonymous_labels(tmp_path, monkeypatch, icloud
     assert "SPEAKER_01" not in assignments
     assert "Pascal" in assignments.values()
     assert "David" in assignments.values()
+
+
+def test_orchestrator_overlays_refined_speaker_names_onto_job_segments(tmp_path, monkeypatch):
+    """When refinement renames SPEAKER_XX → real names, those names must land
+    on job.segments BEFORE the insight worker reads them. Otherwise
+    _extract_speaker_insights_sync sees only anonymous labels and bails."""
+    from unittest.mock import MagicMock
+    from job_models import TranscriptionJob
+    from routes import refinement as rmodule
+
+    # Job starts with SPEAKER_00/01 segments (raw diarization)
+    job = TranscriptionJob("job-overlay")
+    job.segments = [
+        {"start": 0, "end": 60, "text": "...", "speaker": "SPEAKER_00"},
+        {"start": 60, "end": 120, "text": "...", "speaker": "SPEAKER_01"},
+    ]
+
+    import state
+    monkeypatch.setattr(state, "jobs", MagicMock(get=MagicMock(return_value=job),
+                                                  update=MagicMock()))
+
+    # Refined segments have real names — the orchestrator must propagate.
+    refined = [
+        {"start": 0, "end": 60, "text": "...", "speaker": "Pascal"},
+        {"start": 60, "end": 120, "text": "...", "speaker": "David"},
+    ]
+
+    # Capture what the insight worker would see (it reads from job.segments).
+    seen_segments = {}
+    def fake_insights(**kwargs):
+        # Reflect the same read the real worker would do.
+        j = state.jobs.get(kwargs["job_id"])
+        seen_segments["speakers"] = [s.get("speaker") for s in (j.segments or [])]
+        return 2
+    monkeypatch.setattr("services.learning.update_speaker_embeddings",
+                        lambda **kwargs: 0)
+    monkeypatch.setattr("services.learning.extract_insights_auto", fake_insights)
+    monkeypatch.setattr("services.learning.learn_glossary_terms",
+                        lambda **kwargs: 0)
+
+    rmodule._run_post_refinement_learning(
+        job_id="job-overlay", audio_path=None,
+        segments=refined, analysis={},
+    )
+
+    assert seen_segments["speakers"] == ["Pascal", "David"], (
+        f"insight worker saw {seen_segments['speakers']} — overlay didn't fire"
+    )
+    assert job.learning_summary["insights_added"] == 2

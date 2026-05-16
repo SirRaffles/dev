@@ -70,6 +70,35 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
             continue
         assignments[spk] = spk  # key=name, value=name (we no longer have the original label)
 
+    # B7 follow-up: overlay refined speaker names back into job.segments so
+    # extract_insights_auto (which reads job.segments via the existing
+    # _extract_speaker_insights_sync helper) sees real names instead of
+    # SPEAKER_XX. Build a {(start,end): refined_speaker} map from segment
+    # timings, then mutate job.segments in place.
+    # Use state.jobs (alias of state.job_store) for consistency with the
+    # surrounding orchestrator body (lines below).
+    job_for_overlay = state.jobs.get(job_id)
+    if job_for_overlay is not None and job_for_overlay.segments and segments:
+        refined_by_span = {
+            (round(float(s.get("start", 0)), 2),
+             round(float(s.get("end", 0)), 2)): s.get("speaker")
+            for s in segments if s.get("speaker")
+        }
+        overlaid = False
+        for raw in job_for_overlay.segments:
+            key = (round(float(raw.get("start", 0)), 2),
+                   round(float(raw.get("end", 0)), 2))
+            new_spk = refined_by_span.get(key)
+            if new_spk and new_spk != raw.get("speaker"):
+                raw["speaker"] = new_spk
+                overlaid = True
+        if overlaid:
+            try:
+                state.jobs.update(job_for_overlay)
+            except Exception:
+                logger.debug("jobs.update after overlay failed for %s",
+                             job_id, exc_info=True)
+
     # Prefer pyannote's raw turn boundaries (higher precision: 30s+ continuous
     # speech blocks) over per-utterance segments (3-10s each). Both B5 and the
     # diarization step populate job.speakers with pyannote-shaped turns; fall
