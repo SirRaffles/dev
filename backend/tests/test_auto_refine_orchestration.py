@@ -235,3 +235,44 @@ def test_dispatch_skipped_when_refinement_unavailable(tmp_path, monkeypatch):
         transcription._run_transcription_sync("job-B", str(audio_path), settings)
 
     assert not fake_exec.submit.called
+
+
+def test_dispatch_failure_rolls_status_back_to_failed(tmp_path, monkeypatch):
+    """If executor.submit raises (e.g. pool shutdown), refinement_status must
+    not get stuck at 'pending' — it should roll back to 'failed' so the UI
+    doesn't poll forever."""
+    from unittest.mock import MagicMock, patch
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("job-C")
+    job._retry_of = None
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
+    monkeypatch.setattr(transcription.state, "refinement_available", True)
+    rstore = MagicMock(create=MagicMock(), update_status=MagicMock())
+    monkeypatch.setattr(transcription.state, "refinement_store", rstore)
+    # Executor raises on submit (simulates pool shutdown / saturation).
+    fake_exec = MagicMock(submit=MagicMock(side_effect=RuntimeError("pool closed")))
+    monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
+
+    settings = TranscriptionSettings(
+        engine="whisper", language="en", enable_diarization=False,
+        enable_noise_reduction=False, speaker_ids=["sp-1"],
+    )
+    with patch("mlx_whisper.transcribe", return_value={
+        "segments": [{"start": 0, "end": 1, "text": "hi", "words": []}],
+        "text": "hi", "language": "en",
+    }):
+        transcription._run_transcription_sync("job-C", str(audio_path), settings)
+
+    assert job.refinement_status == "failed", \
+        f"expected status rollback to 'failed', got {job.refinement_status!r}"
+    # store row was updated to failed too
+    failed_calls = [c for c in rstore.update_status.call_args_list
+                    if len(c.args) >= 2 and c.args[1] == "failed"]
+    assert len(failed_calls) >= 1

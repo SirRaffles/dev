@@ -797,12 +797,9 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             # transcription executor (the same pool used for jobs). The helper
             # loads context + glossary itself.
             try:
+                from routes.refinement import _run_refinement_for_job
                 job.refinement_status = "pending"
                 state.jobs.update(job)
-            except Exception:
-                pass
-            try:
-                from routes.refinement import _run_refinement_for_job
                 state.refinement_store.create(job_id)
                 state.transcription_executor.submit(
                     _run_refinement_for_job,
@@ -813,6 +810,14 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 logger.info("B2: auto-refine dispatched for job %s", job_id)
             except Exception:
                 logger.exception("B2: auto-refine dispatch failed for job %s", job_id)
+                # Roll the pending status back so the UI doesn't poll forever.
+                try:
+                    job.refinement_status = "failed"
+                    state.jobs.update(job)
+                    state.refinement_store.update_status(job_id, "failed", "dispatch failed")
+                except Exception:
+                    logger.debug("B2: rollback after dispatch failure failed for job %s",
+                                 job_id, exc_info=True)
         model_name = "Voxtral API" if use_voxtral else ("Voxtral Local" if use_voxtral_local else ("Parakeet MLX" if use_parakeet else "MLX-Whisper"))
         logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
 
