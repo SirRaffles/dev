@@ -206,9 +206,14 @@ class RefinementService:
         except ImportError:
             logger.warning("duckduckgo-search not installed, web verification disabled")
 
-    def analyze(self, segments: list) -> dict:
+    def analyze(self, segments: list, context_text: Optional[str] = None,
+                glossary_terms: Optional[List[str]] = None) -> dict:
         """
         Send transcript to Claude for analysis.
+
+        Optional `context_text` (speaker bios + context doc + global glossary, merged)
+        and `glossary_terms` (proper-noun list) are prepended as a `## Known context`
+        block that tells Claude these terms are present in the audio's domain.
 
         Returns structured dict with speakers, corrections, uncertain_terms.
         """
@@ -218,7 +223,23 @@ class RefinementService:
         if len(transcript_text) > 50000:
             transcript_text = transcript_text[:50000] + "\n\n[... transcript truncated for analysis ...]"
 
-        prompt = f"""Analyze this transcript and return a JSON object with the following structure:
+        known_context_block = ""
+        if glossary_terms or context_text:
+            parts = ["## Known context\n"]
+            if glossary_terms:
+                terms_csv = ", ".join(t.strip() for t in glossary_terms if t and t.strip())
+                if terms_csv:
+                    parts.append(
+                        "The following terms ARE present in the audio's domain. "
+                        "If you find any misspelling of these in the transcript, "
+                        "correct it with confidence=high:\n\n"
+                        f"[{terms_csv}]\n"
+                    )
+            if context_text:
+                parts.append(f"\nSpeaker context:\n{context_text.strip()}\n")
+            known_context_block = "\n".join(parts) + "\n---\n\n"
+
+        prompt = f"""{known_context_block}Analyze this transcript and return a JSON object with the following structure:
 {{
   "language": "ISO 639-1 code",
   "domain": "brief topic description",
@@ -244,7 +265,7 @@ Transcript:
 
 Return ONLY the JSON object, no other text."""
 
-        return _run_claude(prompt, ANALYSIS_SCHEMA, self.claude_path, timeout=120)
+        return _run_claude(prompt, ANALYSIS_SCHEMA, self.claude_path, timeout=300)
 
     def web_verify(self, terms: list) -> dict:
         """
@@ -366,7 +387,8 @@ Return ONLY the JSON object, no other text."""
 
         return refined, speaker_mapping, corrections_applied
 
-    def refine(self, segments: list) -> dict:
+    def refine(self, segments: list, context_text: Optional[str] = None,
+               glossary_terms: Optional[List[str]] = None) -> dict:
         """
         Full refinement pipeline: analyze → web verify → finalize → apply.
 
@@ -376,7 +398,7 @@ Return ONLY the JSON object, no other text."""
 
         # Phase 1: Analyze
         logger.info("Phase 1: Analyzing transcript with Claude...")
-        analysis = self.analyze(segments)
+        analysis = self.analyze(segments, context_text=context_text, glossary_terms=glossary_terms)
         logger.info(
             "Analysis complete: %d speakers, %d corrections, %d uncertain terms",
             len(analysis.get("speakers", [])),
