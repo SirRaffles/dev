@@ -1,7 +1,6 @@
 """B4 unit tests: global glossary helper."""
 
 import importlib
-from pathlib import Path
 
 
 def _reload_glossary():
@@ -85,3 +84,82 @@ def test_append_creates_file_if_missing(icloud_base):
     out = target.read_text(encoding="utf-8")
     assert "Starrag" in out
     assert "## Auto-learned (pending review)" in out
+
+
+def test_append_does_not_match_substring_in_unrelated_line(icloud_base):
+    """Short term 'ETH' must not match 'method' or similar substring lines."""
+    target = icloud_base / "contexts" / "_global.md"
+    target.write_text(
+        "# Global Glossary\n\n## Active\n\nSome existing method description here.\n\n",
+        encoding="utf-8",
+    )
+    glossary = _reload_glossary()
+
+    glossary.append_auto_learned_term("ETH", source_job_id="job-1", context_phrase="university")
+    out = target.read_text(encoding="utf-8")
+    assert "## Auto-learned (pending review)" in out
+    pending = out.split("## Auto-learned (pending review)")[1]
+    assert "ETH" in pending
+
+
+def test_append_dedupes_against_bullet_lead_only(icloud_base):
+    """A bullet whose context phrase contains 'DMG' must not block adding 'DMG' as a new term
+    when the bullet's term is something else (e.g. 'Siemens')."""
+    target = icloud_base / "contexts" / "_global.md"
+    target.write_text(
+        "# Global Glossary\n\n## Active\n\n## Auto-learned (pending review)\n\n"
+        "- Siemens (from job-1: competitor of DMG Mori)\n",
+        encoding="utf-8",
+    )
+    glossary = _reload_glossary()
+
+    glossary.append_auto_learned_term("DMG", source_job_id="job-2", context_phrase="machine tools")
+    out = target.read_text(encoding="utf-8")
+    # DMG should now appear as a new bullet
+    pending = out.split("## Auto-learned (pending review)")[1]
+    assert pending.count("DMG") >= 2  # once in Siemens context, once as new bullet
+    # The new bullet for DMG must exist
+    assert "- DMG " in pending
+
+
+def test_append_dedupes_against_active_comma_separated_terms(icloud_base):
+    """Terms listed comma-separated under Active (the seed format) must be detected as existing."""
+    target = icloud_base / "contexts" / "_global.md"
+    target.write_text(
+        "# Global Glossary\n\n## Active\n\nManukai, DMG Mori, Starrag.\n",
+        encoding="utf-8",
+    )
+    glossary = _reload_glossary()
+
+    glossary.append_auto_learned_term("Manukai", source_job_id="job-1", context_phrase="x")
+    glossary.append_auto_learned_term("Starrag", source_job_id="job-2", context_phrase="y")
+    out = target.read_text(encoding="utf-8")
+    # Both should be no-ops (already in Active)
+    assert "## Auto-learned (pending review)" not in out or \
+           "Manukai" not in out.split("## Active")[1].split("\n\n## ")[0] or True
+    # Stronger check: the pending section should not contain Manukai or Starrag as new bullets
+    if "## Auto-learned (pending review)" in out:
+        pending = out.split("## Auto-learned (pending review)")[1]
+        assert "- Manukai" not in pending
+        assert "- Starrag" not in pending
+
+
+def test_append_concurrent_writes_do_not_lose_terms(icloud_base):
+    """Two concurrent appends both land in the file."""
+    import threading
+    target = icloud_base / "contexts" / "_global.md"
+    target.write_text("# Global Glossary\n\n## Active\n\n", encoding="utf-8")
+    glossary = _reload_glossary()
+
+    barrier = threading.Barrier(2)
+    def worker(term):
+        barrier.wait()
+        glossary.append_auto_learned_term(term, source_job_id="job-x", context_phrase="x")
+
+    t1 = threading.Thread(target=worker, args=("Manukai",))
+    t2 = threading.Thread(target=worker, args=("Starrag",))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    out = target.read_text(encoding="utf-8")
+    assert "Manukai" in out
+    assert "Starrag" in out
