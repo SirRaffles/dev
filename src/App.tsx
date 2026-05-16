@@ -11,6 +11,7 @@ import ProgressBar from './components/ProgressBar';
 import ExportMenu from './components/ExportMenu';
 import JobHistory from './components/JobHistory';
 import BatchProgress from './components/BatchProgress';
+import LearningToast from './components/LearningToast';
 
 // Hooks
 import useProcessingState from './hooks/useProcessingState';
@@ -684,6 +685,11 @@ function App() {
         </footer>
         </>)}
       </div>
+      <LearningToast
+        jobId={active?.jobId || null}
+        jobCompleted={!!active?.result && !active?.isProcessing}
+        onClickReview={() => setActiveTab('activity' as any)}
+      />
     </div>
   );
 }
