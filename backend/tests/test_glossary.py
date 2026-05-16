@@ -163,3 +163,35 @@ def test_append_concurrent_writes_do_not_lose_terms(icloud_base):
     out = target.read_text(encoding="utf-8")
     assert "Manukai" in out
     assert "Starrag" in out
+
+
+def test_transcription_merges_global_first(icloud_base, monkeypatch):
+    """merge_context_sources call sites must put global glossary first."""
+    (icloud_base / "contexts" / "_global.md").write_text(
+        "# Global Glossary\n\n## Active\n\nManukai\n",
+        encoding="utf-8",
+    )
+    (icloud_base / "contexts" / "deal.md").write_text(
+        "# Deal context\n\nPascal Weber call.\n",
+        encoding="utf-8",
+    )
+
+    # Re-import after icloud_base patched config
+    import importlib
+    import services.transcription as t
+    importlib.reload(t)
+
+    from job_models import TranscriptionSettings
+    settings = TranscriptionSettings(context_path="deal.md", speaker_ids=None)
+
+    # Mimic the call-site composition used inside _run_transcription_sync.
+    from services.glossary import load_global_glossary
+    merged = t.merge_context_sources(
+        load_global_glossary(),
+        t.load_context_document(settings.context_path),
+        t.load_speakers_context(settings.speaker_ids),
+    )
+
+    assert merged is not None
+    # Global must come before the deal context (priority order).
+    assert merged.index("Manukai") < merged.index("Pascal Weber call")

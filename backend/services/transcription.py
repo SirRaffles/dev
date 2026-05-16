@@ -286,7 +286,9 @@ def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) ->
     # Merge explicit context_terms with terms derived from the selected
     # context document, deduped case-insensitive.
     merged_terms: List[str] = list(settings.context_terms or [])
+    from services.glossary import load_global_glossary  # local import — avoids circular load
     context_text = merge_context_sources(
+        load_global_glossary(),
         load_context_document(settings.context_path),
         load_speakers_context(settings.speaker_ids),
     )
@@ -400,7 +402,9 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     # take an initial_prompt that biases the decoder toward domain terms.
     # Expected-speaker context also gets merged in so the decoder knows how
     # their names are spelled and what topics they typically cover.
+    from services.glossary import load_global_glossary  # local import — avoids circular load
     context_text = merge_context_sources(
+        load_global_glossary(),
         load_context_document(settings.context_path),
         load_speakers_context(settings.speaker_ids),
     )
@@ -665,7 +669,9 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 # plus any expected-speaker context. Whisper's decoder has a
                 # 448-token context; ~900 chars is a safe budget that leaves
                 # room for actual audio tokens.
+                from services.glossary import load_global_glossary  # local import — avoids circular load
                 context_text = merge_context_sources(
+                    load_global_glossary(),
                     load_context_document(settings.context_path),
                     load_speakers_context(settings.speaker_ids),
                 )
