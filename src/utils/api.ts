@@ -392,6 +392,20 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
   return response.json();
 }
 
+/**
+ * Soft-cancel a transcription job. Deletes the job record from the backend
+ * (frees the UI immediately) but the underlying executor thread keeps running
+ * until its current chunk completes — Python's ThreadPoolExecutor.cancel()
+ * doesn't interrupt already-running tasks. For a true hard-stop, restart the
+ * backend (`launchctl kickstart -k gui/$(id -u)/com.whisper.backend`).
+ */
+export async function cancelJob(jobId: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_URL}/job/${jobId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`cancelJob failed: ${res.status}`);
+  }
+}
+
 export async function exportTranscript(jobId: string, format: string, isMultiModal = false): Promise<Blob> {
   const endpoint = isMultiModal
     ? `${API_URL}/process/job/${jobId}/export?format=${format}`

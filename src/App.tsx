@@ -22,7 +22,7 @@ import useTheme from './hooks/useTheme';
 import useGlobalKeyboard from './hooks/useGlobalKeyboard';
 
 // Utils
-import { API_URL, JobStatus } from './utils/api';
+import { API_URL, JobStatus, cancelJob } from './utils/api';
 
 // Components (lazily loaded - only needed when results are shown)
 const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
@@ -72,7 +72,7 @@ function App() {
   const [files, setFiles] = useState<File[]>([]);
 
   // Settings
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<Record<string, any>>({
     modelSize: 'voxtral-mini-3b',
     language: 'auto',
     translateToEnglish: false,
@@ -83,6 +83,9 @@ function App() {
     speedPriority: false,
     engine: 'voxtral-local',
     contextTerms: '',
+    contextPath: '',
+    speakerIds: [] as string[],
+    twoPass: false,
     outputMode: 'verbatim',
   });
 
@@ -226,6 +229,9 @@ function App() {
       speedPriority: settings.speedPriority,
       engine: settings.engine,
       contextTerms: settings.contextTerms,
+      contextPath: settings.contextPath,
+      speakerIds: settings.speakerIds,
+      twoPass: settings.twoPass,
       outputMode: settings.outputMode,
     };
 
@@ -477,12 +483,30 @@ function App() {
         {/* Progress Bar */}
         <div aria-live="polite" aria-atomic="true">
         {active.isProcessing && (
-          <ProgressBar
-            progress={active.progress}
-            progressMessage={active.progressMessage}
-            sourceType={sourceType}
-            batchProgress={transcription.batchProgress}
-          />
+          <div className="space-y-2">
+            <ProgressBar
+              progress={active.progress}
+              progressMessage={active.progressMessage}
+              sourceType={sourceType}
+              batchProgress={transcription.batchProgress}
+            />
+            {active.jobId && (
+              <div className="flex justify-end">
+                <button
+                  onClick={async () => {
+                    if (!active.jobId) return;
+                    try { await cancelJob(active.jobId); } catch { /* best-effort */ }
+                    resetAll();
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1 text-xs rounded border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20"
+                  title="Soft-cancel: frees the UI immediately. The backend executor finishes its current chunk (~30s) before fully releasing. For a hard-stop, restart the backend."
+                >
+                  <X className="w-3 h-3" />
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
         )}
         </div>
 
