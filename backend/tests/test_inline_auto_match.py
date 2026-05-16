@@ -70,6 +70,12 @@ def test_inline_auto_match_overlays_names_when_diarization_present(tmp_path, mon
     assert "Pascal" in speakers_in_segments
     assert "SPEAKER_01" in speakers_in_segments
 
+    # job.speakers gets the same overlay so downstream consumers join
+    # consistently on the speaker key (segments + speakers stay in sync).
+    speakers_in_turns = [t.get("speaker") for t in (job.speakers or [])]
+    assert "Pascal" in speakers_in_turns
+    assert "SPEAKER_01" in speakers_in_turns
+
 
 def test_inline_auto_match_failure_does_not_break_job(tmp_path, monkeypatch):
     """Auto-match exceptions must be swallowed; segments keep SPEAKER_XX."""

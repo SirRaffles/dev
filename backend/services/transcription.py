@@ -769,10 +769,12 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             # B5: inline auto-match — overlay registered speaker names on
             # diarization labels using the voice-embedding registry. Reuses
             # the same scope logic as the post-job /speakers/auto-match route.
+            # Adds ~1-5s to the critical path (embedding extraction).
             if speakers and state.refinement_available:
+                _update_job(job, progress=68, message="Matching voices to registered speakers...")
                 try:
                     from routes.transcription import _resolve_match_scope
-                    restrict_ids, prefer_ids, _scope = _resolve_match_scope({
+                    restrict_ids, prefer_ids, scope_mode = _resolve_match_scope({
                         "speaker_ids": settings.speaker_ids,
                         "num_speakers": settings.num_speakers,
                     })
@@ -785,11 +787,21 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                         prefer_ids=prefer_ids,
                     )
                     job.auto_speaker_matches = auto_matches
+                    # Overlay matched names on both segments AND job.speakers so
+                    # downstream consumers join consistently on the speaker key.
                     for seg in transcription_segments:
                         lbl = seg.get("speaker", "")
                         m = auto_matches.get(lbl)
                         if m and m.get("matched"):
                             seg["speaker"] = m["name"]
+                    for turn in (job.speakers or []):
+                        lbl = turn.get("speaker", "")
+                        m = auto_matches.get(lbl)
+                        if m and m.get("matched"):
+                            turn["speaker"] = m["name"]
+                    matched_count = sum(1 for m in auto_matches.values() if m.get("matched"))
+                    logger.info("B5 auto-match: scope=%s, matched %d/%d speakers",
+                                scope_mode, matched_count, len(auto_matches))
                 except Exception:
                     logger.exception(
                         "B5 auto-match failed for job %s; keeping SPEAKER_XX labels", job_id
