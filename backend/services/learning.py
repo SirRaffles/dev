@@ -140,3 +140,38 @@ def update_speaker_embeddings(
             logger.exception("update_embedding failed for %s (job %s)", name, job_id)
             record_event("embedding_failed", job_id=job_id, speaker_name=name)
     return updated
+
+
+def extract_insights_auto(job_id: str) -> int:
+    """Refresh explicit + implicit insights for every named speaker in the job's
+    refined segments. Records one 'insight_added' event per (speaker, category).
+
+    Returns the count of (speaker, category) pairs successfully updated.
+    Never raises.
+    """
+    try:
+        # Lazy import: routes module pulls in FastAPI heavy deps; defer until
+        # the worker actually runs (not at services module load).
+        from routes.transcription import _extract_speaker_insights_sync
+        result = _extract_speaker_insights_sync(job_id)
+    except Exception:
+        logger.exception("extract_insights_auto failed for job %s", job_id)
+        record_event("insight_failed", job_id=job_id)
+        return 0
+
+    updated = result.get("updated", []) if isinstance(result, dict) else []
+    count = 0
+    for entry in updated:
+        # Entry shape: "Pascal:explicit" or "David:implicit"
+        if ":" not in entry:
+            continue
+        speaker_name, category = entry.split(":", 1)
+        record_event(
+            "insight_added",
+            job_id=job_id,
+            speaker_name=speaker_name.strip(),
+            category=category.strip(),
+            count=1,
+        )
+        count += 1
+    return count

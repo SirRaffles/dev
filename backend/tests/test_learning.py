@@ -210,3 +210,54 @@ def test_update_speaker_embeddings_skips_anonymous_labels(icloud_base, tmp_path,
     )
     assert n == 0
     fake_emb_service.update_embedding.assert_not_called()
+
+
+def test_extract_insights_auto_returns_count_and_logs_events(icloud_base, monkeypatch):
+    """Wraps _extract_speaker_insights_sync; one event per updated insight."""
+    learning = _reload_learning()
+
+    fake_result = {
+        "updated": ["Pascal:explicit", "Pascal:implicit", "David:explicit"],
+        "skipped": [],
+        "errors": [],
+    }
+    # Patch the existing extraction function in its real module
+    monkeypatch.setattr(
+        "routes.transcription._extract_speaker_insights_sync",
+        lambda job_id: fake_result,
+    )
+
+    n = learning.extract_insights_auto(job_id="j-ins-1")
+    assert n == 3
+
+    log_lines = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8").splitlines()
+    insight_events = [json.loads(l) for l in log_lines if "insight_added" in l]
+    assert len(insight_events) == 3
+    speakers = {e["speaker_name"] for e in insight_events}
+    assert speakers == {"Pascal", "David"}
+    categories = {e["category"] for e in insight_events}
+    assert categories == {"explicit", "implicit"}
+
+
+def test_extract_insights_auto_returns_zero_on_no_updates(icloud_base, monkeypatch):
+    learning = _reload_learning()
+    monkeypatch.setattr(
+        "routes.transcription._extract_speaker_insights_sync",
+        lambda job_id: {"updated": [], "skipped": [{"speaker": "X", "reason": "no lines"}],
+                         "errors": []},
+    )
+    n = learning.extract_insights_auto(job_id="j-ins-empty")
+    assert n == 0
+
+
+def test_extract_insights_auto_handles_helper_exception(icloud_base, monkeypatch):
+    """Bubbles a single failure event but does not raise."""
+    learning = _reload_learning()
+    def boom(job_id):
+        raise RuntimeError("claude unreachable")
+    monkeypatch.setattr("routes.transcription._extract_speaker_insights_sync", boom)
+
+    n = learning.extract_insights_auto(job_id="j-ins-boom")
+    assert n == 0
+    log = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8")
+    assert "insight_failed" in log
