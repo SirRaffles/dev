@@ -431,113 +431,128 @@ function SettingsPanel({
           </p>
         </div>
 
-        {/* Context Terms — Voxtral Cloud only (free-form bias terms) */}
-        {isVoxtralApi && (
-          <div>
-            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-              <BookOpen className="w-4 h-4" />
-              Context Terms
-            </label>
-            <input
-              type="text"
-              value={contextTerms}
-              onChange={(e) => handleChange('contextTerms', e.target.value)}
-              disabled={disabled}
-              placeholder="e.g. FastAPI, MLX, Voxtral"
-              className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-violet-400 disabled:opacity-50"
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Comma-separated domain terms for better accuracy (max 100). Merged with terms auto-derived from the Context document.</p>
-          </div>
-        )}
+      </div>
 
-        {/* Two-Pass Mode — Voxtral Cloud only, when language is set */}
-        {isVoxtralApi && language !== 'auto' && (
-          <div>
-            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-              <Layers className="w-4 h-4" />
-              Two-Pass Mode
-            </label>
-            <button
-              onClick={() => handleChange('twoPass', !twoPass)}
-              disabled={disabled}
-              className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-                twoPass
-                  ? 'bg-violet-500 text-white'
-                  : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
-              }`}
-            >
-              <Layers className="w-4 h-4" />
-              {twoPass ? 'Enabled (2x cost)' : 'Disabled'}
-            </button>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Timestamps + language accuracy via two API passes</p>
-          </div>
-        )}
+      {/* B6f: Advanced section — collapsed by default. Native <details> for
+          keyboard-accessibility + no JS state. User chose sibling extraction (Q5). */}
+      <details className="mt-6 rounded-xl border border-slate-200 dark:border-slate-600 bg-white/40 dark:bg-slate-800/30 group">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-xl">
+          <span className="inline-flex items-center gap-2">
+            <svg className="w-3 h-3 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 3l4 3-4 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Advanced options
+          </span>
+        </summary>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-4 pb-4 pt-2">
+          {/* Context Terms — Voxtral Cloud only (free-form bias terms) */}
+          {isVoxtralApi && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+                <BookOpen className="w-4 h-4" />
+                Context Terms
+              </label>
+              <input
+                type="text"
+                value={contextTerms}
+                onChange={(e) => handleChange('contextTerms', e.target.value)}
+                disabled={disabled}
+                placeholder="e.g. FastAPI, MLX, Voxtral"
+                className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-violet-400 disabled:opacity-50"
+              />
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Comma-separated domain terms for better accuracy (max 100). Merged with terms auto-derived from the Context document.</p>
+            </div>
+          )}
 
-        {/* Word Timestamps Toggle */}
-        <div>
-          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-            <Clock className="w-4 h-4" />
-            Word Timestamps
-          </label>
-          <button
-            onClick={() => handleChange('wordTimestamps', !wordTimestamps)}
-            disabled={disabled}
-            className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-              wordTimestamps
-                ? 'bg-blue-500 text-white'
-                : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
-            }`}
-          >
-            <Clock className="w-4 h-4" />
-            {wordTimestamps ? 'Enabled (slower)' : 'Disabled (faster)'}
-          </button>
-        </div>
+          {/* Two-Pass Mode — Voxtral Cloud only, when language is set */}
+          {isVoxtralApi && language !== 'auto' && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+                <Layers className="w-4 h-4" />
+                Two-Pass Mode
+              </label>
+              <button
+                onClick={() => handleChange('twoPass', !twoPass)}
+                disabled={disabled}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                  twoPass
+                    ? 'bg-violet-500 text-white'
+                    : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+                {twoPass ? 'Enabled (2x cost)' : 'Disabled'}
+              </button>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Timestamps + language accuracy via two API passes</p>
+            </div>
+          )}
 
-        {/* Noise Reduction Toggle */}
-        <div>
-          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
-            {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            Noise Reduction
-          </label>
-          <button
-            onClick={() => handleChange('enableNoiseReduction', !enableNoiseReduction)}
-            disabled={disabled}
-            className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-              enableNoiseReduction
-                ? 'bg-blue-500 text-white'
-                : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
-            }`}
-          >
-            {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            {enableNoiseReduction ? 'Enabled' : 'Disabled'}
-          </button>
-        </div>
-
-        {/* Speed Priority Toggle — only for Whisper */}
-        {isWhisper && (
+          {/* Word Timestamps Toggle */}
           <div>
             <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
               <Clock className="w-4 h-4" />
-              Speed Priority
+              Word Timestamps
             </label>
             <button
-              onClick={() => handleChange('speedPriority', !speedPriority)}
+              onClick={() => handleChange('wordTimestamps', !wordTimestamps)}
               disabled={disabled}
               className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-                speedPriority
+                wordTimestamps
                   ? 'bg-blue-500 text-white'
                   : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
               }`}
             >
               <Clock className="w-4 h-4" />
-              {speedPriority ? (language === 'en' ? '60x Speed (English)' : '6x Speed') : 'Off'}
+              {wordTimestamps ? 'Enabled (slower)' : 'Disabled (faster)'}
             </button>
-            {speedPriority && language === 'en' && (
-              <p className="text-xs text-orange-400 mt-1">Uses Parakeet MLX for maximum speed</p>
-            )}
           </div>
-        )}
-      </div>
+
+          {/* Noise Reduction Toggle */}
+          <div>
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+              {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              Noise Reduction
+            </label>
+            <button
+              onClick={() => handleChange('enableNoiseReduction', !enableNoiseReduction)}
+              disabled={disabled}
+              className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                enableNoiseReduction
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
+              }`}
+            >
+              {enableNoiseReduction ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              {enableNoiseReduction ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
+
+          {/* Speed Priority Toggle — only for Whisper */}
+          {isWhisper && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+                <Clock className="w-4 h-4" />
+                Speed Priority
+              </label>
+              <button
+                onClick={() => handleChange('speedPriority', !speedPriority)}
+                disabled={disabled}
+                className={`w-full px-4 py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
+                  speedPriority
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-200 text-slate-600 border border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                {speedPriority ? (language === 'en' ? '60x Speed (English)' : '6x Speed') : 'Off'}
+              </button>
+              {speedPriority && language === 'en' && (
+                <p className="text-xs text-orange-400 mt-1">Uses Parakeet MLX for maximum speed</p>
+              )}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }
