@@ -3,6 +3,9 @@ Transcript refinement API routes.
 """
 
 import logging
+import os
+import shutil
+import tempfile
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -31,13 +34,123 @@ def _set_refinement_status(job, status: str) -> None:
         logger.debug("jobs.update mirror failed for job %s", job.job_id, exc_info=True)
 
 
+def _cleanup_deferred_audio(audio_path: Optional[str]) -> None:
+    """Delete the tmp audio file (and its tmp parent dir) that
+    _run_transcription_sync deferred to us. No-op when audio_path is None,
+    when the path is gone, or when it's outside /tmp."""
+    if not audio_path:
+        return
+    try:
+        parent_dir = os.path.dirname(audio_path)
+        if parent_dir and os.path.isdir(parent_dir) and parent_dir.startswith(tempfile.gettempdir()):
+            shutil.rmtree(parent_dir, ignore_errors=True)
+        elif os.path.exists(audio_path):
+            os.remove(audio_path)
+    except Exception:
+        logger.debug("B7 audio cleanup failed for %s", audio_path, exc_info=True)
+
+
+def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
+                                  segments: list, analysis: dict) -> None:
+    """B7 orchestrator: run the three learning workers, aggregate status.
+
+    Each worker is wrapped in its own try/except — one failure must not block
+    the others. Sets job.learning_summary + job.learning_status, then persists
+    via state.jobs.update.
+    """
+    from services import learning
+
+    # Build {pyannote_label_or_name: speaker_name} from refined segments.
+    # After refinement, segments use real speaker names instead of SPEAKER_XX
+    # (or keep SPEAKER_XX if neither B5 nor refinement could identify them).
+    assignments: dict = {}
+    for seg in (segments or []):
+        spk = (seg.get("speaker") or "").strip()
+        if not spk or spk.startswith("SPEAKER_"):
+            continue
+        assignments[spk] = spk  # key=name, value=name (we no longer have the original label)
+
+    # Prefer pyannote's raw turn boundaries (higher precision: 30s+ continuous
+    # speech blocks) over per-utterance segments (3-10s each). Both B5 and the
+    # diarization step populate job.speakers with pyannote-shaped turns; fall
+    # back to synthesizing from refined segments only if job.speakers is empty.
+    # Use state.jobs (NOT state.job_store) — convention matches _run_transcription_sync.
+    job_for_turns = state.jobs.get(job_id)
+    raw_turns = (job_for_turns.speakers if job_for_turns is not None else None) or []
+    if raw_turns:
+        speaker_turns = [
+            {"start": float(t.get("start", 0)),
+             "end": float(t.get("end", 0)),
+             "speaker": t.get("speaker", "")}
+            for t in raw_turns
+            if (t.get("speaker") or "").strip()
+        ]
+    else:
+        speaker_turns = [
+            {"start": float(seg.get("start", 0)),
+             "end": float(seg.get("end", 0)),
+             "speaker": seg.get("speaker", "")}
+            for seg in (segments or [])
+            if (seg.get("speaker") or "").strip()
+        ]
+
+    successes = 0
+    emb_count = ins_count = glo_count = 0
+
+    try:
+        emb_count = learning.update_speaker_embeddings(
+            job_id=job_id, audio_path=audio_path,
+            speaker_turns=speaker_turns, assignments=assignments,
+        )
+        successes += 1
+    except Exception:
+        logger.exception("B7 embedding worker failed for job %s", job_id)
+
+    try:
+        ins_count = learning.extract_insights_auto(job_id=job_id)
+        successes += 1
+    except Exception:
+        logger.exception("B7 insight worker failed for job %s", job_id)
+
+    try:
+        glo_count = learning.learn_glossary_terms(
+            job_id=job_id, corrections=(analysis or {}).get("corrections", []),
+        )
+        successes += 1
+    except Exception:
+        logger.exception("B7 glossary worker failed for job %s", job_id)
+
+    # Use state.jobs (same convention as _run_transcription_sync). state.job_store
+    # is an alias bound at module load, but monkeypatching one in tests does NOT
+    # update the other — so be consistent with the writer-side convention.
+    job = state.jobs.get(job_id)
+    if job is not None:
+        job.learning_summary = {
+            "embeddings_updated": emb_count,
+            "insights_added": ins_count,
+            "terms_learned": glo_count,
+        }
+        if successes == 3:
+            job.learning_status = "ok"
+        elif successes >= 1:
+            job.learning_status = "partial"
+        else:
+            job.learning_status = "failed"
+        try:
+            state.jobs.update(job)
+        except Exception:
+            logger.debug("jobs.update mirror failed for job %s", job_id, exc_info=True)
+
+
 def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None,
-                            context_path: Optional[str] = None):
+                            context_path: Optional[str] = None,
+                            audio_path: Optional[str] = None):
     """Run refinement for a completed job with the given context bundle.
 
     Loads the same context sources transcription used (global glossary +
     context_path + speaker bios) and feeds them to RefinementService.refine.
     Updates the job's refinement_status and the RefinementStore row.
+    Calls B7 learning orchestrator at the tail of the success branch.
     """
     # Local imports to avoid circular load: services.glossary imports
     # derive_context_terms from services.transcription, so importing them at
@@ -86,15 +199,40 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
         _set_refinement_status(job, "done")
         logger.info("Refinement complete for job %s", job_id)
 
+        # B7: post-refinement learning. Best-effort — never raises.
+        try:
+            _run_post_refinement_learning(
+                job_id=job_id,
+                audio_path=audio_path,
+                segments=result.get("refined_segments", job.segments),
+                analysis=result.get("analysis", {}),
+            )
+        except Exception:
+            logger.exception("B7 orchestrator outer failure for job %s", job_id)
+
     except Exception as e:
         logger.exception("Refinement failed for job %s", job_id)
         state.refinement_store.update_status(job_id, "failed", str(e))
         _set_refinement_status(job, "failed")
+    finally:
+        # B7 deferred cleanup: _run_transcription_sync skipped tmp-audio cleanup
+        # when it dispatched us (job._defer_audio_cleanup=True). We own the
+        # cleanup now — runs on success path, refine-failure path, and
+        # orchestrator-failure path alike. If audio_path is None (manual route,
+        # or audio already gone), this is a no-op.
+        _cleanup_deferred_audio(audio_path)
 
 
 def _run_refinement(job_id: str):
-    """Backwards-compatible wrapper: manual route uses no extra context."""
-    _run_refinement_for_job(job_id, speaker_ids=None, context_path=None)
+    """Backwards-compatible wrapper: manual route resolves audio for B7."""
+    # Lazy import to avoid pulling routes.transcription at module load.
+    try:
+        from routes.transcription import _resolve_job_audio_path
+        audio_path = _resolve_job_audio_path(job_id)
+    except Exception:
+        audio_path = None
+    _run_refinement_for_job(job_id, speaker_ids=None, context_path=None,
+                            audio_path=audio_path)
 
 
 @router.post("/job/{job_id}")

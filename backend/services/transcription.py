@@ -842,11 +842,15 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 job.refinement_status = "pending"
                 state.jobs.update(job)
                 state.refinement_store.create(job_id)
+                # B7: keep tmp audio alive until learning workers finish (the refinement
+                # runner owns cleanup via _cleanup_deferred_audio in routes/refinement.py).
+                job._defer_audio_cleanup = True
                 state.transcription_executor.submit(
                     _run_refinement_for_job,
                     job_id,
                     settings.speaker_ids,
                     settings.context_path,
+                    audio_path,
                 )
                 logger.info("B2: auto-refine dispatched for job %s", job_id)
             except Exception:
@@ -880,6 +884,11 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         # subsequent retry attempt.
         retry_of = getattr(job, "_retry_of", None) if job is not None else None
         if retry_of:
+            return
+        # B7: if auto-refine was dispatched, the learning workers need the audio.
+        # _run_refinement_for_job's finally block will call _cleanup_deferred_audio
+        # once refinement + learning (or any failure path) completes.
+        if getattr(job, "_defer_audio_cleanup", False):
             return
         try:
             parent_dir = os.path.dirname(audio_path)
