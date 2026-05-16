@@ -1,7 +1,7 @@
 import React from 'react';
-import { FileAudio, Mic, Phone, Users, FolderOpen } from 'lucide-react';
+import { FileAudio, Mic, Phone, Users, FolderOpen, Activity } from 'lucide-react';
 
-export type NavTab = 'transcribe' | 'recordings' | 'calls' | 'speakers' | 'contexts';
+export type NavTab = 'transcribe' | 'recordings' | 'calls' | 'speakers' | 'contexts' | 'activity';
 
 interface NavigationProps {
   activeTab: NavTab;
@@ -14,6 +14,7 @@ const TABS: { id: NavTab; label: string; icon: React.ComponentType<any> }[] = [
   { id: 'calls', label: 'Calls', icon: Phone },
   { id: 'speakers', label: 'Speakers', icon: Users },
   { id: 'contexts', label: 'Contexts', icon: FolderOpen },
+  { id: 'activity', label: 'Activity', icon: Activity },
 ];
 
 function Navigation({ activeTab, onTabChange }: NavigationProps) {

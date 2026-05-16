@@ -35,6 +35,7 @@ const RecordingsView = lazy(() => import('./components/RecordingsView'));
 const CallsView = lazy(() => import('./components/CallsView'));
 const SpeakersView = lazy(() => import('./components/SpeakersView'));
 const ContextBrowser = lazy(() => import('./components/ContextBrowser'));
+const ActivityTimeline = lazy(() => import('./components/ActivityTimeline'));
 
 const InputMode = { FILE: 'file', YOUTUBE: 'youtube' } as const;
 const ViewMode = { TRANSCRIPT: 'transcript', DOCUMENT: 'document', VISUAL: 'visual' } as const;
@@ -291,6 +292,7 @@ function App() {
             {activeTab === 'calls' && <CallsView />}
             {activeTab === 'speakers' && <SpeakersView />}
             {activeTab === 'contexts' && <ContextBrowser />}
+            {activeTab === 'activity' && <ActivityTimeline />}
           </Suspense>
         )}
 
@@ -688,7 +690,7 @@ function App() {
       <LearningToast
         jobId={active?.jobId || null}
         jobCompleted={!!active?.result && !active?.isProcessing}
-        onClickReview={() => setActiveTab('activity' as any)}
+        onClickReview={() => setActiveTab('activity')}
       />
     </div>
   );

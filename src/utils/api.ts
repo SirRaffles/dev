@@ -1050,3 +1050,46 @@ export async function saveGlobalGlossary(content: string): Promise<void> {
   });
   if (!r.ok) throw new Error(`saveGlobalGlossary failed: ${r.status}`);
 }
+
+// --- Learning log (activity timeline) ---
+
+export type LearningEventType =
+  | 'embedding_update' | 'embedding_skipped' | 'embedding_failed'
+  | 'glossary_add'
+  | 'insight_added' | 'insight_failed';
+
+export interface LearningEvent {
+  ts: string;
+  type: LearningEventType | string;
+  job_id?: string;
+  speaker_id?: string | null;
+  speaker_name?: string;
+  term?: string;
+  source_phrase?: string;
+  reason?: string;
+  category?: string;
+  duration_sec?: number;
+}
+
+export interface LearningLogResponse {
+  events: LearningEvent[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export async function fetchLearningLog(params: {
+  since?: string;
+  type?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<LearningLogResponse> {
+  const qs = new URLSearchParams();
+  if (params.since) qs.set('since', params.since);
+  if (params.type) qs.set('type', params.type);
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  if (params.offset !== undefined) qs.set('offset', String(params.offset));
+  const r = await fetchWithTimeout(`${API_URL}/learning/log?${qs.toString()}`);
+  if (!r.ok) throw new Error(`fetchLearningLog failed: ${r.status}`);
+  return r.json();
+}
