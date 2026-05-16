@@ -276,3 +276,20 @@ def test_dispatch_failure_rolls_status_back_to_failed(tmp_path, monkeypatch):
     failed_calls = [c for c in rstore.update_status.call_args_list
                     if len(c.args) >= 2 and c.args[1] == "failed"]
     assert len(failed_calls) >= 1
+
+@pytest.mark.asyncio
+async def test_learning_summary_round_trips_through_api(client, sample_job):
+    """After populating job.learning_summary, GET /job/{id} returns it."""
+    import state
+    job = state.jobs.get(sample_job)
+    assert job is not None
+    job.learning_summary = {"embeddings_updated": 1, "insights_added": 2, "terms_learned": 3}
+    job.learning_status = "ok"
+    state.jobs.update(job)
+
+    resp = await client.get(f"/job/{sample_job}")
+    body = resp.json()
+    assert body["learning_status"] == "ok"
+    assert body["learning_summary"] == {
+        "embeddings_updated": 1, "insights_added": 2, "terms_learned": 3,
+    }
