@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, UserPlus, Sparkles, Scissors } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, assignJobSpeakers, fetchJobAutoMatchSuggestions, AutoMatchSuggestion, Speaker, SpeakerAssignmentInput } from '../utils/api';
+import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, assignJobSpeakers, Speaker, SpeakerAssignmentInput } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
+import AutoMatchBadge from './AutoMatchBadge';
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
 
 // Diarization emits generic labels like SPEAKER_00 / "Speaker 1". Anything
@@ -75,13 +76,13 @@ function TranscriptView({
   const [assignSaving, setAssignSaving] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [insightStatus, setInsightStatus] = useState<'idle' | 'running' | 'done'>('idle');
-  // Auto-match: results from POST /job/{id}/speakers/auto-match keyed by label.
-  // Suggestions with confidence ≥ threshold pre-fill the name inputs; below
-  // threshold leaves the input empty but still stashes the best guess for the
-  // UI chip so the user can see "nearly matched X (57%)" if they want.
-  const [autoMatch, setAutoMatch] = useState<Record<string, AutoMatchSuggestion>>({});
-  const [autoMatchMode, setAutoMatchMode] = useState<'scoped' | 'global-prefer' | 'global' | null>(null);
-  const [autoMatchLoading, setAutoMatchLoading] = useState(false);
+  // B6b: inline auto-match data source — replaces the deleted post-hoc fetch.
+  // `auto_speaker_matches` is fed by the refinement polling hook below.
+  const [rejectedMatches, setRejectedMatches] = useState<Record<string, boolean>>({});
+  // Render the badge only on the FIRST occurrence of each label in the segment
+  // list (per user decision Q4). Use a ref to track seen labels across the
+  // .map() iteration; resets when segments change.
+  const seenLabelsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -122,38 +123,34 @@ function TranscriptView({
   // for the post-completion refinement lifecycle.
   const refineState = useJobAutoRefinePolling(jobId, true);
 
-  // Fetch auto-match whenever the set of anonymous labels appears. Running
-  // only on the label set (not on every render) keeps the endpoint quiet.
-  const labelsKey = anonymousLabels.join('|');
-  useEffect(() => {
-    if (!jobId || anonymousLabels.length === 0) return;
-    let cancelled = false;
-    setAutoMatchLoading(true);
-    fetchJobAutoMatchSuggestions(jobId)
-      .then((res) => {
-        if (cancelled) return;
-        const byLabel: Record<string, AutoMatchSuggestion> = {};
-        for (const s of res.suggestions) byLabel[s.label] = s;
-        setAutoMatch(byLabel);
-        setAutoMatchMode(res.mode);
-        // Pre-fill draft inputs for labels whose suggestion is above threshold
-        // AND whose input is still blank (don't clobber user typing).
-        setDraftAssignments((prev) => {
-          const next = { ...prev };
-          for (const lbl of anonymousLabels) {
-            const s = byLabel[lbl];
-            if (s && s.speaker_name && s.confidence >= AUTO_MATCH_CONFIDENCE && !(next[lbl] || '').trim()) {
-              next[lbl] = s.speaker_name;
-            }
-          }
-          return next;
-        });
-      })
-      .catch(() => { /* non-fatal — user can still type names manually */ })
-      .finally(() => { if (!cancelled) setAutoMatchLoading(false); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, labelsKey]);
+  // B6b: inline auto-match data source — keyed by pyannote label
+  // (SPEAKER_00…). Sourced from the refinement poller above; replaces the
+  // old post-hoc auto-match fetch.
+  const autoMatches = refineState?.auto_speaker_matches || {};
+
+  // Reset the "seen labels" tracker whenever the segments change so a
+  // re-render emits the badge on the first occurrence again.
+  useEffect(() => { seenLabelsRef.current = new Set(); }, [result?.segments]);
+
+  // B6b: accept/reject handlers for the inline AutoMatchBadge. Accept reuses
+  // the existing assign endpoint with create_new=false (we already know the
+  // speaker exists in the registry — that's how voice-match found them).
+  const handleAcceptAutoMatch = async (label: string, name: string, _speakerId: string) => {
+    try {
+      await assignJobSpeakers(jobId, [{ label, speaker_name: name, create_new: false }], false);
+      // Locally rename the label so the badge disappears + the transcript
+      // text updates without waiting for a full refresh.
+      setSpeakerNames((prev) => ({ ...prev, [label]: name }));
+    } catch (e) {
+      // Surface in console only — the badge stays visible for retry.
+      // eslint-disable-next-line no-console
+      console.error('Accept auto-match failed', e);
+    }
+  };
+
+  const handleRejectAutoMatch = (label: string) => {
+    setRejectedMatches((prev) => ({ ...prev, [label]: true }));
+  };
 
   const handleAssignSpeakers = async () => {
     const assignments: SpeakerAssignmentInput[] = [];
@@ -579,10 +576,6 @@ function TranscriptView({
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
             Type any name — if it matches an existing speaker you'll see <span className="font-medium text-slate-600 dark:text-slate-300">↪ existing</span>; otherwise a new speaker is created in your registry on save, marked <span className="font-medium text-emerald-700 dark:text-emerald-400">＋ new</span>. Their voice is saved so future recordings auto-match, and insights from this call are appended to their profile.
-            {autoMatchMode && (
-              <> Voice auto-match ran in <span className="font-medium">{autoMatchMode}</span> mode.</>
-            )}
-            {autoMatchLoading && <> <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" /> matching voices…</>}
           </p>
           <datalist id="speakers-registry">
             {registry.map((s) => <option key={s.speaker_id} value={s.name} />)}
@@ -591,10 +584,6 @@ function TranscriptView({
             {anonymousLabels.map((label) => {
               const value = draftAssignments[label] ?? '';
               const match = registry.find((r) => r.name.toLowerCase() === value.trim().toLowerCase());
-              const sug = autoMatch[label];
-              const autoMatched =
-                !!sug && !!sug.speaker_name && sug.confidence >= AUTO_MATCH_CONFIDENCE
-                  && value.trim().toLowerCase() === sug.speaker_name.toLowerCase();
               return (
                 <div key={label} className="flex items-center gap-2 flex-wrap">
                   <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
@@ -609,15 +598,7 @@ function TranscriptView({
                     disabled={assignSaving}
                     className="flex-1 min-w-[180px] px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
                   />
-                  {autoMatched && (
-                    <span
-                      className="text-xs font-medium px-2 py-1 rounded bg-emerald-500 text-white"
-                      title={`Voice auto-matched from ${sug.source === 'pick' ? 'your picks' : 'registry'} (confidence ${(sug.confidence * 100).toFixed(0)}%)`}
-                    >
-                      auto-matched · {(sug!.confidence * 100).toFixed(0)}%
-                    </span>
-                  )}
-                  {!autoMatched && value.trim() && (
+                  {value.trim() && (
                     <span
                       className={`text-xs font-medium px-2 py-1 rounded ${
                         match
@@ -626,14 +607,6 @@ function TranscriptView({
                       }`}
                     >
                       {match ? '↪ existing' : '＋ new speaker'}
-                    </span>
-                  )}
-                  {!value.trim() && sug && sug.speaker_name && sug.confidence < AUTO_MATCH_CONFIDENCE && (
-                    <span
-                      className="text-xs font-medium px-2 py-1 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                      title={`Best guess: ${sug.speaker_name} (${(sug.confidence * 100).toFixed(0)}% — below threshold)`}
-                    >
-                      maybe {sug.speaker_name} · {(sug.confidence * 100).toFixed(0)}%
                     </span>
                   )}
                 </div>
@@ -896,6 +869,31 @@ function TranscriptView({
             {splitError}
           </div>
         )}
+        {/* B6b: mini-banner with bulk "Accept all" when 2+ speakers are
+            auto-matched and not yet accepted/rejected. */}
+        {(() => {
+          const pending = Object.entries(autoMatches).filter(
+            ([lbl, m]) => m?.matched && !rejectedMatches[lbl] && !speakerNames[lbl]
+          );
+          if (pending.length < 2) return null;
+          return (
+            <div className="mb-3 px-3 py-2 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-sm text-indigo-700 dark:text-indigo-300 flex items-center justify-between">
+              <span>{pending.length} speakers auto-matched from your registry.</span>
+              <button
+                onClick={async () => {
+                  for (const [lbl, m] of pending) {
+                    if (m.speaker_id && m.name) {
+                      await handleAcceptAutoMatch(lbl, m.name, m.speaker_id);
+                    }
+                  }
+                }}
+                className="ml-3 px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Accept all
+              </button>
+            </div>
+          );
+        })()}
         {(showTimestamps || showSpeakers) && (draftSegments ?? result.segments) ? (
           <div className="space-y-3">
             {(draftSegments ?? result.segments ?? []).map((segment: any, index: number) => {
@@ -931,11 +929,31 @@ function TranscriptView({
                       [{formatTime(segment.start)}]
                     </button>
                   )}
-                  {showSpeakers && segment.speaker && !isEditing && (
-                    <span className="text-purple-400 font-medium text-xs sm:text-sm whitespace-nowrap pt-1">
-                      {speakerNames[segment.speaker] || segment.speaker}:
-                    </span>
-                  )}
+                  {showSpeakers && segment.speaker && !isEditing && (() => {
+                    const lbl = segment.speaker;
+                    const showBadge = (
+                      isAnonymousLabel(lbl) &&
+                      !!autoMatches[lbl]?.matched &&
+                      !rejectedMatches[lbl] &&
+                      !seenLabelsRef.current.has(lbl)
+                    );
+                    if (showBadge) seenLabelsRef.current.add(lbl);
+                    return (
+                      <span className="flex items-center gap-1 pt-1 whitespace-nowrap">
+                        <span className="text-purple-400 font-medium text-xs sm:text-sm">
+                          {speakerNames[lbl] || lbl}:
+                        </span>
+                        {showBadge && (
+                          <AutoMatchBadge
+                            label={lbl}
+                            match={autoMatches[lbl]}
+                            onAccept={handleAcceptAutoMatch}
+                            onReject={handleRejectAutoMatch}
+                          />
+                        )}
+                      </span>
+                    );
+                  })()}
                   {isEditing && segment.speaker && speakers.length > 0 && (
                     <select
                       value={segment.speaker}
