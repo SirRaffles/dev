@@ -152,6 +152,9 @@ def extract_insights_auto(job_id: str) -> int:
     try:
         # Lazy import: routes module pulls in FastAPI heavy deps; defer until
         # the worker actually runs (not at services module load).
+        # NOTE: monkeypatching this in tests requires patching the source
+        # module path (routes.transcription._extract_speaker_insights_sync).
+        # If you move this helper, update tests/test_learning.py accordingly.
         from routes.transcription import _extract_speaker_insights_sync
         result = _extract_speaker_insights_sync(job_id)
     except Exception:
@@ -174,4 +177,28 @@ def extract_insights_auto(job_id: str) -> int:
             count=1,
         )
         count += 1
+
+    # Per-speaker errors from the helper (Claude API failure, parse failure, etc.).
+    # Surface each as an insight_failed event so B7 doesn't silently drop them.
+    errors = result.get("errors", []) if isinstance(result, dict) else []
+    for err in errors:
+        # _extract_speaker_insights_sync emits errors as either a list of strings
+        # ("Name:category: <traceback snippet>") or dicts. Handle both shapes
+        # defensively — we don't own the upstream format.
+        if isinstance(err, str):
+            head, sep, reason = err.partition(":")
+            speaker_name = head.strip().split(":")[0] if sep else ""
+            err_text = (sep + reason).strip(": ").strip() if sep else err
+        elif isinstance(err, dict):
+            speaker_name = str(err.get("speaker", "")).strip()
+            err_text = str(err.get("error", err.get("reason", "")))
+        else:
+            speaker_name = ""
+            err_text = str(err)
+        record_event(
+            "insight_failed",
+            job_id=job_id,
+            speaker_name=speaker_name,
+            reason=err_text[:200],
+        )
     return count

@@ -261,3 +261,34 @@ def test_extract_insights_auto_handles_helper_exception(icloud_base, monkeypatch
     assert n == 0
     log = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8")
     assert "insight_failed" in log
+
+
+def test_extract_insights_auto_emits_insight_failed_for_per_speaker_errors(icloud_base, monkeypatch):
+    """When the helper reports per-speaker errors, emit insight_failed events
+    (so observability doesn't silently drop them)."""
+    learning = _reload_learning()
+
+    fake_result = {
+        "updated": ["Pascal:explicit"],
+        "skipped": [],
+        "errors": [
+            "David:explicit: Claude API rate limited",
+            {"speaker": "Arnaud", "error": "parse failure"},
+        ],
+    }
+    monkeypatch.setattr(
+        "routes.transcription._extract_speaker_insights_sync",
+        lambda job_id: fake_result,
+    )
+
+    n = learning.extract_insights_auto(job_id="j-errs")
+    assert n == 1  # only successes counted
+
+    log_lines = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(l) for l in log_lines]
+    failed = [e for e in events if e.get("type") == "insight_failed"]
+    assert len(failed) == 2
+    failed_speakers = {e.get("speaker_name") for e in failed}
+    # Both formats parsed: "David" from string entry, "Arnaud" from dict entry.
+    assert "David" in failed_speakers
+    assert "Arnaud" in failed_speakers
