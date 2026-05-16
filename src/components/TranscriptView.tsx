@@ -79,10 +79,6 @@ function TranscriptView({
   // B6b: inline auto-match data source — replaces the deleted post-hoc fetch.
   // `auto_speaker_matches` is fed by the refinement polling hook below.
   const [rejectedMatches, setRejectedMatches] = useState<Record<string, boolean>>({});
-  // Render the badge only on the FIRST occurrence of each label in the segment
-  // list (per user decision Q4). Use a ref to track seen labels across the
-  // .map() iteration; resets when segments change.
-  const seenLabelsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -113,10 +109,18 @@ function TranscriptView({
     [speakers],
   );
 
-  // Confidence threshold mirroring backend SPEAKER_MATCH_THRESHOLD. Above → we
-  // consider the suggestion strong enough to pre-fill the input; below → the
-  // input stays blank but the chip still surfaces the best guess.
-  const AUTO_MATCH_CONFIDENCE = 0.65;
+  // B6b: pre-compute which segment index is the FIRST occurrence of each
+  // speaker label, so the AutoMatchBadge renders exactly once per label.
+  // Computed via useMemo (pure) instead of mutating a ref during render —
+  // keeps React 18 Strict Mode safe.
+  const firstOccurrenceIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    (result?.segments ?? []).forEach((seg, i) => {
+      const spk = seg.speaker;
+      if (spk && !map.has(spk)) map.set(spk, i);
+    });
+    return map;
+  }, [result?.segments]);
 
   // B6a: poll for refinement + learning state once the job is completed.
   // The parent transcription poller stops at completion; this hook takes over
@@ -128,10 +132,6 @@ function TranscriptView({
   // old post-hoc auto-match fetch.
   const autoMatches = refineState?.auto_speaker_matches || {};
 
-  // Reset the "seen labels" tracker whenever the segments change so a
-  // re-render emits the badge on the first occurrence again.
-  useEffect(() => { seenLabelsRef.current = new Set(); }, [result?.segments]);
-
   // B6b: accept/reject handlers for the inline AutoMatchBadge. Accept reuses
   // the existing assign endpoint with create_new=false (we already know the
   // speaker exists in the registry — that's how voice-match found them).
@@ -141,6 +141,17 @@ function TranscriptView({
       // Locally rename the label so the badge disappears + the transcript
       // text updates without waiting for a full refresh.
       setSpeakerNames((prev) => ({ ...prev, [label]: name }));
+      // Also patch result.segments so exports/search/re-extract see the new
+      // name — without this, the backend has been updated but the in-memory
+      // result object holds stale SPEAKER_XX, creating a split-brain.
+      if (onResultUpdate && result?.segments) {
+        onResultUpdate({
+          ...result,
+          segments: result.segments.map(s =>
+            s.speaker === label ? { ...s, speaker: name } : s
+          ),
+        });
+      }
     } catch (e) {
       // Surface in console only — the badge stays visible for retry.
       // eslint-disable-next-line no-console
@@ -935,9 +946,8 @@ function TranscriptView({
                       isAnonymousLabel(lbl) &&
                       !!autoMatches[lbl]?.matched &&
                       !rejectedMatches[lbl] &&
-                      !seenLabelsRef.current.has(lbl)
+                      firstOccurrenceIndex.get(lbl) === index
                     );
-                    if (showBadge) seenLabelsRef.current.add(lbl);
                     return (
                       <span className="flex items-center gap-1 pt-1 whitespace-nowrap">
                         <span className="text-purple-400 font-medium text-xs sm:text-sm">
