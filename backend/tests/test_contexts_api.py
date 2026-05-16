@@ -166,3 +166,33 @@ async def test_list_subfolders(client, icloud_base):
     names = [f["name"] for f in data["folders"]]
     assert "child1" in names
     assert "child2" in names
+
+
+@pytest.mark.asyncio
+async def test_read_global_glossary_missing(client, icloud_base):
+    resp = await client.get("/contexts/_global")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["content"] == ""
+    assert body["exists"] is False
+
+
+@pytest.mark.asyncio
+async def test_write_then_read_global_glossary(client, icloud_base):
+    body_md = "# Global Glossary\n\n## Active\n\nManukai\n"
+    resp = await client.put("/contexts/_global", json={"content": body_md})
+    assert resp.status_code == 200
+    resp = await client.get("/contexts/_global")
+    body = resp.json()
+    assert body["exists"] is True
+    assert "Manukai" in body["content"]
+    assert "modified_at" in body
+
+
+@pytest.mark.asyncio
+async def test_write_global_glossary_atomic(client, icloud_base, tmp_path):
+    """The .tmp file should not linger after a successful write."""
+    await client.put("/contexts/_global", json={"content": "# Test\n"})
+    contexts_dir = icloud_base / "contexts"
+    tmp_files = list(contexts_dir.glob("*.tmp"))
+    assert tmp_files == [], f"orphan tmp file(s): {tmp_files}"

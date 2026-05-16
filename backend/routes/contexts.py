@@ -198,6 +198,44 @@ async def write_context_file(path: str, req: FileWriteRequest):
     return {"status": "saved", "path": path}
 
 
+@router.get("/contexts/_global")
+async def read_global_glossary():
+    """Read the global glossary file. Returns empty body if missing."""
+    target = CONTEXTS_DIR / "_global.md"
+    if not target.is_file():
+        return {"content": "", "exists": False}
+    try:
+        return {
+            "content": target.read_text(encoding="utf-8"),
+            "exists": True,
+            "modified_at": target.stat().st_mtime,
+        }
+    except OSError as exc:
+        logger.warning("Failed to read _global.md: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not read global glossary")
+
+
+@router.put("/contexts/_global")
+async def write_global_glossary(req: FileWriteRequest):
+    """Atomically write the global glossary file."""
+    target = CONTEXTS_DIR / "_global.md"
+    CONTEXTS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".md.tmp")
+    try:
+        tmp.write_text(req.content, encoding="utf-8")
+        tmp.replace(target)
+        return {"status": "saved", "path": "_global.md"}
+    except OSError as exc:
+        logger.error("Failed to write _global.md: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not write global glossary")
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 @router.get("/contexts/search")
 async def search_contexts(q: str = ""):
     """Search across all context and insight files."""

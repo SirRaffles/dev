@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FolderOpen, Plus, FileText, Loader2, RefreshCw, ChevronRight, Save, Eye, Edit3 } from 'lucide-react';
 import useContexts from '../hooks/useContexts';
 import { fetchContextFile, updateContextFile, ContextTree } from '../utils/api';
+import GlossaryEditor from './GlossaryEditor';
 
 function ContextBrowser() {
   const { tree, loading, error, refreshTree, addFolder } = useContexts();
@@ -57,6 +58,7 @@ function ContextBrowser() {
 
   return (
     <div className="space-y-4">
+      <GlossaryEditor />
       <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-4 sm:p-6 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">

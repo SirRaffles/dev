@@ -1029,3 +1029,24 @@ export async function extractJobSpeakerInsights(jobId: string): Promise<{
   }
   return response.json();
 }
+
+export interface GlobalGlossaryDoc {
+  content: string;
+  exists: boolean;
+  modified_at?: number;
+}
+
+export async function fetchGlobalGlossary(): Promise<GlobalGlossaryDoc> {
+  const r = await fetchWithTimeout(`${API_URL}/contexts/_global`);
+  if (!r.ok) throw new Error(`fetchGlobalGlossary failed: ${r.status}`);
+  return r.json();
+}
+
+export async function saveGlobalGlossary(content: string): Promise<void> {
+  const r = await fetchWithTimeout(`${API_URL}/contexts/_global`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!r.ok) throw new Error(`saveGlobalGlossary failed: ${r.status}`);
+}
