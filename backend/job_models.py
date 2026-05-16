@@ -29,6 +29,11 @@ class TranscriptionJob:
         self.speakers = []  # Speaker diarization results
         self.is_generated = False  # True when transcript came from auto-generated YT captions
         self._from_captions = False  # True when the job used the YouTube captions fast-path
+        # B2 (in-memory only — not persisted to SQL):
+        self.refinement_status = None       # None | "pending" | "processing" | "done" | "failed"
+        self.auto_speaker_matches = None    # Dict[str, Dict] from B5
+        self.learning_summary = None        # Dict[str, int] populated by Plan 2
+        self.learning_status = None         # "ok" | "partial" | "failed" — populated by Plan 2
 
 
 class BatchJob:
@@ -384,6 +389,8 @@ class TranscriptionSettings(BaseModel):
     context_path: Optional[str] = None  # Relative path under CONTEXTS_DIR to a .md context document
     two_pass: bool = False
     output_mode: str = "verbatim"  # "verbatim" or "readable"
+    # B2: tri-state — None = auto-on if speaker_ids or context_path set; True/False = explicit
+    auto_refine: Optional[bool] = None
 
 
 class RefinementStore:

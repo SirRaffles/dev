@@ -624,6 +624,11 @@ async def get_job_status(job_id: str):
         "status": job.status,
         "progress": job.progress,
         "progress_message": job.progress_message,
+        # B2: surface auto-refine indicators for UI polling (None when not applicable)
+        "refinement_status": getattr(job, "refinement_status", None),
+        "auto_speaker_matches": getattr(job, "auto_speaker_matches", None),
+        "learning_summary": getattr(job, "learning_summary", None),
+        "learning_status": getattr(job, "learning_status", None),
     }
 
     if job.status == "completed":
