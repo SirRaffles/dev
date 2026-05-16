@@ -192,6 +192,26 @@ function SettingsPanel({
         </button>
       </div>
 
+      {/* Engine capability disclosure — surface which post-transcription
+          features apply to the selected engine. Voxtral Cloud uses its own
+          diarization, so voice auto-match + embedding updates don't run.
+          Refinement, glossary learning, and insight extraction are
+          engine-agnostic and run for every engine. */}
+      <div className="text-xs text-slate-500 dark:text-slate-400 -mt-2 px-1">
+        {isVoxtralApi ? (
+          <span>
+            <span className="font-medium text-amber-700 dark:text-amber-400">Voxtral Cloud</span> uses its own diarization —
+            voice auto-match and embedding updates are disabled for this engine.
+            Refinement, glossary learning, and insights still run.
+          </span>
+        ) : (
+          <span>
+            Voice auto-match, refinement, glossary learning, and insights all
+            run after transcription on this engine.
+          </span>
+        )}
+      </div>
+
       {/* Output Mode Toggle */}
       <div className="flex gap-2">
         <button
