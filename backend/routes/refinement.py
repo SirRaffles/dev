@@ -3,7 +3,7 @@ Transcript refinement API routes.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -16,35 +16,87 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/refine", tags=["refinement"])
 
 
-def _run_refinement(job_id: str):
-    """Background task to run refinement on a completed transcription job."""
+def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None,
+                            context_path: Optional[str] = None):
+    """Run refinement for a completed job with the given context bundle.
+
+    Loads the same context sources transcription used (global glossary +
+    context_path + speaker bios) and feeds them to RefinementService.refine.
+    Updates the job's refinement_status and the RefinementStore row.
+    """
+    # Local imports to avoid circular load: services.glossary imports
+    # derive_context_terms from services.transcription, so importing them at
+    # module load creates a cycle.
+    from services.transcription import (
+        load_context_document,
+        load_speakers_context,
+        merge_context_sources,
+    )
+    from services.glossary import load_global_glossary, load_global_glossary_terms
+
+    job = state.job_store.get(job_id)
     try:
         state.refinement_store.update_status(job_id, "processing")
+        if job is not None:
+            job.refinement_status = "processing"
+            try:
+                state.jobs.update(job)
+            except Exception:
+                pass  # best-effort; the in-memory attr is what UI polls
 
-        # Get the original job's segments
-        job = state.job_store.get(job_id)
         if not job:
             state.refinement_store.update_status(job_id, "failed", "Job not found")
             return
 
         if job.status != "completed":
-            state.refinement_store.update_status(job_id, "failed", f"Job status is '{job.status}', not 'completed'")
+            state.refinement_store.update_status(
+                job_id, "failed", f"Job status is '{job.status}', not 'completed'"
+            )
+            if job is not None:
+                job.refinement_status = "failed"
             return
 
         if not job.segments:
             state.refinement_store.update_status(job_id, "failed", "Job has no segments")
+            if job is not None:
+                job.refinement_status = "failed"
             return
 
-        # Run refinement
-        result = state.refinement_service.refine(job.segments)
+        context_text = merge_context_sources(
+            load_global_glossary(),
+            load_context_document(context_path),
+            load_speakers_context(speaker_ids),
+        )
+        glossary_terms = load_global_glossary_terms() or None
 
-        # Save result
+        result = state.refinement_service.refine(
+            job.segments,
+            context_text=context_text,
+            glossary_terms=glossary_terms,
+        )
         state.refinement_store.save_result(job_id, result)
+        if job is not None:
+            job.refinement_status = "done"
+            try:
+                state.jobs.update(job)
+            except Exception:
+                pass
         logger.info("Refinement complete for job %s", job_id)
 
     except Exception as e:
         logger.exception("Refinement failed for job %s", job_id)
         state.refinement_store.update_status(job_id, "failed", str(e))
+        if job is not None:
+            job.refinement_status = "failed"
+            try:
+                state.jobs.update(job)
+            except Exception:
+                pass
+
+
+def _run_refinement(job_id: str):
+    """Backwards-compatible wrapper: manual route uses no extra context."""
+    _run_refinement_for_job(job_id, speaker_ids=None, context_path=None)
 
 
 @router.post("/job/{job_id}")
