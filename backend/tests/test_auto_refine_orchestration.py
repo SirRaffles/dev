@@ -82,3 +82,49 @@ def test_run_refinement_for_job_loads_context_and_calls_refine(icloud_base, monk
     assert "Manukai" in captured["context_text"]
     assert "Manukai" in (captured["glossary_terms"] or [])
     assert job.refinement_status == "done"
+
+
+def test_run_refinement_for_job_on_refine_exception_sets_failed_status(icloud_base, monkeypatch):
+    """When state.refinement_service.refine raises, the helper must mark
+    job.refinement_status = "failed" (and the store too)."""
+    from unittest.mock import MagicMock
+    from job_models import TranscriptionJob
+
+    job = TranscriptionJob("job-fail-1")
+    job.status = "completed"
+    job.segments = [{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}]
+
+    import state
+    monkeypatch.setattr(state, "job_store", MagicMock(get=MagicMock(return_value=job)))
+    monkeypatch.setattr(state, "jobs", MagicMock(update=MagicMock()))
+    rstore = MagicMock(update_status=MagicMock(), save_result=MagicMock())
+    monkeypatch.setattr(state, "refinement_store", rstore)
+    monkeypatch.setattr(state, "refinement_service",
+                        MagicMock(refine=MagicMock(side_effect=RuntimeError("boom"))))
+
+    from routes.refinement import _run_refinement_for_job
+    _run_refinement_for_job("job-fail-1", speaker_ids=None, context_path=None)
+
+    assert job.refinement_status == "failed"
+    # update_status was called with "failed" too
+    failed_calls = [c for c in rstore.update_status.call_args_list
+                    if len(c.args) >= 2 and c.args[1] == "failed"]
+    assert len(failed_calls) >= 1
+
+
+def test_run_refinement_for_job_missing_job_does_not_emit_processing(icloud_base, monkeypatch):
+    """Missing job must transition directly to failed (no pending->processing->failed)."""
+    from unittest.mock import MagicMock
+    import state
+    monkeypatch.setattr(state, "job_store", MagicMock(get=MagicMock(return_value=None)))
+    monkeypatch.setattr(state, "jobs", MagicMock(update=MagicMock()))
+    rstore = MagicMock(update_status=MagicMock(), save_result=MagicMock())
+    monkeypatch.setattr(state, "refinement_store", rstore)
+
+    from routes.refinement import _run_refinement_for_job
+    _run_refinement_for_job("missing-job", speaker_ids=None, context_path=None)
+
+    # update_status should only have been called once, with "failed"
+    statuses = [c.args[1] for c in rstore.update_status.call_args_list if len(c.args) >= 2]
+    assert "processing" not in statuses, f"unexpected processing transition: {statuses}"
+    assert "failed" in statuses

@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/refine", tags=["refinement"])
 
 
+def _set_refinement_status(job, status: str) -> None:
+    """Mirror refinement_status onto the in-memory job and persist via state.jobs.update.
+
+    Logs (debug) and swallows on persistence failure -- the in-memory attribute
+    is what UI polls.
+    """
+    if job is None:
+        return
+    job.refinement_status = status
+    try:
+        state.jobs.update(job)
+    except Exception:
+        logger.debug("jobs.update mirror failed for job %s", job.job_id, exc_info=True)
+
+
 def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None,
                             context_path: Optional[str] = None):
     """Run refinement for a completed job with the given context bundle.
@@ -35,31 +50,24 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
     from services.glossary import load_global_glossary, load_global_glossary_terms
 
     job = state.job_store.get(job_id)
+    if not job:
+        state.refinement_store.update_status(job_id, "failed", "Job not found")
+        return
+
     try:
         state.refinement_store.update_status(job_id, "processing")
-        if job is not None:
-            job.refinement_status = "processing"
-            try:
-                state.jobs.update(job)
-            except Exception:
-                pass  # best-effort; the in-memory attr is what UI polls
-
-        if not job:
-            state.refinement_store.update_status(job_id, "failed", "Job not found")
-            return
+        _set_refinement_status(job, "processing")
 
         if job.status != "completed":
             state.refinement_store.update_status(
                 job_id, "failed", f"Job status is '{job.status}', not 'completed'"
             )
-            if job is not None:
-                job.refinement_status = "failed"
+            _set_refinement_status(job, "failed")
             return
 
         if not job.segments:
             state.refinement_store.update_status(job_id, "failed", "Job has no segments")
-            if job is not None:
-                job.refinement_status = "failed"
+            _set_refinement_status(job, "failed")
             return
 
         context_text = merge_context_sources(
@@ -75,23 +83,13 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
             glossary_terms=glossary_terms,
         )
         state.refinement_store.save_result(job_id, result)
-        if job is not None:
-            job.refinement_status = "done"
-            try:
-                state.jobs.update(job)
-            except Exception:
-                pass
+        _set_refinement_status(job, "done")
         logger.info("Refinement complete for job %s", job_id)
 
     except Exception as e:
         logger.exception("Refinement failed for job %s", job_id)
         state.refinement_store.update_status(job_id, "failed", str(e))
-        if job is not None:
-            job.refinement_status = "failed"
-            try:
-                state.jobs.update(job)
-            except Exception:
-                pass
+        _set_refinement_status(job, "failed")
 
 
 def _run_refinement(job_id: str):
