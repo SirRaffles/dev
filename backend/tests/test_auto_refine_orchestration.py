@@ -128,3 +128,110 @@ def test_run_refinement_for_job_missing_job_does_not_emit_processing(icloud_base
     statuses = [c.args[1] for c in rstore.update_status.call_args_list if len(c.args) >= 2]
     assert "processing" not in statuses, f"unexpected processing transition: {statuses}"
     assert "failed" in statuses
+
+
+def test_auto_refine_decision_explicit_true():
+    from job_models import TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    assert _should_auto_refine(TranscriptionSettings(auto_refine=True)) is True
+
+
+def test_auto_refine_decision_explicit_false():
+    from job_models import TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    s = TranscriptionSettings(auto_refine=False, speaker_ids=["sp-1"])
+    assert _should_auto_refine(s) is False
+
+
+def test_auto_refine_decision_default_with_speakers():
+    from job_models import TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    s = TranscriptionSettings(speaker_ids=["sp-1"])
+    assert _should_auto_refine(s) is True
+
+
+def test_auto_refine_decision_default_with_context_path():
+    from job_models import TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    s = TranscriptionSettings(context_path="deal/notes.md")
+    assert _should_auto_refine(s) is True
+
+
+def test_auto_refine_decision_default_with_neither():
+    from job_models import TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    assert _should_auto_refine(TranscriptionSettings()) is False
+
+
+def test_dispatch_submits_to_executor_when_conditions_met(tmp_path, monkeypatch):
+    """When auto_refine triggers, _run_transcription_sync must submit
+    _run_refinement_for_job to state.transcription_executor."""
+    from unittest.mock import MagicMock, patch
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("job-A")
+    job._retry_of = None
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
+    monkeypatch.setattr(transcription.state, "refinement_available", True)
+    monkeypatch.setattr(transcription.state, "refinement_store", MagicMock(create=MagicMock()))
+
+    submitted = []
+    fake_exec = MagicMock(submit=MagicMock(side_effect=lambda *a, **k: submitted.append((a, k))))
+    monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
+
+    settings = TranscriptionSettings(
+        engine="whisper",
+        language="en",
+        enable_diarization=False,
+        enable_noise_reduction=False,
+        speaker_ids=["sp-1"],  # forces auto_refine in None mode
+    )
+
+    with patch("mlx_whisper.transcribe", return_value={
+        "segments": [{"start": 0, "end": 1, "text": "hi", "words": []}],
+        "text": "hi", "language": "en",
+    }):
+        transcription._run_transcription_sync("job-A", str(audio_path), settings)
+
+    assert fake_exec.submit.called, "auto-refine must dispatch on the transcription executor"
+    args, _ = submitted[0]
+    # First arg is the function, then positional args (job_id, speaker_ids, context_path)
+    assert args[1] == "job-A"
+    assert args[2] == ["sp-1"]
+
+
+def test_dispatch_skipped_when_refinement_unavailable(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("job-B")
+    job._retry_of = None
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "whisper_model_ready", True)
+    monkeypatch.setattr(transcription.state, "refinement_available", False)
+    fake_exec = MagicMock(submit=MagicMock())
+    monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
+
+    settings = TranscriptionSettings(
+        engine="whisper", language="en", enable_diarization=False,
+        enable_noise_reduction=False, speaker_ids=["sp-1"],
+    )
+    with patch("mlx_whisper.transcribe", return_value={
+        "segments": [{"start": 0, "end": 1, "text": "hi", "words": []}],
+        "text": "hi", "language": "en",
+    }):
+        transcription._run_transcription_sync("job-B", str(audio_path), settings)
+
+    assert not fake_exec.submit.called

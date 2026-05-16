@@ -510,6 +510,16 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     }
 
 
+def _should_auto_refine(settings: TranscriptionSettings) -> bool:
+    """B2 trigger rule. Tri-state auto_refine: explicit True/False overrides;
+    None means auto-on iff speaker_ids or context_path is set."""
+    if settings.auto_refine is True:
+        return True
+    if settings.auto_refine is False:
+        return False
+    return bool(settings.speaker_ids or settings.context_path)
+
+
 def _update_job(job, progress: int = None, message: str = None, status: str = None):
     """Update job fields and persist to DB so progress survives restarts."""
     if status is not None:
@@ -782,6 +792,27 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         job.segments = transcription_segments
         job.result = full_text
         _update_job(job, progress=100, message="Complete!", status="completed")
+        if _should_auto_refine(settings) and state.refinement_available:
+            # The submitting HTTP request returned long ago — dispatch via the
+            # transcription executor (the same pool used for jobs). The helper
+            # loads context + glossary itself.
+            try:
+                job.refinement_status = "pending"
+                state.jobs.update(job)
+            except Exception:
+                pass
+            try:
+                from routes.refinement import _run_refinement_for_job
+                state.refinement_store.create(job_id)
+                state.transcription_executor.submit(
+                    _run_refinement_for_job,
+                    job_id,
+                    settings.speaker_ids,
+                    settings.context_path,
+                )
+                logger.info("B2: auto-refine dispatched for job %s", job_id)
+            except Exception:
+                logger.exception("B2: auto-refine dispatch failed for job %s", job_id)
         model_name = "Voxtral API" if use_voxtral else ("Voxtral Local" if use_voxtral_local else ("Parakeet MLX" if use_parakeet else "MLX-Whisper"))
         logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
 
