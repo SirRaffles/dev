@@ -292,3 +292,57 @@ def test_extract_insights_auto_emits_insight_failed_for_per_speaker_errors(iclou
     # Both formats parsed: "David" from string entry, "Arnaud" from dict entry.
     assert "David" in failed_speakers
     assert "Arnaud" in failed_speakers
+
+
+def test_learn_glossary_terms_adds_high_confidence_only(icloud_base):
+    """Only confidence='high' corrections become auto-learned terms."""
+    learning = _reload_learning()
+
+    corrections = [
+        {"original": "Manuk AI", "corrected": "Manukai", "confidence": "high"},
+        {"original": "Stara", "corrected": "Starrag", "confidence": "high"},
+        {"original": "donie", "corrected": "Donny", "confidence": "medium"},  # filtered
+        {"original": "uh", "corrected": "okay", "confidence": "low"},          # filtered
+    ]
+    n = learning.learn_glossary_terms(job_id="j-glo", corrections=corrections)
+    assert n == 2
+
+    glossary_path = icloud_base / "contexts" / "_global.md"
+    body = glossary_path.read_text(encoding="utf-8")
+    assert "Manukai" in body.split("## Auto-learned (pending review)")[1]
+    assert "Starrag" in body.split("## Auto-learned (pending review)")[1]
+    assert "Donny" not in body
+    assert "okay" not in body
+
+    log = (icloud_base / "learning_log.jsonl").read_text(encoding="utf-8")
+    assert "Manukai" in log
+    assert "Starrag" in log
+
+
+def test_learn_glossary_terms_dedupe_against_active(icloud_base):
+    """If a high-confidence correction already exists in Active, don't re-add."""
+    (icloud_base / "contexts" / "_global.md").write_text(
+        "# Global Glossary\n\n## Active\n\nManukai, DMG Mori\n",
+        encoding="utf-8",
+    )
+    learning = _reload_learning()
+
+    corrections = [
+        {"original": "Manuk AI", "corrected": "Manukai", "confidence": "high"},  # already in Active
+        {"original": "BMG Mori", "corrected": "DMG Mori", "confidence": "high"},  # already in Active
+        {"original": "Stara", "corrected": "Starrag", "confidence": "high"},      # new
+    ]
+    n = learning.learn_glossary_terms(job_id="j-dedupe", corrections=corrections)
+    assert n == 1  # only Starrag is genuinely new
+
+    body = (icloud_base / "contexts" / "_global.md").read_text(encoding="utf-8")
+    pending = body.split("## Auto-learned (pending review)")[1] if "## Auto-learned (pending review)" in body else ""
+    assert "Starrag" in pending
+    assert "- Manukai" not in pending  # not re-added as a pending bullet
+    assert "- DMG Mori" not in pending
+
+
+def test_learn_glossary_terms_empty_input(icloud_base):
+    learning = _reload_learning()
+    assert learning.learn_glossary_terms(job_id="j-empty", corrections=[]) == 0
+    assert learning.learn_glossary_terms(job_id="j-none", corrections=None) == 0

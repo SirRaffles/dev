@@ -202,3 +202,61 @@ def extract_insights_auto(job_id: str) -> int:
             reason=err_text[:200],
         )
     return count
+
+
+def learn_glossary_terms(job_id: str, corrections: Optional[list]) -> int:
+    """Append high-confidence proper-noun corrections to _global.md.
+
+    Only acts on `confidence='high'` corrections. Uses the glossary helper's
+    idempotent normalization — terms already known anywhere in the file
+    (active or pending) are skipped silently.
+
+    Returns count of net-new terms added. Never raises.
+    """
+    if not corrections:
+        return 0
+
+    # Lazy import for two reasons: glossary imports from services.transcription
+    # (the circular-load issue Plan 1 documents), and we want a fresh read of
+    # the current normalized-terms set per call.
+    from services.glossary import (
+        append_auto_learned_term,
+        load_global_glossary,
+        _existing_normalized_terms,
+        _normalize_term,
+    )
+
+    body = load_global_glossary() or ""
+    known = _existing_normalized_terms(body)
+
+    added = 0
+    for c in corrections:
+        if not isinstance(c, dict):
+            continue
+        if c.get("confidence") != "high":
+            continue
+        term = (c.get("corrected") or "").strip()
+        if not term:
+            continue
+        norm = _normalize_term(term)
+        if not norm or norm in known:
+            continue
+        try:
+            append_auto_learned_term(
+                term,
+                source_job_id=job_id,
+                context_phrase=(c.get("original") or "")[:120],
+            )
+        except Exception:
+            logger.exception("append_auto_learned_term failed for %r", term)
+            continue
+        known.add(norm)  # avoid re-counting if the same term appears twice in corrections
+        record_event(
+            "glossary_add",
+            job_id=job_id,
+            term=term,
+            source_phrase=c.get("original", ""),
+            confidence="high",
+        )
+        added += 1
+    return added
