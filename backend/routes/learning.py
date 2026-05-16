@@ -20,8 +20,8 @@ MAX_LIMIT = 500
 
 @router.get("/log")
 async def get_learning_log(
-    since: Optional[str] = Query(None, description="ISO timestamp lower bound (inclusive)"),
-    type: Optional[str] = Query(None, description="Event type filter (embedding_update, glossary_add, insight_added, ...)"),
+    since: Optional[str] = Query(None, description="ISO timestamp lower bound (inclusive). Assumes ISO-8601 UTC with Z suffix."),
+    event_type: Optional[str] = Query(None, alias="type", description="Event type filter (embedding_update, glossary_add, insight_added, ...)"),
     limit: int = Query(100, ge=1, le=MAX_LIMIT, description="Max events to return (cap 500)"),
     offset: int = Query(0, ge=0, description="Skip the first N most-recent events"),
 ):
@@ -30,18 +30,19 @@ async def get_learning_log(
     if not log_path.is_file():
         return {"events": [], "total": 0, "offset": offset, "limit": limit}
 
+    # TODO: paginate at source if log exceeds ~10K events (currently reads full file).
     matching: list = []
     try:
         with open(log_path, "r", encoding="utf-8") as fh:
             for line in fh:
-                line = line.strip()
-                if not line:
+                stripped = line.strip()
+                if not stripped:
                     continue
                 try:
-                    record = json.loads(line)
+                    record = json.loads(stripped)
                 except json.JSONDecodeError:
                     continue
-                if type and record.get("type") != type:
+                if event_type and record.get("type") != event_type:
                     continue
                 if since and record.get("ts", "") < since:
                     continue

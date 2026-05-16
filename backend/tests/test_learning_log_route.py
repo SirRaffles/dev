@@ -98,7 +98,7 @@ async def test_learning_log_missing_file_returns_empty(client, icloud_base):
 
 @pytest.mark.asyncio
 async def test_learning_log_rejects_oversize_limit(client, icloud_base):
-    """limit > 500 must be clamped or rejected."""
+    """limit > 500 must be rejected (Query le=MAX_LIMIT → 422). Guards against
+    a misconfigured client requesting the entire history in one shot."""
     resp = await client.get("/learning/log?limit=10000")
-    # Either 400 or auto-clamped to 500 — both acceptable; check it doesn't OOM
-    assert resp.status_code in (200, 400, 422)
+    assert resp.status_code == 422
