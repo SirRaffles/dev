@@ -58,6 +58,12 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
     the others. Sets job.learning_summary + job.learning_status, then persists
     via state.jobs.update.
     """
+    # Plan 4A: phase pill — learning is now active.
+    from services.transcription import _update_job
+    _job = state.jobs.get(job_id)
+    if _job is not None:
+        _update_job(_job, phase="learning")
+
     from services import learning
 
     # Build {pyannote_label_or_name: speaker_name} from refined segments.
@@ -170,6 +176,9 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
         except Exception:
             logger.debug("jobs.update mirror failed for job %s", job_id, exc_info=True)
 
+        # Plan 4A: clear phase — learning workers are done, UI pill disappears.
+        _update_job(job, phase=None, _clear_phase=True)
+
 
 def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None,
                             context_path: Optional[str] = None,
@@ -199,6 +208,10 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
     try:
         state.refinement_store.update_status(job_id, "processing")
         _set_refinement_status(job, "processing")
+
+        # Plan 4A: phase pill — refinement is now active.
+        from services.transcription import _update_job
+        _update_job(job, phase="refining")
 
         if job.status != "completed":
             state.refinement_store.update_status(
