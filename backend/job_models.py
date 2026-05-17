@@ -136,6 +136,22 @@ class JobStore:
 
     def _load_active_jobs(self):
         with self._get_connection() as conn:
+            # Any "processing" job from a previous backend instance is
+            # by definition orphaned — its executor died with the old
+            # process. Mark them as failed so the UI shows a real status
+            # instead of perpetual "Transcribing…".
+            orphan_cursor = conn.execute(
+                "UPDATE jobs SET status='failed', "
+                "error='Backend restarted mid-job — please retry', "
+                "updated_at=CURRENT_TIMESTAMP "
+                "WHERE status='processing'"
+            )
+            if orphan_cursor.rowcount:
+                conn.commit()
+                logger.info(
+                    "Marked %d orphan 'processing' jobs as failed on startup",
+                    orphan_cursor.rowcount,
+                )
             cursor = conn.execute(
                 "SELECT * FROM jobs WHERE status IN ('pending', 'processing')"
             )
