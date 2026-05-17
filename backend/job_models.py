@@ -420,7 +420,6 @@ class TranscriptionSettings(BaseModel):
     # so the recording row can show "Processing" while transcription runs.
     original_filename: Optional[str] = None
     two_pass: bool = False
-    output_mode: str = "verbatim"  # "verbatim" or "readable"
     # B2: tri-state — None = auto-on if speaker_ids or context_path set; True/False = explicit
     auto_refine: Optional[bool] = None
 

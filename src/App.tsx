@@ -80,7 +80,6 @@ function App() {
     engine: 'auto-best',
     contextPath: '',
     speakerIds: [] as string[],
-    outputMode: 'verbatim',
   });
 
   const [viewMode, setViewMode] = useState<string>(ViewMode.TRANSCRIPT);
@@ -202,7 +201,6 @@ function App() {
       engine: settings.engine,
       contextPath: settings.contextPath,
       speakerIds: settings.speakerIds,
-      outputMode: settings.outputMode,
     };
 
     if (files.length > 1) {

@@ -126,12 +126,8 @@ async def transcribe_file(
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description="Path under CONTEXTS_DIR to a .md context document"),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated speaker UUIDs — their personality.md is fed to the model"),
-    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
-    if output_mode not in ("verbatim", "readable"):
-        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
-
     _validate_engine_or_400(engine)
 
     if language not in SUPPORTED_LANGUAGES:
@@ -200,7 +196,6 @@ async def transcribe_file(
             context_path=context_path,
             speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
             original_filename=_orig_filename,
-            output_mode=output_mode,
         )
 
         state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
@@ -231,7 +226,6 @@ async def transcribe_youtube(
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
-    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
     # Fail fast with 400 (not 500) on malformed URLs — checks the canonical
@@ -239,9 +233,6 @@ async def transcribe_youtube(
     from services.youtube import YOUTUBE_URL_RE
     if not YOUTUBE_URL_RE.match(request.url):
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-
-    if output_mode not in ("verbatim", "readable"):
-        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
 
     _validate_engine_or_400(engine)
 
@@ -262,21 +253,6 @@ async def transcribe_youtube(
 
         if transcript:
             segments = transcript["segments"]
-
-            # Apply readable-mode postprocessing to captions
-            if output_mode == "readable":
-                from services.postprocess import (
-                    normalize_segments, apply_readable_mode, merge_caption_segments,
-                )
-                normalize_segments(segments)
-                # Merge caption display-lines into full sentences with paragraph breaks
-                segments = merge_caption_segments(segments)
-                # Apply text transforms (filler removal, currency, sentence boundaries)
-                # but skip gap-based paragraph detection (merge already added paragraph flags)
-                apply_readable_mode(segments, detect_paragraphs=False)
-                transcript["text"] = " ".join(
-                    seg["text"].strip() for seg in segments if seg.get("text")
-                )
 
             job.status = "completed"
             job.progress = 100
@@ -336,7 +312,6 @@ async def transcribe_youtube(
             context_path=context_path,
             speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
             original_filename=_orig_filename,
-            output_mode=output_mode,
         )
 
         # Persist settings for retry capability
@@ -374,12 +349,8 @@ async def transcribe_batch(
     context_terms: Optional[str] = Query(None, description="Context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
-    output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
-    if output_mode not in ("verbatim", "readable"):
-        raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
-
     _validate_engine_or_400(engine)
 
     if language not in SUPPORTED_LANGUAGES:
@@ -417,7 +388,6 @@ async def transcribe_batch(
             context_path=context_path,
             speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
             original_filename=_orig_filename,
-            output_mode=output_mode,
         )
 
         # Audit #6: persist via JobStore.create() BEFORE upload so an oversize

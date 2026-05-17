@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FileAudio, Languages, Globe, Users, Volume2, VolumeX, FolderOpen, BookOpen } from 'lucide-react';
+import { Languages, Globe, Users, Volume2, VolumeX, FolderOpen } from 'lucide-react';
 import { LANGUAGES, fetchContextTree, ContextTree, fetchSpeakers, createSpeaker, Speaker } from '../utils/api';
 import QualityDial, { QualityMode } from './QualityDial';
 
@@ -12,7 +12,6 @@ interface Settings {
   engine?: QualityMode;          // 'auto-best' | 'auto-quick'
   contextPath?: string;          // path under CONTEXTS_DIR to a .md file or folder
   speakerIds?: string[];         // expected speakers — their personality.md feeds the prompt
-  outputMode?: string;
   [key: string]: any;
 }
 
@@ -38,7 +37,6 @@ function SettingsPanel({
     engine = 'auto-best',
     contextPath = '',
     speakerIds = [] as string[],
-    outputMode = 'verbatim',
   } = settings;
 
   const handleChange = (key: string, value: any) => {
@@ -165,39 +163,6 @@ function SettingsPanel({
         onChange={(next) => handleChange('engine', next)}
         disabled={disabled}
       />
-
-      {/* Output Mode Toggle */}
-      <div className="flex gap-2">
-        <button
-          onClick={() => handleChange('outputMode', 'verbatim')}
-          disabled={disabled}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
-            outputMode === 'verbatim'
-              ? 'bg-blue-500 text-white'
-              : 'bg-slate-200 text-slate-600 border border-slate-300 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600'
-          }`}
-        >
-          <FileAudio className="w-4 h-4" />
-          Verbatim
-        </button>
-        <button
-          onClick={() => handleChange('outputMode', 'readable')}
-          disabled={disabled}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all disabled:opacity-50 ${
-            outputMode === 'readable'
-              ? 'bg-teal-500 text-white'
-              : 'bg-slate-200 text-slate-600 border border-slate-300 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          Readable
-        </button>
-      </div>
-      {outputMode === 'readable' && (
-        <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
-          Removes filler words, adds sentence breaks and paragraphs, formats numbers and currency.
-        </p>
-      )}
 
       {/* Settings Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

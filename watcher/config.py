@@ -27,7 +27,6 @@ TRANSCRIPTION_SETTINGS = {
     "word_timestamps": False,
     "translate_to_english": False,
     "engine": "auto-best",
-    "output_mode": "readable",
 }
 
 # Call intelligence: auto-register calls and identify speakers after transcription

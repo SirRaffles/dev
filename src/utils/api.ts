@@ -116,7 +116,6 @@ export interface TranscriptionOptions {
   // Quality dial mode — backend orchestrator picks the actual engine + model.
   engine?: 'auto-best' | 'auto-quick';
   translateToEnglish?: boolean;
-  outputMode?: string;
   numSpeakers?: number;
   contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
   speakerIds?: string[];  // Expected speakers — their personality.md is merged into the prompt
@@ -228,7 +227,6 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     enable_noise_reduction: String(options.enableNoiseReduction ?? false),
     translate_to_english: String(options.translateToEnglish ?? false),
     engine: options.engine || 'auto-best',
-    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
@@ -277,7 +275,6 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
     engine: options.engine || 'auto-best',
-    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
@@ -401,7 +398,6 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
     enable_diarization: String(options.enableDiarization ?? true),
     translate_to_english: String(options.translateToEnglish ?? false),
     engine: options.engine || 'auto-best',
-    output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {

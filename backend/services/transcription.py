@@ -16,7 +16,7 @@ from config import ICLOUD_BASE_PATH, MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
 from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
-from services.postprocess import normalize_segments, apply_readable_mode
+from services.postprocess import normalize_segments
 import state
 
 logger = logging.getLogger(__name__)

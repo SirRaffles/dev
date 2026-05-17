@@ -29,7 +29,7 @@ from services.diarization import (
     assign_speakers_time_proportional,
     stitch_speaker_turns,
 )
-from services.postprocess import normalize_segments, apply_readable_mode
+from services.postprocess import normalize_segments
 from services.audio import apply_noise_reduction
 import state
 
@@ -267,11 +267,6 @@ def orchestrate_transcription(
 
         _update_job(job, progress=70, message="Processing segments...")
         normalize_segments(transcription_segments)
-        if settings.output_mode == "readable":
-            apply_readable_mode(transcription_segments)
-            full_text = " ".join(
-                seg["text"].strip() for seg in transcription_segments if seg.get("text")
-            )
 
         _update_job(job, progress=90, message="Finalizing...")
         job.segments = transcription_segments
