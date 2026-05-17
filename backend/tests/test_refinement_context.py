@@ -482,3 +482,68 @@ def test_run_refinement_for_job_builds_speaker_turns_from_job_speakers(monkeypat
         {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
         {"start": 5.0, "end": 6.0, "speaker": "SPEAKER_01"},
     ]
+
+
+def test_refine_end_to_end_applies_speaker_corrections_to_refined_segments():
+    """Acceptance gate for Sub-plan B: a refine() call with speaker_turns
+    + a mocked Sonnet response that includes speaker_corrections must
+    produce refined_segments where the targeted segment has the corrected
+    speaker AND the segment text is unchanged."""
+    svc = _make_service()
+
+    segments = [
+        {"start": 0.0, "end": 5.0, "text": "So what do you think of the proposal",
+         "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 5.5, "text": "Yes",
+         "speaker": "SPEAKER_00"},  # mis-attributed interjection
+        {"start": 5.5, "end": 12.0, "text": "I think it's a good idea",
+         "speaker": "SPEAKER_00"},
+    ]
+    speaker_turns = [
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 5.5, "speaker": "SPEAKER_01"},
+        {"start": 5.5, "end": 12.0, "speaker": "SPEAKER_00"},
+    ]
+
+    # Mock Sonnet's response: it identifies the segment 1 interjection as
+    # being by SPEAKER_01, and renames both labels via the speakers list.
+    sonnet_response = {
+        "language": "en",
+        "domain": "business meeting",
+        "summary": "Two speakers discuss a proposal.",
+        "speakers": [
+            {"label": "SPEAKER_00", "name": "David",
+             "confidence": "high", "reasoning": "self-introduced"},
+            {"label": "SPEAKER_01", "name": "Pascal",
+             "confidence": "high", "reasoning": "self-introduced"},
+        ],
+        "corrections": [],
+        "uncertain_terms": [],
+        "speaker_corrections": [
+            {"segment_index": 1, "speaker": "Pascal",
+             "reason": "brief affirmation mid-David turn, matches pyannote SPEAKER_01"},
+        ],
+    }
+
+    with patch("services.refinement._run_claude", return_value=sonnet_response):
+        result = svc.refine(segments, speaker_turns=speaker_turns)
+
+    refined = result["refined_segments"]
+    # Segment 0: SPEAKER_00 -> David via speaker_mapping
+    assert refined[0]["speaker"] == "David"
+    assert refined[0]["text"] == "So what do you think of the proposal"
+    # Segment 1: speaker_mapping renames SPEAKER_00 -> David, then
+    # speaker_corrections overrides to Pascal
+    assert refined[1]["speaker"] == "Pascal"
+    assert refined[1]["text"] == "Yes", (
+        "Combo C must NEVER mutate segment.text"
+    )
+    # Segment 2: SPEAKER_00 -> David
+    assert refined[2]["speaker"] == "David"
+    assert refined[2]["text"] == "I think it's a good idea"
+
+    # Speaker mapping reflects the rename (not the per-segment correction).
+    assert result["speaker_mapping"] == {
+        "SPEAKER_00": "David",
+        "SPEAKER_01": "Pascal",
+    }
