@@ -843,7 +843,9 @@ Expected: 0 errors. (`Segment` and `Speaker` are pre-existing exports from `src/
 - [ ] **Step 5: Commit**
 
 ```bash
-git status --short  # confirm only SpeakerReviewPanel.tsx is new
+# Expected: SpeakerReviewPanel.tsx is NEW; TranscriptView.tsx is MODIFIED
+# (Step 2 added `export` to ANON_SPEAKER_RE and isAnonymousLabel).
+git status --short
 
 git stash push -u -m "sub5B-task3-stash" -- \
   backend/ deploy/ scripts/ Tests/ *.m4a \
@@ -852,8 +854,11 @@ git stash push -u -m "sub5B-task3-stash" -- \
   src/hooks/useContexts.ts src/hooks/useSpeakers.ts \
   src/utils/api.ts
 
-git add src/components/SpeakerReviewPanel.tsx
-git commit -m "feat(ui): add SpeakerReviewPanel — consolidated post-completion review (Plan 5)"
+# Commit BOTH new panel and the export change. Without TranscriptView.tsx
+# the committed snapshot would import a non-exported symbol — tsc passes
+# locally only because the export edit lives in the working tree.
+git add src/components/SpeakerReviewPanel.tsx src/components/TranscriptView.tsx
+git commit -m "feat(ui): add SpeakerReviewPanel + export isAnonymousLabel from TranscriptView (Plan 5)"
 git stash pop
 ```
 
