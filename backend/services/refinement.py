@@ -220,7 +220,8 @@ class RefinementService:
             logger.warning("duckduckgo-search not installed, web verification disabled")
 
     def analyze(self, segments: list, context_text: Optional[str] = None,
-                glossary_terms: Optional[List[str]] = None) -> dict:
+                glossary_terms: Optional[List[str]] = None,
+                speaker_turns: Optional[List[dict]] = None) -> dict:
         """
         Send transcript to Claude for analysis.
 
@@ -228,7 +229,17 @@ class RefinementService:
         and `glossary_terms` (proper-noun list) are prepended as a `## Known context`
         block that tells Claude these terms are present in the audio's domain.
 
-        Returns structured dict with speakers, corrections, uncertain_terms.
+        Optional `speaker_turns` (pyannote turn list:
+        [{"start": float, "end": float, "speaker": str}, ...]) enables Combo C
+        semantic diarization polish: the prompt gains a `## Diarization context`
+        block listing the turns and instructing Sonnet to emit a
+        `speaker_corrections` array for any segments whose speaker should change
+        based on conversational turn-taking cues. Turn list is capped at 50
+        entries for prompt budget.
+
+        Returns structured dict with speakers, corrections, uncertain_terms,
+        and (when speaker_turns was provided and Sonnet found mis-attributions)
+        speaker_corrections.
         """
         transcript_text = _build_transcript_text(segments)
 
@@ -252,7 +263,41 @@ class RefinementService:
                 parts.append(f"\nSpeaker context:\n{context_text.strip()}\n")
             known_context_block = "\n".join(parts) + "\n---\n\n"
 
-        prompt = f"""{known_context_block}Analyze this transcript and return a JSON object with the following structure:
+        # Combo C — semantic diarization polish prompt block.
+        # Emitted only when pyannote turn data is available. Turn list is
+        # capped at 50 entries to bound prompt size on long recordings.
+        diarization_block = ""
+        speaker_corrections_example = ""
+        if speaker_turns:
+            turn_lines = []
+            for turn in speaker_turns[:50]:
+                t_start = float(turn.get("start", 0))
+                t_end = float(turn.get("end", 0))
+                t_spk = str(turn.get("speaker", "")).strip() or "UNKNOWN"
+                turn_lines.append(f"[{t_start:.2f}s-{t_end:.2f}s] {t_spk}")
+            turns_csv = "\n".join(turn_lines)
+            diarization_block = (
+                "## Diarization context\n\n"
+                "Pyannote detected the following speaker turns:\n"
+                f"{turns_csv}\n\n"
+                "The current segment->speaker assignments may have mis-attributions "
+                "where a brief interjection (e.g. \"yes\", \"right\", \"exactly\") "
+                "was assigned to the dominant speaker of the segment instead of the "
+                "interjector. Review each segment and emit a `speaker_corrections` "
+                "array for any segments whose speaker should change based on:\n"
+                "- Conversational turn-taking cues (brief acknowledgments mid-sentence)\n"
+                "- Sentence-boundary semantics (a sentence should not change speaker mid-flow)\n"
+                "- Direct address patterns (\"Pascal, what do you think?\")\n\n"
+                "Only emit corrections you're confident in. Do NOT rewrite segment text.\n"
+                "---\n\n"
+            )
+            speaker_corrections_example = (
+                ',\n  "speaker_corrections": [\n'
+                '    {"segment_index": 12, "speaker": "corrected speaker label or name", "reason": "brief justification"}\n'
+                '  ]'
+            )
+
+        prompt = f"""{known_context_block}{diarization_block}Analyze this transcript and return a JSON object with the following structure:
 {{
   "language": "ISO 639-1 code",
   "domain": "brief topic description",
@@ -263,7 +308,7 @@ class RefinementService:
   "corrections": [
     {{"original": "misspelled term", "corrected": "correct spelling", "confidence": "high|medium|low"}}
   ],
-  "uncertain_terms": ["terms needing web verification"]
+  "uncertain_terms": ["terms needing web verification"]{speaker_corrections_example}
 }}
 
 Rules:
