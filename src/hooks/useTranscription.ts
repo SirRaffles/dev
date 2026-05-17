@@ -188,6 +188,7 @@ export function useTranscription() {
     progressMessage: job.progressMessage,
     result: job.result,
     error: job.error,
+    phase: job.phase,
     batchId,
     batchProgress,
     batchResults,

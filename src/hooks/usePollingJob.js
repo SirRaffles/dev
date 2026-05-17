@@ -11,6 +11,7 @@ export function usePollingJob(fetchStatusFn) {
   const [progressMessage, setProgressMessage] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [phase, setPhase] = useState(null);
 
   const pollIntervalRef = useRef(null);
   const pollCountRef = useRef(0);
@@ -51,6 +52,7 @@ export function usePollingJob(fetchStatusFn) {
 
       setProgress(nextProgress);
       setProgressMessage(data.progress_message || '');
+      setPhase(data.phase ?? null);
 
       if (data.status === 'completed') {
         setResult(data);
@@ -116,6 +118,7 @@ export function usePollingJob(fetchStatusFn) {
     setProgressMessage('');
     setResult(null);
     setError(null);
+    setPhase(null);
   }, [stopPolling]);
 
   const updateResult = useCallback((newResult) => {
@@ -129,6 +132,7 @@ export function usePollingJob(fetchStatusFn) {
     progressMessage,
     result,
     error,
+    phase,
     startJob,
     failJob,
     reset,

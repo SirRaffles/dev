@@ -21,12 +21,15 @@ export default function useProcessingState(file) {
     progress: isDocumentMode ? multiModal.progress : transcription.progress,
     progressMessage: isDocumentMode ? multiModal.progressMessage : transcription.progressMessage,
     jobId: isDocumentMode ? multiModal.jobId : transcription.jobId,
+    // Sub-plan A surfaces orchestrator pipeline phase via /job/{id}.phase
+    phase: isDocumentMode ? null : (transcription.phase ?? null),
   }), [
     isDocumentMode,
     multiModal.result, multiModal.error, multiModal.isProcessing,
     multiModal.progress, multiModal.progressMessage, multiModal.jobId,
     transcription.result, transcription.error, transcription.isTranscribing,
     transcription.progress, transcription.progressMessage, transcription.jobId,
+    transcription.phase,
   ]);
 
   const resetAll = () => {

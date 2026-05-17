@@ -61,6 +61,9 @@ export interface JobStatus {
   auto_speaker_matches?: Record<string, AutoSpeakerMatch> | null;
   learning_summary?: LearningSummary | null;
   learning_status?: LearningStatus;
+  // Sub-plan A: orchestrator's current pipeline phase
+  // ("diarizing" | "transcribing" | "aligning" | "refining" | "learning" | null)
+  phase?: string | null;
 }
 
 export async function fetchJobAutoRefineState(jobId: string): Promise<{
@@ -68,6 +71,7 @@ export async function fetchJobAutoRefineState(jobId: string): Promise<{
   learning_status: LearningStatus;
   learning_summary: LearningSummary | null;
   auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
+  phase: string | null;
 }> {
   const res = await fetchWithTimeout(`${API_URL}/job/${jobId}`);
   if (!res.ok) throw new Error(`fetchJobAutoRefineState failed: ${res.status}`);
@@ -77,6 +81,7 @@ export async function fetchJobAutoRefineState(jobId: string): Promise<{
     learning_status: j.learning_status ?? null,
     learning_summary: j.learning_summary ?? null,
     auto_speaker_matches: j.auto_speaker_matches ?? null,
+    phase: j.phase ?? null,
   };
 }
 

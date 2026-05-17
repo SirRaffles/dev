@@ -6,6 +6,7 @@ interface AutoRefineState {
   learning_status: LearningStatus;
   learning_summary: LearningSummary | null;
   auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
+  phase: string | null;
 }
 
 const TERMINAL_STATES = new Set<string>(['done', 'failed']);
