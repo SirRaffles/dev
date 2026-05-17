@@ -443,6 +443,22 @@ Return ONLY the JSON object, no other text."""
             if speaker in speaker_mapping:
                 seg["speaker"] = speaker_mapping[speaker]
 
+        # Combo C — apply speaker_corrections AFTER speaker_mapping so Sonnet's
+        # per-segment overrides win over the bulk SPEAKER_XX -> name rename.
+        # Hard guardrail: this loop mutates seg["speaker"] ONLY. It must never
+        # touch seg["text"]. Out-of-range indexes are silently skipped
+        # (defensive against Sonnet hallucinating a segment index).
+        for sc in analysis.get("speaker_corrections", []) or []:
+            if not isinstance(sc, dict):
+                continue
+            idx = sc.get("segment_index")
+            new_speaker = sc.get("speaker")
+            if not isinstance(idx, int) or idx < 0 or idx >= len(refined):
+                continue
+            if not new_speaker or not isinstance(new_speaker, str):
+                continue
+            refined[idx]["speaker"] = new_speaker
+
         return refined, speaker_mapping, corrections_applied
 
     def refine(self, segments: list, context_text: Optional[str] = None,

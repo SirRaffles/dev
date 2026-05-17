@@ -259,3 +259,116 @@ def test_analyze_returns_speaker_corrections_from_sonnet_response():
         {"segment_index": 12, "speaker": "Pascal",
          "reason": "interruption mid-David turn"},
     ]
+
+
+def test_apply_corrections_mutates_speaker_per_speaker_corrections():
+    """speaker_corrections in the analysis dict must update segment[i].speaker
+    for the specified segment_index."""
+    svc = _make_service()
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Hello",  "speaker": "SPEAKER_00"},
+        {"start": 1.0, "end": 2.0, "text": "Yes",    "speaker": "SPEAKER_00"},
+        {"start": 2.0, "end": 3.0, "text": "Right",  "speaker": "SPEAKER_00"},
+    ]
+    analysis = {
+        "speakers": [],
+        "corrections": [],
+        "speaker_corrections": [
+            {"segment_index": 1, "speaker": "SPEAKER_01", "reason": "interjection"},
+        ],
+    }
+    refined, _mapping, _count = svc.apply_corrections(segments, analysis)
+    assert refined[0]["speaker"] == "SPEAKER_00"
+    assert refined[1]["speaker"] == "SPEAKER_01"  # corrected
+    assert refined[2]["speaker"] == "SPEAKER_00"
+
+
+def test_apply_corrections_speaker_corrections_never_touches_text():
+    """Hard guardrail: the speaker_corrections loop must NEVER mutate
+    segment.text — even if Sonnet's response includes an unrelated text
+    correction that overlaps the segment, the speaker_corrections path
+    itself does not touch text. (Text corrections still flow through the
+    existing corrections path.)"""
+    svc = _make_service()
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Hello world", "speaker": "SPEAKER_00"},
+    ]
+    analysis = {
+        "speakers": [],
+        "corrections": [],  # no text corrections
+        "speaker_corrections": [
+            {"segment_index": 0, "speaker": "SPEAKER_01",
+             "reason": "actually the other speaker"},
+        ],
+    }
+    refined, _mapping, count = svc.apply_corrections(segments, analysis)
+    assert refined[0]["text"] == "Hello world", (
+        "speaker_corrections must NEVER mutate segment.text"
+    )
+    assert refined[0]["speaker"] == "SPEAKER_01"
+    # count is the number of TEXT corrections applied, which is 0 here.
+    assert count == 0
+
+
+def test_apply_corrections_skips_out_of_range_segment_index():
+    """Defensive: Sonnet may hallucinate an index. Out-of-range entries
+    are silently skipped (no exception, no mutation of any segment)."""
+    svc = _make_service()
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Hello", "speaker": "SPEAKER_00"},
+    ]
+    analysis = {
+        "speakers": [],
+        "corrections": [],
+        "speaker_corrections": [
+            {"segment_index": 99, "speaker": "Ghost", "reason": "out of range"},
+            {"segment_index": -1, "speaker": "Negative", "reason": "negative index"},
+        ],
+    }
+    refined, _mapping, _count = svc.apply_corrections(segments, analysis)
+    assert refined[0]["speaker"] == "SPEAKER_00"  # unchanged
+
+
+def test_apply_corrections_no_op_when_speaker_corrections_absent():
+    """Backward compat: analysis dicts without speaker_corrections must
+    behave exactly as before — speaker_mapping still applies, but no
+    additional speaker mutation happens."""
+    svc = _make_service()
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Hello", "speaker": "SPEAKER_00"},
+    ]
+    analysis = {
+        "speakers": [
+            {"label": "SPEAKER_00", "name": "David",
+             "confidence": "high", "reasoning": "self-introduction"},
+        ],
+        "corrections": [],
+        # speaker_corrections absent
+    }
+    refined, mapping, _count = svc.apply_corrections(segments, analysis)
+    assert refined[0]["speaker"] == "David"  # speaker_mapping applied
+    assert mapping == {"SPEAKER_00": "David"}
+
+
+def test_apply_corrections_speaker_corrections_overrides_speaker_mapping():
+    """When both apply, speaker_corrections wins because it's applied
+    AFTER the speaker_mapping rename. This lets Sonnet correct a
+    mis-mapped speaker on a per-segment basis."""
+    svc = _make_service()
+    segments = [
+        {"start": 0.0, "end": 1.0, "text": "Hi",   "speaker": "SPEAKER_00"},
+        {"start": 1.0, "end": 2.0, "text": "Yes",  "speaker": "SPEAKER_00"},
+    ]
+    analysis = {
+        "speakers": [
+            {"label": "SPEAKER_00", "name": "David",
+             "confidence": "high", "reasoning": "..."},
+        ],
+        "corrections": [],
+        "speaker_corrections": [
+            {"segment_index": 1, "speaker": "Pascal", "reason": "interjection"},
+        ],
+    }
+    refined, _mapping, _count = svc.apply_corrections(segments, analysis)
+    assert refined[0]["speaker"] == "David"   # speaker_mapping applied
+    assert refined[1]["speaker"] == "Pascal"  # speaker_corrections overrides
