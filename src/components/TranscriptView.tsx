@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, Sparkles, Scissors } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, Speaker, fetchJobStatus } from '../utils/api';
+import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchJobStatus } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
@@ -85,20 +85,6 @@ function TranscriptView({
   const [tempSpeakerName, setTempSpeakerName] = useState('');
   const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
   const [speakerError, setSpeakerError] = useState<string | null>(null);
-
-  // Post-transcription speaker assignment.
-  //   registry: known speakers (for autocomplete in the legacy "Rename
-  //   Speakers" block — the consolidated SpeakerReviewPanel fetches its own
-  //   copy independently).
-  const [registry, setRegistry] = useState<Speaker[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchSpeakers()
-      .then((list) => { if (!cancelled) setRegistry(list); })
-      .catch(() => { /* silent */ });
-    return () => { cancelled = true; };
-  }, []);
 
   // Confirmation modals
   const [confirmSave, setConfirmSave] = useState(false);
