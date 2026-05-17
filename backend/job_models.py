@@ -272,6 +272,16 @@ class JobStore:
                 for jid in to_evict[:len(self._cache) - 500]:
                     del self._cache[jid]
 
+    def update_settings(self, job_id: str, settings: dict) -> None:
+        """Replace the stored settings JSON for a job."""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "UPDATE jobs SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                    (json.dumps(settings) if settings else None, job_id),
+                )
+                conn.commit()
+
     def delete(self, job_id: str):
         with self._lock:
             self._cache.pop(job_id, None)
@@ -387,6 +397,11 @@ class TranscriptionSettings(BaseModel):
     engine: str = "voxtral-local"
     context_terms: Optional[List[str]] = None
     context_path: Optional[str] = None  # Relative path under CONTEXTS_DIR to a .md context document
+    speaker_ids: Optional[List[str]] = None  # Expected speakers — their personality.md is merged into the prompt
+    # Original file name as the user sees it (e.g. "IMPACT & ACN catch-up.m4a").
+    # Used by /jpr/recordings to correlate an in-flight job with its JPR file
+    # so the recording row can show "Processing" while transcription runs.
+    original_filename: Optional[str] = None
     two_pass: bool = False
     output_mode: str = "verbatim"  # "verbatim" or "readable"
     # B2: tri-state — None = auto-on if speaker_ids or context_path set; True/False = explicit

@@ -412,8 +412,30 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     if initial_prompt:
         logger.info("Using context document (%d chars of prompt)", len(initial_prompt))
 
-    # Get total duration to determine chunking
-    total_duration = _get_audio_duration(audio_path)
+    # A2 (Voxtral parity): trim leading silence before transcription. JPR
+    # recordings often start with several seconds of silence or a jingle that
+    # confuses Voxtral's first-chunk language detector (we've seen Arabic
+    # script hallucinated on English calls). Whisper had this same issue
+    # pre-Plan-1; the trim helpers in services/audio.py already exist.
+    from services.audio import find_first_speech_offset, make_trimmed_audio
+    voxtral_audio_path = audio_path
+    voxtral_trim_offset = 0.0
+    voxtral_trimmed_temp_path = None
+    try:
+        voxtral_trim_offset = find_first_speech_offset(audio_path)
+    except Exception:
+        logger.warning("VAD trim probe failed for Voxtral Local; using full audio", exc_info=True)
+    if voxtral_trim_offset > 0:
+        try:
+            voxtral_trimmed_temp_path = make_trimmed_audio(audio_path, voxtral_trim_offset)
+            voxtral_audio_path = voxtral_trimmed_temp_path
+            logger.info("A2 (Voxtral): trimmed %.2fs of leading silence", voxtral_trim_offset)
+        except Exception:
+            logger.warning("VAD trim failed for Voxtral Local; using full audio", exc_info=True)
+            voxtral_trim_offset = 0.0
+
+    # Get total duration to determine chunking (against the trimmed audio).
+    total_duration = _get_audio_duration(voxtral_audio_path)
     if total_duration <= 0:
         total_duration = CHUNK_DURATION  # fallback: treat as single chunk
 
@@ -429,12 +451,12 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
         if chunk_dur < 0.5:
             break
 
-        # Extract chunk as WAV
+        # Extract chunk as WAV (from the possibly-trimmed audio).
         with tempfile.NamedTemporaryFile(prefix="whisper-vox-chunk-", suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
-            if not _extract_audio_chunk(audio_path, chunk_start, chunk_dur, tmp_path):
+            if not _extract_audio_chunk(voxtral_audio_path, chunk_start, chunk_dur, tmp_path):
                 logger.warning("Failed to extract chunk %d (%.1fs-%.1fs), skipping", i, chunk_start, chunk_start + chunk_dur)
                 continue
 
@@ -472,9 +494,11 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
                 chunk_text = str(result).strip()
 
             if chunk_text and chunk_text != ".":
+                # A2 (Voxtral): restore segment timestamps to the original
+                # audio time base (chunk_start is relative to the trimmed audio).
                 segments.append({
-                    "start": chunk_start,
-                    "end": chunk_start + chunk_dur,
+                    "start": chunk_start + voxtral_trim_offset,
+                    "end": chunk_start + chunk_dur + voxtral_trim_offset,
                     "text": chunk_text,
                 })
                 all_text_parts.append(chunk_text)
@@ -502,6 +526,13 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
                 pass
 
     full_text = " ".join(all_text_parts)
+
+    # A2 (Voxtral): clean up the VAD-trimmed temp file (if we made one).
+    if voxtral_trimmed_temp_path:
+        try:
+            os.unlink(voxtral_trimmed_temp_path)
+        except OSError:
+            pass
 
     return {
         "text": full_text,
