@@ -174,3 +174,167 @@ def test_model_size_field_is_gone():
     from job_models import TranscriptionSettings
     s = TranscriptionSettings()
     assert "model_size" not in s.model_dump()
+
+
+# --- Plan 4A Task 6: orchestrator dispatch + phase transitions ---
+
+
+def test_orchestrate_best_dispatches_whisper(tmp_path, monkeypatch):
+    """Best mode calls transcribe_with_whisper, not transcribe_with_parakeet."""
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import orchestrator, transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("orch-best")
+    job._retry_of = None
+    calls = {"whisper": 0, "parakeet": 0}
+
+    def fake_whisper(*a, **k):
+        calls["whisper"] += 1
+        return {"segments": [{"start": 0, "end": 1, "text": "hi"}], "text": "hi", "language": "en"}
+
+    def fake_parakeet(*a, **k):
+        calls["parakeet"] += 1
+        return {"segments": [], "text": "", "language": "en"}
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "refinement_available", False)
+    monkeypatch.setattr(orchestrator, "transcribe_with_whisper", fake_whisper)
+    monkeypatch.setattr(orchestrator, "transcribe_with_parakeet", fake_parakeet)
+    monkeypatch.setattr(orchestrator, "run_diarization", lambda *a, **k: [])
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    settings = TranscriptionSettings(engine="auto-best", language="en",
+                                     enable_diarization=False, enable_noise_reduction=False)
+    orchestrator.orchestrate_transcription("orch-best", str(audio_path), settings, mode="best")
+
+    assert calls["whisper"] == 1
+    assert calls["parakeet"] == 0
+
+
+def test_orchestrate_quick_dispatches_parakeet(tmp_path, monkeypatch):
+    """Quick mode calls transcribe_with_parakeet (multilingual v3), not Whisper."""
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import orchestrator, transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("orch-quick")
+    job._retry_of = None
+    calls = {"whisper": 0, "parakeet": 0, "parakeet_key": None}
+
+    def fake_whisper(*a, **k):
+        calls["whisper"] += 1
+        return {"segments": [], "text": "", "language": "en"}
+
+    def fake_parakeet(audio_path, model_key=None):
+        calls["parakeet"] += 1
+        calls["parakeet_key"] = model_key
+        return {"segments": [{"start": 0, "end": 1, "text": "hi"}], "text": "hi", "language": "multi"}
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "_parakeet_available", True)
+    monkeypatch.setattr(transcription.state, "refinement_available", False)
+    monkeypatch.setattr(orchestrator, "transcribe_with_whisper", fake_whisper)
+    monkeypatch.setattr(orchestrator, "transcribe_with_parakeet", fake_parakeet)
+    monkeypatch.setattr(orchestrator, "run_diarization", lambda *a, **k: [])
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    settings = TranscriptionSettings(engine="auto-quick", language="en",
+                                     enable_diarization=False, enable_noise_reduction=False)
+    orchestrator.orchestrate_transcription("orch-quick", str(audio_path), settings, mode="quick")
+
+    assert calls["parakeet"] == 1
+    assert calls["whisper"] == 0
+    # Multilingual v3 covers EN+FR per the spec.
+    assert calls["parakeet_key"] == "parakeet-multi-v3"
+
+
+def test_orchestrate_emits_phase_transitions(tmp_path, monkeypatch):
+    """Best mode writes phases in order: diarizing+transcribing → aligning → None (completed)."""
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import orchestrator, transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("orch-phases")
+    job._retry_of = None
+    phase_history = []
+
+    real_update = transcription._update_job
+    def tracking_update(j, **kw):
+        if "phase" in kw or kw.get("_clear_phase"):
+            phase_history.append(kw.get("phase"))
+        real_update(j, **kw)
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "refinement_available", False)
+    monkeypatch.setattr(transcription, "_update_job", tracking_update)
+    monkeypatch.setattr(orchestrator, "_update_job", tracking_update)
+    monkeypatch.setattr(orchestrator, "transcribe_with_whisper",
+                        lambda *a, **k: {"segments": [{"start": 0, "end": 1, "text": "hi"}],
+                                         "text": "hi", "language": "en"})
+    # Return non-empty diarization so the `aligning` branch fires.
+    monkeypatch.setattr(orchestrator, "run_diarization",
+                        lambda *a, **k: [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}])
+    monkeypatch.setattr(orchestrator, "assign_speakers_to_segments",
+                        lambda segs, sp: [{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
+    monkeypatch.setattr(orchestrator, "stitch_speaker_turns", lambda segs: segs)
+    # B5 auto-match runs only if refinement_available — keep False to skip it here.
+    monkeypatch.setenv("HF_TOKEN", "fake")
+
+    settings = TranscriptionSettings(engine="auto-best", language="en",
+                                     enable_diarization=True, enable_noise_reduction=False)
+    orchestrator.orchestrate_transcription("orch-phases", str(audio_path), settings, mode="best")
+
+    # Expected order per spec Phase Lifecycle table:
+    # diarizing (parallel start) → transcribing (dominant) → aligning → None (completed).
+    assert "diarizing" in phase_history
+    assert "transcribing" in phase_history
+    assert "aligning" in phase_history
+    assert phase_history[-1] is None, f"final phase write must clear, got {phase_history}"
+
+
+def test_orchestrate_best_dispatches_refinement_when_auto_refine_fires(tmp_path, monkeypatch):
+    """When _should_auto_refine() returns True and refinement is available,
+    Best mode submits _run_refinement_for_job onto the transcription executor."""
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import orchestrator, transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    job = TranscriptionJob("orch-refine")
+    job._retry_of = None
+    submitted = []
+    fake_exec = MagicMock(submit=MagicMock(side_effect=lambda *a, **k: submitted.append((a, k))))
+
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+    monkeypatch.setattr(transcription.state, "refinement_available", True)
+    monkeypatch.setattr(transcription.state, "refinement_store", MagicMock(create=MagicMock()))
+    monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
+    monkeypatch.setattr(orchestrator.state, "transcription_executor", fake_exec, raising=False)
+    monkeypatch.setattr(orchestrator, "transcribe_with_whisper",
+                        lambda *a, **k: {"segments": [{"start": 0, "end": 1, "text": "hi"}],
+                                         "text": "hi", "language": "en"})
+    monkeypatch.setattr(orchestrator, "run_diarization", lambda *a, **k: [])
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    settings = TranscriptionSettings(engine="auto-best", language="en",
+                                     enable_diarization=False, enable_noise_reduction=False,
+                                     speaker_ids=["sp-1"])  # forces auto_refine via None mode
+    orchestrator.orchestrate_transcription("orch-refine", str(audio_path), settings, mode="best")
+
+    assert fake_exec.submit.called, "auto-refine must dispatch on the transcription executor"
+    args, _kw = submitted[0]
+    # args = (_run_refinement_for_job, job_id, speaker_ids, context_path, audio_path)
+    assert args[1] == "orch-refine"
+    assert args[2] == ["sp-1"]
