@@ -1,5 +1,5 @@
 """
-Core transcription logic: MLX-Whisper, Parakeet, Voxtral engines.
+Core transcription logic: MLX-Whisper and Parakeet engines.
 """
 
 import os
@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
 
-from config import ICLOUD_BASE_PATH, MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS, VOXTRAL_LOCAL_MODELS
+from config import ICLOUD_BASE_PATH, MLX_MODELS, PARAKEET_MODEL, PARAKEET_MODELS
 from job_models import TranscriptionSettings
 from services.audio import apply_noise_reduction
 from services.diarization import run_diarization, assign_speakers_to_segments, stitch_speaker_turns
@@ -31,8 +31,8 @@ orchestrate_transcription = None  # type: ignore
 # ~224 tokens, we clamp further at use sites).
 _CONTEXT_MAX_CHARS = 4000
 # A context term is a word starting with an uppercase letter or digit, or any
-# consecutive-uppercase acronym (SDG, SAFc, etc.). Used to derive Voxtral
-# `context_bias[]` terms from a narrative markdown context.
+# consecutive-uppercase acronym (SDG, SAFc, etc.). Used to derive context
+# bias terms from a narrative markdown context.
 _CONTEXT_TERM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]{2,}(?:-[A-Za-z0-9]+)*\b|\b[A-Z]{2,}[0-9]*\b")
 
 
@@ -86,8 +86,8 @@ def load_context_document(context_path: Optional[str]) -> Optional[str]:
 def derive_context_terms(context_text: Optional[str], limit: int = 100) -> List[str]:
     """Extract domain terms (proper nouns, acronyms) from a context document.
 
-    Used as the `context_bias[]` list for the Voxtral cloud API when the
-    caller didn't provide an explicit terms list.
+    Used as a context bias list when the caller didn't provide an explicit
+    terms list (e.g., for downstream glossary derivation).
     """
     if not context_text:
         return []
@@ -108,8 +108,8 @@ def load_speakers_context(speaker_ids: Optional[List[str]]) -> Optional[str]:
 
     Used to seed transcription with domain/biographical context the user
     already knows about the people likely on the recording — spellings of
-    names, recurring topics, jargon they use — which helps Whisper / Voxtral
-    get proper nouns right on the first pass.
+    names, recurring topics, jargon they use — which helps Whisper get
+    proper nouns right on the first pass.
     """
     if not speaker_ids:
         return None
@@ -278,271 +278,6 @@ def transcribe_with_parakeet(audio_path: str, model_key: str = "parakeet-en-v2")
         "text": full_text,
         "segments": segments,
         "language": language_tag,
-    }
-
-
-def transcribe_with_voxtral(audio_path: str, settings: TranscriptionSettings) -> dict:
-    """Transcribe audio using Voxtral Mini Transcribe V2 (Mistral API)."""
-    if not state._voxtral_service:
-        raise RuntimeError("Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
-
-    language = None if settings.language == "auto" else settings.language
-
-    # Merge explicit context_terms with terms derived from the selected
-    # context document, deduped case-insensitive.
-    merged_terms: List[str] = list(settings.context_terms or [])
-    from services.glossary import load_global_glossary  # local import — avoids circular load
-    context_text = merge_context_sources(
-        load_global_glossary(),
-        load_context_document(settings.context_path),
-        load_speakers_context(settings.speaker_ids),
-    )
-    derived = derive_context_terms(context_text)
-    if derived:
-        seen_lower = {t.lower() for t in merged_terms}
-        for t in derived:
-            if t.lower() not in seen_lower:
-                merged_terms.append(t)
-                seen_lower.add(t.lower())
-                if len(merged_terms) >= 100:
-                    break
-    effective_terms = merged_terms or None
-
-    # Two-pass mode: get both timestamps and language accuracy (2x API cost)
-    if settings.two_pass and language:
-        logger.info("Transcribing with Voxtral Mini (cloud API, two-pass mode)...")
-        result = state._voxtral_service.transcribe_two_pass(
-            audio_path=audio_path,
-            language=language,
-            enable_diarization=settings.enable_diarization,
-            word_timestamps=settings.word_timestamps,
-            context_terms=effective_terms,
-        )
-    else:
-        logger.info("Transcribing with Voxtral Mini (cloud API)...")
-        result = state._voxtral_service.transcribe(
-            audio_path=audio_path,
-            language=language or "auto",
-            enable_diarization=settings.enable_diarization,
-            word_timestamps=settings.word_timestamps,
-            context_terms=effective_terms,
-        )
-
-    return result
-
-
-def _get_audio_duration(audio_path: str) -> float:
-    """Get audio duration in seconds using ffprobe."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        return float(result.stdout.strip())
-    except Exception:
-        return 0.0
-
-
-def _extract_audio_chunk(audio_path: str, start: float, duration: float, output_path: str) -> bool:
-    """Extract a chunk of audio as 16kHz mono WAV for Voxtral."""
-    import subprocess
-    try:
-        # Audit #10: -ss must precede -i for keyframe seek.
-        subprocess.run(
-            ["ffmpeg", "-ss", str(start), "-i", audio_path, "-t", str(duration),
-             "-ar", "16000", "-ac", "1", output_path, "-y", "-loglevel", "error"],
-            capture_output=True, timeout=60, check=True,
-        )
-        return True
-    except Exception:
-        return False
-
-
-def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettings, job=None) -> dict:
-    """Transcribe audio using Voxtral Mini 3B locally via mlx-audio.
-
-    Automatically chunks audio into 30-second segments (the encoder's max)
-    and merges results with correct timestamps.
-    """
-    import tempfile
-    from services.model_manager import get_model_manager, ModelName
-
-    CHUNK_DURATION = 30  # seconds — Voxtral encoder max (WhisperFeatureExtractor chunk_length)
-    MAX_TOKENS_PER_CHUNK = 4096
-
-    # Determine which model variant to use. Default to the 4B Realtime
-    # model which matches Voxtral Transcribe V2 quality at batch delay.
-    default_key = "voxtral-realtime-4b"
-    model_key = settings.model_size if settings.model_size in VOXTRAL_LOCAL_MODELS else default_key
-    model_info = VOXTRAL_LOCAL_MODELS[model_key]
-    model_path = model_info["path"]
-    architecture = model_info.get("architecture", "audio_lm")
-
-    logger.info("Transcribing with Voxtral Local (%s, arch=%s)...", model_path, architecture)
-
-    # Audit #12: route through ModelManager so memory accounting is respected.
-    manager = get_model_manager()
-    model = None
-    if manager.is_loaded(ModelName.VOXTRAL_LOCAL) and manager.get_model(ModelName.VOXTRAL_LOCAL) is not None:
-        cached = manager.get_model(ModelName.VOXTRAL_LOCAL)
-        if isinstance(cached, dict) and cached.get("path") == model_path:
-            model = cached.get("model")
-
-    if model is None:
-        _loop = asyncio.new_event_loop()
-        try:
-            loaded = _loop.run_until_complete(manager.load_voxtral_local(model_path))
-        finally:
-            _loop.close()
-        if not loaded:
-            raise RuntimeError("Failed to load Voxtral Local model")
-        cached = manager.get_model(ModelName.VOXTRAL_LOCAL)
-        model = cached.get("model") if isinstance(cached, dict) else cached
-
-    language = settings.language if settings.language != "auto" else None
-
-    # Load user-selected context document (if any). Voxtral-style models
-    # take an initial_prompt that biases the decoder toward domain terms.
-    # Expected-speaker context also gets merged in so the decoder knows how
-    # their names are spelled and what topics they typically cover.
-    from services.glossary import load_global_glossary  # local import — avoids circular load
-    context_text = merge_context_sources(
-        load_global_glossary(),
-        load_context_document(settings.context_path),
-        load_speakers_context(settings.speaker_ids),
-    )
-    initial_prompt = build_initial_prompt(context_text)
-    if initial_prompt:
-        logger.info("Using context document (%d chars of prompt)", len(initial_prompt))
-
-    # A2 (Voxtral parity): trim leading silence before transcription. JPR
-    # recordings often start with several seconds of silence or a jingle that
-    # confuses Voxtral's first-chunk language detector (we've seen Arabic
-    # script hallucinated on English calls). Whisper had this same issue
-    # pre-Plan-1; the trim helpers in services/audio.py already exist.
-    from services.audio import find_first_speech_offset, make_trimmed_audio
-    voxtral_audio_path = audio_path
-    voxtral_trim_offset = 0.0
-    voxtral_trimmed_temp_path = None
-    try:
-        voxtral_trim_offset = find_first_speech_offset(audio_path)
-    except Exception:
-        logger.warning("VAD trim probe failed for Voxtral Local; using full audio", exc_info=True)
-    if voxtral_trim_offset > 0:
-        try:
-            voxtral_trimmed_temp_path = make_trimmed_audio(audio_path, voxtral_trim_offset)
-            voxtral_audio_path = voxtral_trimmed_temp_path
-            logger.info("A2 (Voxtral): trimmed %.2fs of leading silence", voxtral_trim_offset)
-        except Exception:
-            logger.warning("VAD trim failed for Voxtral Local; using full audio", exc_info=True)
-            voxtral_trim_offset = 0.0
-
-    # Get total duration to determine chunking (against the trimmed audio).
-    total_duration = _get_audio_duration(voxtral_audio_path)
-    if total_duration <= 0:
-        total_duration = CHUNK_DURATION  # fallback: treat as single chunk
-
-    num_chunks = max(1, int(total_duration / CHUNK_DURATION) + (1 if total_duration % CHUNK_DURATION > 0.5 else 0))
-    logger.info("Audio duration: %.1fs, splitting into %d chunk(s) of %ds", total_duration, num_chunks, CHUNK_DURATION)
-
-    segments = []
-    all_text_parts = []
-
-    for i in range(num_chunks):
-        chunk_start = i * CHUNK_DURATION
-        chunk_dur = min(CHUNK_DURATION, total_duration - chunk_start)
-        if chunk_dur < 0.5:
-            break
-
-        # Extract chunk as WAV (from the possibly-trimmed audio).
-        with tempfile.NamedTemporaryFile(prefix="whisper-vox-chunk-", suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-
-        try:
-            if not _extract_audio_chunk(voxtral_audio_path, chunk_start, chunk_dur, tmp_path):
-                logger.warning("Failed to extract chunk %d (%.1fs-%.1fs), skipping", i, chunk_start, chunk_start + chunk_dur)
-                continue
-
-            gen_kwargs = {"max_tokens": MAX_TOKENS_PER_CHUNK}
-            if language:
-                gen_kwargs["language"] = language
-            if architecture == "realtime":
-                # 2400ms is the documented batch-parity setting for Voxtral
-                # Realtime; lower values (240ms, 1000ms) made generate()
-                # hang indefinitely during smoke testing on 2026-04-19.
-                # Accept the ~1 min/chunk cost for now; a faster engine for
-                # long audio is a separate discussion.
-                gen_kwargs["transcription_delay_ms"] = 2400
-            # mlx-audio accepts `prompt` on some model classes; pass only if
-            # we have one so we don't accidentally regress older variants.
-            if initial_prompt:
-                gen_kwargs["prompt"] = initial_prompt
-
-            try:
-                result = model.generate(tmp_path, **gen_kwargs)
-            except TypeError:
-                # Some mlx-audio versions don't accept `prompt`; retry without.
-                gen_kwargs.pop("prompt", None)
-                result = model.generate(tmp_path, **gen_kwargs)
-
-            # Parse chunk result
-            chunk_text = ""
-            if hasattr(result, "text"):
-                chunk_text = str(result.text).strip()
-            elif isinstance(result, dict):
-                chunk_text = result.get("text", "").strip()
-            elif isinstance(result, str):
-                chunk_text = result.strip()
-            else:
-                chunk_text = str(result).strip()
-
-            if chunk_text and chunk_text != ".":
-                # A2 (Voxtral): restore segment timestamps to the original
-                # audio time base (chunk_start is relative to the trimmed audio).
-                segments.append({
-                    "start": chunk_start + voxtral_trim_offset,
-                    "end": chunk_start + chunk_dur + voxtral_trim_offset,
-                    "text": chunk_text,
-                })
-                all_text_parts.append(chunk_text)
-
-            logger.info("Chunk %d/%d (%.0fs-%.0fs): %d chars", i + 1, num_chunks, chunk_start, chunk_start + chunk_dur, len(chunk_text))
-
-            # Stream per-chunk progress back to the UI so the bar actually
-            # moves during long jobs. We reserve 20% (entry) → 70% (hand-off
-            # to downstream post-processing) for the decoder loop.
-            if job is not None and num_chunks > 0:
-                try:
-                    pct = 20 + int(50 * (i + 1) / num_chunks)
-                    _update_job(
-                        job,
-                        progress=min(pct, 69),
-                        message=f"Transcribing chunk {i + 1}/{num_chunks} (Voxtral Local)…",
-                    )
-                except Exception:  # non-fatal — never let progress kill transcription
-                    logger.warning("progress update failed", exc_info=True)
-
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-    full_text = " ".join(all_text_parts)
-
-    # A2 (Voxtral): clean up the VAD-trimmed temp file (if we made one).
-    if voxtral_trimmed_temp_path:
-        try:
-            os.unlink(voxtral_trimmed_temp_path)
-        except OSError:
-            pass
-
-    return {
-        "text": full_text,
-        "segments": segments,
-        "language": language or "auto",
     }
 
 
