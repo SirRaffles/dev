@@ -5,6 +5,7 @@ import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
 import AutoMatchBadge from './AutoMatchBadge';
+import SpeakerReviewPanel from './SpeakerReviewPanel';
 import RenameFileModal from './RenameFileModal';
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
 
@@ -603,6 +604,30 @@ function TranscriptView({
           </span>
         )}
       </div>
+
+      {/* Plan 5: consolidated post-completion review panel.
+          Replaces the legacy AutoMatchBadge inline render + "Name the
+          speakers" block (both removed in the same change as this insert in
+          a real cut, kept here as additive Task 4 → Task 5 removes them). */}
+      {result?.segments && result.segments.length > 0 && (
+        <SpeakerReviewPanel
+          jobId={jobId}
+          segments={result.segments}
+          autoMatches={autoMatches}
+          currentPhase={refineState?.phase ?? null}
+          onReRefineStart={() => {
+            // Best-effort hook for the parent to clear any local UI state
+            // that would otherwise stale while the re-refinement runs. The
+            // polling hook will pull re-derived segments + matches once the
+            // backend completes. Task 4 leaves the legacy `rejectedMatches`
+            // state in place (Task 5 deletes it) — for now this callback is
+            // intentionally a no-op so the cleanup commits stay isolated.
+            // After Task 5, this stays a no-op (or can become a future hook
+            // for clearing manual edits, per spec § "Collision with manual
+            // segment edits" — out of scope for this plan).
+          }}
+        />
+      )}
 
       {/* Name the speakers — only surfaces while there are still anonymous
           diarization labels waiting to be mapped to real speakers in the
