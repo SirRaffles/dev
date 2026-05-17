@@ -11,6 +11,9 @@ and routes.refinement.
 
 import logging
 import os
+import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional
 
@@ -38,6 +41,82 @@ PHASE_TRANSCRIBING = "transcribing"
 PHASE_ALIGNING = "aligning"
 PHASE_REFINING = "refining"
 PHASE_LEARNING = "learning"
+
+# Empirical RT (real-time) factors on Apple Silicon, used to estimate the
+# expected wall-clock duration of the transcribing phase so the progress bar
+# can interpolate smoothly between the start and end milestones instead of
+# stalling for minutes at the "Transcribing..." message.
+_RT_FACTOR_WHISPER = 10.0  # large-v3-turbo MLX, M-series GPU
+_RT_FACTOR_PARAKEET = 6.0  # parakeet-multi-v3 MLX, M-series GPU
+
+
+def _get_audio_duration_sec(audio_path: str) -> Optional[float]:
+    """Probe audio duration via ffprobe. Returns None on any failure — caller
+    falls back to a conservative default so the progress ticker never blocks
+    on an unparseable file."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return float(r.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+class _TranscribeProgressTicker:
+    """Daemon thread that interpolates `job.progress` between a start and a
+    ceiling percentage while the underlying transcribe call is blocking.
+
+    Without this, MLX-Whisper / Parakeet hold the worker for the entire audio
+    duration with no intermediate progress updates — the UI shows a stale
+    "Transcribing…" at the start percentage until the call returns.
+
+    The ticker estimates expected wall-clock time as
+    `audio_duration_sec / rt_factor`, fires every 2 seconds, and caps progress
+    at 95% of the band so the actual call-completion update (e.g. progress=65)
+    still produces a small forward motion when the call returns. If the call
+    runs longer than estimated (dense audio, cold model load) the bar parks at
+    the cap until completion — better than overshooting and visually jumping
+    backward.
+    """
+
+    def __init__(self, job, start_pct: int, ceiling_pct: int,
+                 expected_seconds: float, message: str, phase: str):
+        self._job = job
+        self._start = start_pct
+        self._span = ceiling_pct - start_pct
+        self._expected = max(5.0, expected_seconds)
+        self._message = message
+        self._phase = phase
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="transcribe-progress",
+        )
+
+    def start(self) -> "_TranscribeProgressTicker":
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        t0 = time.monotonic()
+        while not self._stop.wait(2.0):
+            elapsed = time.monotonic() - t0
+            frac = min(0.95, elapsed / self._expected)
+            pct = self._start + int(frac * self._span)
+            try:
+                _update_job(self._job, progress=pct, message=self._message,
+                            phase=self._phase)
+            except Exception:
+                logger.debug("progress ticker update failed (job moved on?)",
+                             exc_info=True)
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 def orchestrate_transcription(
@@ -82,18 +161,32 @@ def orchestrate_transcription(
             )
 
         # Transcribe (Best->Whisper Turbo, Quick->Parakeet multilingual v3).
-        _update_job(
-            job,
-            progress=20,
-            message=("Transcribing with MLX-Whisper (GPU-accelerated)..." if mode == "best"
-                     else "Transcribing with Parakeet MLX (multilingual v3)..."),
-            phase=PHASE_TRANSCRIBING,
+        # The transcribe call is blocking and emits no intermediate progress,
+        # so we spawn a time-based ticker that interpolates 20% -> ~62% over
+        # the expected wall-clock duration (audio_duration / RT_factor). The
+        # final 65% milestone after the call returns gives the user a small
+        # forward motion as confirmation that transcription finished.
+        transcribe_msg = (
+            "Transcribing with MLX-Whisper (GPU-accelerated)..." if mode == "best"
+            else "Transcribing with Parakeet MLX (multilingual v3)..."
         )
-        if mode == "best":
-            result = transcribe_with_whisper(audio_path, settings, job=job)
-        else:
-            # Quick: always multilingual v3 (covers EN+FR per spec).
-            result = transcribe_with_parakeet(audio_path, model_key="parakeet-multi-v3")
+        _update_job(job, progress=20, message=transcribe_msg, phase=PHASE_TRANSCRIBING)
+
+        audio_seconds = _get_audio_duration_sec(audio_path) or 60.0
+        rt_factor = _RT_FACTOR_WHISPER if mode == "best" else _RT_FACTOR_PARAKEET
+        expected_sec = audio_seconds / rt_factor
+        ticker = _TranscribeProgressTicker(
+            job, start_pct=20, ceiling_pct=65, expected_seconds=expected_sec,
+            message=transcribe_msg, phase=PHASE_TRANSCRIBING,
+        ).start()
+        try:
+            if mode == "best":
+                result = transcribe_with_whisper(audio_path, settings, job=job)
+            else:
+                # Quick: always multilingual v3 (covers EN+FR per spec).
+                result = transcribe_with_parakeet(audio_path, model_key="parakeet-multi-v3")
+        finally:
+            ticker.stop()
 
         job.language = result.get("language", "unknown")
         job.language_probability = 0.99
