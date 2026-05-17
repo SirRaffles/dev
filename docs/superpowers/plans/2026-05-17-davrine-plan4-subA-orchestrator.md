@@ -81,13 +81,13 @@ cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m 
 ```
 Expected: a clean pass count (record the number for regression check at Task 11). If anything fails on baseline, stop and investigate before touching code.
 
-- [ ] **Step 3: Confirm Sub-plan B has shipped**
+- [ ] **Step 3: Confirm Sub-plan B has shipped (code-side check, not log-side)**
 
 Run:
 ```bash
-cd ~/Development/apps/whisper-transcription-app && git log --oneline -20 | grep -i "4B\|sub.plan B\|polish\|speaker_corrections"
+cd ~/Development/apps/whisper-transcription-app && grep -n "speaker_corrections" backend/services/refinement.py backend/services/diarization.py 2>/dev/null
 ```
-Expected: at least one commit referencing Sub-plan B's `speaker_corrections` work. If not present, STOP — Sub-plan B must ship first (the orchestrator's Best path assumes refinement does diarization polish).
+Expected: at least one hit in `backend/services/refinement.py` (Sub-plan B's diarization-polish writes corrections back via that field). Planning-doc commits do NOT satisfy this — only the actual code lookup does. If the grep is empty, STOP — Sub-plan B must ship first (the orchestrator's Best path assumes refinement performs diarization polish). Bonus check: `git log --oneline --all -- backend/services/refinement.py | head -5` should show a recent commit touching the file.
 
 - [ ] **Step 4: Re-read the spec**
 
@@ -692,6 +692,175 @@ Expected: 3 tests pass.
 cd ~/Development/apps/whisper-transcription-app
 git add backend/job_models.py backend/services/transcription.py backend/routes/transcription.py backend/tests/test_orchestrator.py
 git commit -m "Plan 4A Task 4: add phase field to TranscriptionJob and surface in GET /job/{id}"
+```
+
+---
+
+## Task 4b: Wire `phase="refining"` and `phase="learning"` in refinement.py
+
+**Why:** Spec's Phase Lifecycle table (specs/2026-05-17-davrine-quality-dial-orchestration-design.md lines ~215-224) requires `phase="refining"` when refinement starts and `phase="learning"` when post-refinement learning kicks off, then `phase=None` when learning completes. Task 4 plumbs the FIELD; Task 6 wires the PRE-completion transitions (`diarizing`/`transcribing`/`aligning`) in the orchestrator. But the orchestrator clears phase to None at completion and then submits `_run_refinement_for_job` to the executor — `routes/refinement.py` itself never writes the post-completion phases. Without this task, the UI pill goes Diarizing → Transcribing → Aligning → (gone) and never shows Refining/Learning.
+
+**Files:**
+- Modify: `backend/routes/refinement.py:174-266` (`_run_refinement_for_job` — add `phase="refining"` at start)
+- Modify: `backend/routes/refinement.py:53-171` (`_run_post_refinement_learning` — set `phase="learning"` at start, clear at end)
+- Test: `backend/tests/test_orchestrator.py` (append two phase-transition tests)
+
+This task slots in after Task 4 because it depends on `_update_job(phase=…, _clear_phase=…)` existing. It runs BEFORE Sub-plan B execution (which extends `_run_refinement_for_job` internally to do speaker correction); Sub-plan B's edits live inside the same function but after the phase write, so the two changes compose cleanly.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `backend/tests/test_orchestrator.py`:
+
+```python
+def test_run_refinement_for_job_sets_phase_refining(monkeypatch):
+    """_run_refinement_for_job must set job.phase='refining' immediately after picking up the job."""
+    from job_models import TranscriptionJob
+    from routes import refinement as refmod
+
+    job = TranscriptionJob("phase-ref-1")
+    job.status = "completed"
+    job.segments = [{"start": 0.0, "end": 1.0, "text": "hi", "speaker": "SPEAKER_00"}]
+
+    fake_store = MagicMock()
+    fake_store.get = MagicMock(return_value=job)
+    fake_store.update = MagicMock()
+    monkeypatch.setattr(refmod.state, "job_store", fake_store)
+    monkeypatch.setattr(refmod.state, "jobs", fake_store)
+
+    fake_ref_store = MagicMock()
+    monkeypatch.setattr(refmod.state, "refinement_store", fake_ref_store)
+
+    # Force an early return after the phase write — fail at refine() so the
+    # finally block runs but we don't need a real RefinementService.
+    fake_service = MagicMock()
+    fake_service.refine.side_effect = RuntimeError("stop here")
+    monkeypatch.setattr(refmod.state, "refinement_service", fake_service)
+
+    # Stub the imports so we don't pull the world in.
+    monkeypatch.setattr("services.transcription.load_context_document", lambda *_a, **_k: "")
+    monkeypatch.setattr("services.transcription.load_speakers_context", lambda *_a, **_k: "")
+    monkeypatch.setattr("services.transcription.merge_context_sources", lambda *_a, **_k: "")
+    monkeypatch.setattr("services.glossary.load_global_glossary", lambda: "")
+    monkeypatch.setattr("services.glossary.load_global_glossary_terms", lambda: None)
+
+    refmod._run_refinement_for_job("phase-ref-1")
+
+    assert job.phase == "refining", f"expected phase='refining', got {job.phase!r}"
+
+
+def test_run_post_refinement_learning_sets_then_clears_phase(monkeypatch):
+    """_run_post_refinement_learning must set phase='learning' at start and clear (None) at end."""
+    from job_models import TranscriptionJob
+    from routes import refinement as refmod
+
+    job = TranscriptionJob("phase-learn-1")
+    job.segments = [{"start": 0.0, "end": 1.0, "speaker": "Alice"}]
+    job.speakers = []
+
+    fake_store = MagicMock()
+    fake_store.get = MagicMock(return_value=job)
+    fake_store.update = MagicMock()
+    monkeypatch.setattr(refmod.state, "jobs", fake_store)
+
+    # Stub all three learning workers to no-op success.
+    monkeypatch.setattr("services.learning.update_speaker_embeddings", lambda **_k: 0)
+    monkeypatch.setattr("services.learning.extract_insights_auto", lambda **_k: 0)
+    monkeypatch.setattr("services.learning.learn_glossary_terms", lambda **_k: 0)
+
+    # Capture phase writes in order.
+    phase_writes: list = []
+    real_update_job = refmod.state.jobs.update  # MagicMock — track on job
+
+    def track_phase(_job, **kwargs):
+        if "phase" in kwargs:
+            phase_writes.append(kwargs.get("phase"))
+        return real_update_job(_job)
+
+    # Patch _update_job (imported lazily in step 3) to capture phase order.
+    from services import transcription as tx
+    monkeypatch.setattr(tx, "_update_job", track_phase)
+
+    refmod._run_post_refinement_learning(
+        job_id="phase-learn-1", audio_path=None,
+        segments=[{"start": 0.0, "end": 1.0, "speaker": "Alice"}],
+        analysis={},
+    )
+
+    assert phase_writes[0] == "learning", f"first phase write should be 'learning', got {phase_writes!r}"
+    assert phase_writes[-1] is None, f"last phase write should clear (None), got {phase_writes!r}"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run:
+```bash
+cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m pytest tests/test_orchestrator.py::test_run_refinement_for_job_sets_phase_refining tests/test_orchestrator.py::test_run_post_refinement_learning_sets_then_clears_phase -v 2>&1 | tail -15
+```
+Expected: BOTH fail — phase never gets written.
+
+- [ ] **Step 3: Add `phase="refining"` to `_run_refinement_for_job`**
+
+In `backend/routes/refinement.py:174-266`, inside the `try:` block, immediately after `_set_refinement_status(job, "processing")` (~line 201), add:
+
+```python
+        # Plan 4A: phase pill — refinement is now active.
+        from services.transcription import _update_job
+        _update_job(job, phase="refining")
+```
+
+Place this BEFORE the `if job.status != "completed":` guard so even a fast-fail refinement still transitions the UI through the refining pill (Sub-plan B's diarization polish will extend this block; the phase write must happen first).
+
+- [ ] **Step 4: Add `phase="learning"` start + clear in `_run_post_refinement_learning`**
+
+In `backend/routes/refinement.py:53-171`:
+
+**At the start of the function body** (before the `from services import learning` import, ~line 61), after a quick job fetch:
+
+```python
+def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
+                                  segments: list, analysis: dict) -> None:
+    """B7 orchestrator: ..."""
+    # Plan 4A: phase pill — learning is now active.
+    from services.transcription import _update_job
+    _job = state.jobs.get(job_id)
+    if _job is not None:
+        _update_job(_job, phase="learning")
+
+    from services import learning
+    ...
+```
+
+**At the very end of the function** (after the existing `state.jobs.update(job)` call inside the `if job is not None:` block, ~line 172), add:
+
+```python
+        # Plan 4A: clear phase — learning workers are done, UI pill disappears.
+        _update_job(job, phase=None, _clear_phase=True)
+```
+
+Note: the existing block already calls `state.jobs.update(job)`; the new `_update_job(...)` does its own write. That's a duplicate write but harmless — the alternative (interleaving) makes the diff messier than it's worth.
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run:
+```bash
+cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m pytest tests/test_orchestrator.py -v 2>&1 | tail -15
+```
+Expected: all 5 tests in `test_orchestrator.py` pass (3 from Task 4 + 2 new).
+
+- [ ] **Step 6: Regression check — refinement-status tests still green**
+
+Run:
+```bash
+cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m pytest tests/test_refinement.py tests/test_post_refinement_learning.py -v 2>&1 | tail -10
+```
+Expected: existing tests still pass — phase writes are additive and don't change the refinement_status / learning_status / learning_summary behaviors those tests assert on.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd ~/Development/apps/whisper-transcription-app
+git add backend/routes/refinement.py backend/tests/test_orchestrator.py
+git commit -m "Plan 4A Task 4b: wire phase=refining and phase=learning in refinement.py"
 ```
 
 ---
@@ -1714,6 +1883,7 @@ git commit -m "Plan 4A Task 9: migrate JPR watcher to engine=auto-best, drop mod
 - Modify: `backend/tests/test_inline_auto_match.py` (2 tests at lines 48, 113)
 - Modify: `backend/tests/test_auto_refine_orchestration.py` (3 tests at lines 189, 227, 263)
 - Modify: `backend/tests/test_diarization_a3.py` (docstring note only — the file's helper signature doesn't depend on engine)
+- Modify: `backend/tests/test_file_validation.py` (3 pre-existing tests at lines ~19, ~33, ~47 send `?engine=whisper` in URL — strip it; Task 8 already migrated `test_invalid_engine_rejected`)
 
 These tests construct `TranscriptionSettings(engine="whisper", model_size="...", ...)`. Both the `engine="whisper"` and the `model_size=` kwargs are now rejected (the former by Literal, the latter is silently ignored as an extra field in pydantic v2 — but it's vestigial so we drop it for cleanliness). With these migrations, the test suite returns to GREEN.
 
@@ -1774,6 +1944,24 @@ def test_no_words_falls_back_to_midpoint():
     ...
 ```
 
+- [ ] **Step 5b: Migrate the 3 pre-existing `test_file_validation.py` URL fixtures**
+
+After Task 8 lands, the route handler validates `engine` BEFORE running file-extension / magic-byte checks. Three pre-existing tests in `backend/tests/test_file_validation.py` send `?engine=whisper` in their URLs and will start 400'ing for the wrong reason (engine rejection instead of extension/magic-byte rejection). Two of them assert `status_code in (400, 503)` so they "pass" but the body assertion (`"Unsupported file type" in resp.json()["detail"]`) fails; the third asserts `status_code in (200, 503)` and fails outright.
+
+Open `backend/tests/test_file_validation.py`. The three tests are around lines 19, 33, 47. In each, remove the `engine=whisper` from the URL query string (do not replace it — `engine` is no longer needed because `auto-best` is the route default after Task 8):
+
+- `test_upload_unsupported_extension` (~line 19): `/transcribe/file?language=auto&engine=whisper` → `/transcribe/file?language=auto`
+- `test_upload_wrong_magic_bytes` (~line 33): same edit
+- `test_upload_valid_wav_accepted` (~line 47): same edit
+
+Sanity-check after editing:
+
+```bash
+grep -n "engine=whisper" backend/tests/test_file_validation.py
+```
+
+Expected: empty (no hits). The `test_invalid_engine_rejected` test that Task 8 added uses `engine=voxtral-local` to assert the 400, so that one stays.
+
 - [ ] **Step 6: Run the full suite — should be GREEN**
 
 Run:
@@ -1790,7 +1978,7 @@ If anything still fails, investigate. Common culprits:
 
 ```bash
 cd ~/Development/apps/whisper-transcription-app
-git add backend/tests/test_transcription_a1.py backend/tests/test_inline_auto_match.py backend/tests/test_auto_refine_orchestration.py backend/tests/test_diarization_a3.py
+git add backend/tests/test_transcription_a1.py backend/tests/test_inline_auto_match.py backend/tests/test_auto_refine_orchestration.py backend/tests/test_diarization_a3.py backend/tests/test_file_validation.py
 git commit -m "Plan 4A Task 10: migrate test fixtures to engine=auto-best, drop model_size kwargs"
 ```
 
@@ -1859,8 +2047,8 @@ If everything passes, Sub-plan A is shippable. Coordinate with Sub-plan C deploy
 
 Spec coverage:
 - "Backend Orchestrator" (spec line 143) → Tasks 2, 3, 6, 7
-- "Phased Progress Bar" (spec line 200) → Tasks 4, 6 (phase writes inside orchestrator)
-- Phase Lifecycle table (spec line 215) → Task 6 (orchestrator writes the transitions; verified by `test_orchestrate_emits_phase_transitions`)
+- "Phased Progress Bar" (spec line 200) → Tasks 4, 4b, 6 (phase field + refinement/learning phase writes + orchestrator pre-completion writes)
+- Phase Lifecycle table (spec line 215) → Tasks 4b, 6 (pre-completion writes in orchestrator; post-completion `refining`/`learning` writes in refinement.py; verified by `test_orchestrate_emits_phase_transitions` + `test_run_refinement_for_job_sets_phase_refining` + `test_run_post_refinement_learning_sets_then_clears_phase`)
 - "Migration & Removal (no fallback)" backend half (spec line 232) → Tasks 5, 7, 8 (Sub-plan D handles the dead-function sweep)
 - Sub-plan A enumeration (spec line 366):
   1. extract `transcribe_with_whisper` → Task 2 ✓
@@ -1873,7 +2061,7 @@ Spec coverage:
   8. test fixture migration → Task 10 ✓
   9. `watcher/config.py` → Task 9 ✓
 
-Counts: 11 tasks (within the spec's 9-11 estimate; Tasks 1 and 11 are the bookend baseline/smoke tasks).
+Counts: 12 tasks (Tasks 1 + 2 + 3 + 4 + 4b + 5 + 6 + 7 + 8 + 9 + 10 + 11; Tasks 1 and 11 are the bookend baseline/smoke tasks; Task 4b was added in response to reviewer feedback to wire phase=refining/learning into refinement.py — the spec's Phase Lifecycle table mandates these transitions but Sub-plan A's pre-fix tasks only wired the pre-completion phases inside the orchestrator).
 
 Type consistency check:
 - `assign_speakers_time_proportional(segments, speaker_turns)` — used identically in Task 6 (orchestrator) and Task 3 (test fixtures) ✓
