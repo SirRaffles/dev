@@ -107,7 +107,12 @@ def test_large_gap_between_turns_leaks_unknown():
 
 
 def test_no_words_falls_back_to_midpoint():
-    """Segment without word-level timestamps uses midpoint heuristic (Voxtral/Parakeet path)."""
+    """Segment without word-level timestamps uses midpoint heuristic.
+
+    Note: post-Plan-4A, Quick mode uses assign_speakers_time_proportional
+    instead of this midpoint path. The midpoint fallback inside
+    assign_speakers_to_segments stays for safety (segments with no words
+    that arrive via Best mode, e.g. silence-only segments)."""
     segments = [{"start": 0.0, "end": 4.0, "text": "hello world"}]
     speakers = [
         {"start": 0.0, "end": 1.5, "speaker": "SPEAKER_00"},

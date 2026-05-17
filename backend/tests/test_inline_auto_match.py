@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 def test_inline_auto_match_overlays_names_when_diarization_present(tmp_path, monkeypatch):
     from job_models import TranscriptionSettings, TranscriptionJob
-    from services import transcription
+    from services import transcription, orchestrator
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"\x00" * 1024)
@@ -21,16 +21,20 @@ def test_inline_auto_match_overlays_names_when_diarization_present(tmp_path, mon
                         MagicMock(submit=MagicMock()))
 
     # Stub diarization to return two speakers.
-    monkeypatch.setattr(transcription, "run_diarization", lambda *a, **k: [
+    # Post-Plan-4A Task 7: _run_transcription_sync routes through the orchestrator,
+    # which imports run_diarization / assign_speakers_to_segments / stitch_speaker_turns
+    # into its own namespace. Patch there (not on services.transcription) so the
+    # orchestrator's call sites pick up the stubs.
+    monkeypatch.setattr(orchestrator, "run_diarization", lambda *a, **k: [
         {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
         {"start": 5.0, "end": 10.0, "speaker": "SPEAKER_01"},
     ])
-    monkeypatch.setattr(transcription, "assign_speakers_to_segments",
+    monkeypatch.setattr(orchestrator, "assign_speakers_to_segments",
                         lambda segs, speakers: [
                             {"start": 0, "end": 5, "text": "hi", "speaker": "SPEAKER_00"},
                             {"start": 5, "end": 10, "text": "bonjour", "speaker": "SPEAKER_01"},
                         ])
-    monkeypatch.setattr(transcription, "stitch_speaker_turns", lambda segs: segs)
+    monkeypatch.setattr(orchestrator, "stitch_speaker_turns", lambda segs: segs)
 
     # Stub the embedding service to "match" SPEAKER_00 → Pascal, leave SPEAKER_01 unmatched.
     fake_embedding = MagicMock()
@@ -46,7 +50,7 @@ def test_inline_auto_match_overlays_names_when_diarization_present(tmp_path, mon
     monkeypatch.setenv("HF_TOKEN", "fake-token")
 
     settings = TranscriptionSettings(
-        engine="whisper", language="en",
+        engine="auto-best", language="en",
         enable_diarization=True, enable_noise_reduction=False,
         speaker_ids=["sp-1"],
     )
@@ -80,7 +84,7 @@ def test_inline_auto_match_overlays_names_when_diarization_present(tmp_path, mon
 def test_inline_auto_match_failure_does_not_break_job(tmp_path, monkeypatch):
     """Auto-match exceptions must be swallowed; segments keep SPEAKER_XX."""
     from job_models import TranscriptionSettings, TranscriptionJob
-    from services import transcription
+    from services import transcription, orchestrator
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"\x00" * 1024)
@@ -97,12 +101,13 @@ def test_inline_auto_match_failure_does_not_break_job(tmp_path, monkeypatch):
     monkeypatch.setattr(transcription.state, "refinement_store", MagicMock(create=MagicMock()))
     monkeypatch.setattr(transcription.state, "transcription_executor",
                         MagicMock(submit=MagicMock()))
-    monkeypatch.setattr(transcription, "run_diarization", lambda *a, **k: [
+    # Patch on the orchestrator module (post-Task 7 dispatcher namespace).
+    monkeypatch.setattr(orchestrator, "run_diarization", lambda *a, **k: [
         {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
     ])
-    monkeypatch.setattr(transcription, "assign_speakers_to_segments",
+    monkeypatch.setattr(orchestrator, "assign_speakers_to_segments",
                         lambda segs, speakers: [{"start": 0, "end": 5, "text": "hi", "speaker": "SPEAKER_00"}])
-    monkeypatch.setattr(transcription, "stitch_speaker_turns", lambda segs: segs)
+    monkeypatch.setattr(orchestrator, "stitch_speaker_turns", lambda segs: segs)
 
     fake_embedding = MagicMock()
     fake_embedding.auto_identify_speakers = MagicMock(side_effect=RuntimeError("boom"))
@@ -110,7 +115,7 @@ def test_inline_auto_match_failure_does_not_break_job(tmp_path, monkeypatch):
                         lambda: fake_embedding, raising=False)
     monkeypatch.setenv("HF_TOKEN", "fake-token")
 
-    settings = TranscriptionSettings(engine="whisper", language="en",
+    settings = TranscriptionSettings(engine="auto-best", language="en",
                                      enable_diarization=True, enable_noise_reduction=False)
     with patch("mlx_whisper.transcribe", return_value={
         "segments": [{"start": 0, "end": 5, "text": "hi",

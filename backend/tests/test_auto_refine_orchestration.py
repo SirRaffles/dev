@@ -189,7 +189,7 @@ def test_dispatch_submits_to_executor_when_conditions_met(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
 
     settings = TranscriptionSettings(
-        engine="whisper",
+        engine="auto-best",
         language="en",
         enable_diarization=False,
         enable_noise_reduction=False,
@@ -227,7 +227,7 @@ def test_dispatch_skipped_when_refinement_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
 
     settings = TranscriptionSettings(
-        engine="whisper", language="en", enable_diarization=False,
+        engine="auto-best", language="en", enable_diarization=False,
         enable_noise_reduction=False, speaker_ids=["sp-1"],
     )
     with patch("mlx_whisper.transcribe", return_value={
@@ -263,7 +263,7 @@ def test_dispatch_failure_rolls_status_back_to_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(transcription.state, "transcription_executor", fake_exec)
 
     settings = TranscriptionSettings(
-        engine="whisper", language="en", enable_diarization=False,
+        engine="auto-best", language="en", enable_diarization=False,
         enable_noise_reduction=False, speaker_ids=["sp-1"],
     )
     with patch("mlx_whisper.transcribe", return_value={

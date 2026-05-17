@@ -18,12 +18,11 @@ def test_whisper_called_with_a1_kwargs(tmp_path, monkeypatch):
         return {"segments": [], "text": "", "language": "en"}
 
     settings = TranscriptionSettings(
-        model_size="large-v3-turbo",
         language="en",
         word_timestamps=False,
         enable_diarization=False,
         enable_noise_reduction=False,
-        engine="whisper",
+        engine="auto-best",
     )
 
     job_obj = MagicMock()
@@ -67,12 +66,11 @@ def test_emitted_segments_strip_words_when_user_opted_out(tmp_path, monkeypatch)
     }
 
     settings = TranscriptionSettings(
-        model_size="large-v3-turbo",
         language="en",
         word_timestamps=False,
         enable_diarization=False,
         enable_noise_reduction=False,
-        engine="whisper",
+        engine="auto-best",
     )
 
     job_obj = MagicMock()
@@ -113,12 +111,11 @@ def test_emitted_segments_keep_words_when_user_opted_in(tmp_path, monkeypatch):
     }
 
     settings = TranscriptionSettings(
-        model_size="large-v3-turbo",
         language="en",
         word_timestamps=True,
         enable_diarization=False,
         enable_noise_reduction=False,
-        engine="whisper",
+        engine="auto-best",
     )
 
     job_obj = MagicMock()
@@ -155,12 +152,11 @@ def test_vad_trim_restores_segment_timestamps(tmp_path, monkeypatch):
     }
 
     settings = TranscriptionSettings(
-        model_size="large-v3-turbo",
         language="en",
         word_timestamps=True,
         enable_diarization=False,
         enable_noise_reduction=False,
-        engine="whisper",
+        engine="auto-best",
     )
 
     job_obj = MagicMock()
@@ -217,12 +213,11 @@ def test_transcribe_with_whisper_is_callable_and_returns_result_dict(tmp_path, m
         return fake_result
 
     settings = TranscriptionSettings(
-        model_size="large-v3-turbo",  # still accepted in Task 2 — Task 5 removes it
         language="en",
         word_timestamps=True,
         enable_diarization=False,
         enable_noise_reduction=False,
-        engine="whisper",  # still legal in Task 2 — Task 5 narrows it
+        engine="auto-best",
     )
 
     with patch("mlx_whisper.transcribe", side_effect=fake_whisper):
