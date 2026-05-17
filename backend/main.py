@@ -137,28 +137,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Transcript refinement: Not available (claude CLI not found)")
 
-    # Check for Voxtral Local availability (via mlx-audio)
-    if state._voxtral_local_available:
-        logger.info("Voxtral Local: Available (mlx-audio installed)")
-        logger.info("Note: Voxtral model will be downloaded on first use if not cached")
-    else:
-        logger.info("Voxtral Local: Not available (install mlx-audio for local Voxtral transcription)")
-
     # Initialize iCloud Drive directory structure for call intelligence
     from config import ICLOUD_BASE_PATH
     for subdir in ("speakers", "speakers/_unknown", "contexts", "calls"):
         (ICLOUD_BASE_PATH / subdir).mkdir(parents=True, exist_ok=True)
     logger.info("iCloud Drive data directory: %s", ICLOUD_BASE_PATH)
-
-    # Check for Voxtral API availability
-    mistral_api_key = os.environ.get("MISTRAL_API_KEY")
-    if mistral_api_key:
-        from services.voxtral_service import VoxtralService
-        state._voxtral_service = VoxtralService(mistral_api_key)
-        state._voxtral_available = True
-        logger.info("Voxtral API: Available (MISTRAL_API_KEY set)")
-    else:
-        logger.info("Voxtral API: Not configured (set MISTRAL_API_KEY for cloud transcription)")
 
     # Opportunistic prune of old jobs at startup (audit #14)
     try:

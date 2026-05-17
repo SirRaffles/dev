@@ -22,7 +22,6 @@ class ModelName(str, Enum):
     VISION = "vision"
     DIARIZATION = "diarization"
     EMBEDDING = "embedding"
-    VOXTRAL_LOCAL = "voxtral_local"
 
 
 class ModelConfig:
@@ -53,15 +52,6 @@ class ModelConfig:
             "memory_mb": 200,  # Speaker embedding model is lightweight (~200MB)
             "unloadable": True,
             "load_timeout": 60,
-        },
-        ModelName.VOXTRAL_LOCAL: {
-            "priority": 1,  # Same tier as Whisper — primary transcription engine
-            # Default assumes 4B Realtime 4-bit (~3.2GB). Legacy 3B bf16 is
-            # 9.4GB; if a user selects that variant the actual footprint is
-            # larger but _can_load_model accounting is only a heuristic.
-            "memory_mb": 3500,
-            "unloadable": True,
-            "load_timeout": 120,
         },
     }
 
@@ -370,57 +360,6 @@ class ModelManager:
             logger.error(f"Failed to load Embedding model: {e}")
             return False
 
-    async def load_voxtral_local(self, model_path: str) -> bool:
-        """Load Voxtral Local (mlx-audio) with ModelManager accounting (audit #12).
-
-        Different `model_path` values (fp16 vs 4-bit) both map to VOXTRAL_LOCAL;
-        we unload + reload if the caller asks for a different variant.
-        """
-        current = self._models.get(ModelName.VOXTRAL_LOCAL)
-        if (
-            self.is_loaded(ModelName.VOXTRAL_LOCAL)
-            and isinstance(current, dict)
-            and current.get("path") == model_path
-        ):
-            return True
-
-        if self.is_loaded(ModelName.VOXTRAL_LOCAL):
-            self.unload_model(ModelName.VOXTRAL_LOCAL)
-
-        if not self._can_load_model(ModelName.VOXTRAL_LOCAL):
-            if not self._unload_lower_priority_models(ModelName.VOXTRAL_LOCAL):
-                raise MemoryError("Not enough memory to load Voxtral Local model")
-
-        try:
-            from mlx_audio.stt.utils import load as mlx_audio_load
-            logger.info("Loading Voxtral Local model: %s", model_path)
-            model = mlx_audio_load(model_path)
-            mem_mb = ModelConfig.CONFIGS[ModelName.VOXTRAL_LOCAL]["memory_mb"]
-            # 4-bit variants carry ~3.5 GB, not ~10 GB.
-            if "4bit" in model_path.lower():
-                mem_mb = 3500
-            self._models[ModelName.VOXTRAL_LOCAL] = {"model": model, "path": model_path}
-            self._model_status[ModelName.VOXTRAL_LOCAL].update({
-                "loaded": True,
-                "memory_mb": mem_mb,
-                "device": "mps",
-                "last_used": datetime.now(),
-                "load_count": self._model_status[ModelName.VOXTRAL_LOCAL]["load_count"] + 1,
-            })
-            # Mirror into legacy state.* slots so existing readers stay coherent.
-            state_mod = None
-            try:
-                import state as state_mod  # type: ignore
-            except Exception:
-                pass
-            if state_mod is not None:
-                state_mod._voxtral_local_model = model
-                state_mod._voxtral_local_model_name = model_path
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load Voxtral Local model: {e}")
-            return False
-
     def unload_model(self, model_name: ModelName) -> bool:
         """Explicitly unload a model to free memory."""
         if not self.is_loaded(model_name):
@@ -453,14 +392,6 @@ class ModelManager:
                 "loaded": False,
                 "memory_mb": 0,
             })
-
-            if model_name == ModelName.VOXTRAL_LOCAL:
-                try:
-                    import state as state_mod  # type: ignore
-                    state_mod._voxtral_local_model = None
-                    state_mod._voxtral_local_model_name = None
-                except Exception:
-                    pass
 
             return True
 

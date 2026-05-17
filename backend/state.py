@@ -67,7 +67,7 @@ class BoundedDict:
 
 # Thread pool for transcription tasks
 # max_workers=1: serialize all transcription jobs to prevent Metal GPU OOM.
-# Diarization (pyannote) + transcription (Whisper/Voxtral) together use most
+# Diarization (pyannote) + transcription (Whisper) together use most
 # of the 24GB unified memory on M3. Concurrent jobs cause crashes.
 transcription_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
 
@@ -76,21 +76,10 @@ whisper_model_path = None
 whisper_model_ready = False
 diarization_pipeline = None
 
-# Voxtral cloud transcription state
+# Voxtral has been removed (Plan 4D). These False sentinels remain only so
+# routes/models_api.py keeps responding until Task 3 deletes the references.
 _voxtral_available = False
-_voxtral_service = None
-
-# Voxtral local transcription state (via mlx-audio)
 _voxtral_local_available = False
-_voxtral_local_model = None
-_voxtral_local_model_name = None
-
-# Check if mlx-audio is available for local Voxtral
-try:
-    from mlx_audio.stt.utils import load as _mlx_audio_load
-    _voxtral_local_available = True
-except ImportError:
-    pass
 
 # Parakeet state.
 # _parakeet_model holds a single cached parakeet_mlx model.
