@@ -179,18 +179,33 @@ export default function GlossaryEditor({ path = '_global.md' }: Props) {
           <div className="text-xs font-medium text-amber-800 dark:text-amber-300 mb-2">
             {pendingLines.length} auto-learned term{pendingLines.length === 1 ? '' : 's'} pending review
           </div>
-          <ul className="space-y-1">
-            {pendingLines.map((line) => (
-              <li key={line} className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-mono text-slate-700 dark:text-slate-300 truncate">{line}</span>
-                <button onClick={() => handlePromote(line)} disabled={saving}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white shrink-0"
-                        title="Promote to Active section">
-                  <ArrowUpCircle className="w-3 h-3" />
-                  Promote
-                </button>
-              </li>
-            ))}
+          <ul className="space-y-2">
+            {pendingLines.map((line) => {
+              // Parse "- TERM (from job-id: source_phrase)" into 2 visual parts:
+              // a primary "term" chunk and a secondary "context" caption underneath.
+              // Keeps long context phrases from breaking the row layout.
+              const m = line.match(/^-\s+([^(]+?)\s*(?:\((.*)\))?$/);
+              const term = (m?.[1] ?? line.replace(/^-\s+/, '')).trim();
+              const context = m?.[2]?.trim();
+              return (
+                <li key={line} className="flex items-start justify-between gap-3 text-sm">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-mono font-medium text-slate-800 dark:text-slate-200 break-words">{term}</div>
+                    {context && (
+                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 break-words">
+                        {context}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => handlePromote(line)} disabled={saving}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white shrink-0 mt-0.5"
+                          title="Promote to Active section">
+                    <ArrowUpCircle className="w-3 h-3" />
+                    Promote
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

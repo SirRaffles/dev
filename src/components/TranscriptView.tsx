@@ -5,6 +5,8 @@ import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
 import AutoMatchBadge from './AutoMatchBadge';
+// RenameFileModal exists in src/components/ but isn't wired up yet —
+// the rename-source feature ships in a follow-up commit.
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
 
 // Diarization emits generic labels like SPEAKER_00 / "Speaker 1". Anything
