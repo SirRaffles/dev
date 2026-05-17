@@ -15,6 +15,7 @@ from typing import Optional, List, Literal
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from config import (
     SUPPORTED_LANGUAGES, ALLOWED_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS,
@@ -124,6 +125,7 @@ async def transcribe_file(
     engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description="Path under CONTEXTS_DIR to a .md context document"),
+    speaker_ids: Optional[str] = Query(None, description="Comma-separated speaker UUIDs — their personality.md is fed to the model"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
@@ -184,6 +186,7 @@ async def transcribe_file(
         if context_terms:
             parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
 
+        _orig_filename = getattr(file, "filename", None) if file is not None else None
         settings = TranscriptionSettings(
             vad_filter=False,
             word_timestamps=word_timestamps,
@@ -195,6 +198,8 @@ async def transcribe_file(
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
+            speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
+            original_filename=_orig_filename,
             output_mode=output_mode,
         )
 
@@ -225,6 +230,7 @@ async def transcribe_youtube(
     engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
+    speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
@@ -313,6 +319,10 @@ async def transcribe_youtube(
         if context_terms:
             parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
 
+        # YouTube route has no uploaded file; carry the URL as a label so
+        # /jpr/recordings can't false-match it, and future debugging has
+        # a stable handle for this job.
+        _orig_filename = None
         settings = TranscriptionSettings(
             vad_filter=False,
             word_timestamps=word_timestamps,
@@ -324,6 +334,8 @@ async def transcribe_youtube(
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
+            speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
+            original_filename=_orig_filename,
             output_mode=output_mode,
         )
 
@@ -361,6 +373,7 @@ async def transcribe_batch(
     engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
     context_terms: Optional[str] = Query(None, description="Context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
+    speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
@@ -391,6 +404,7 @@ async def transcribe_batch(
         if context_terms:
             parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
 
+        _orig_filename = getattr(file, "filename", None) if file is not None else None
         settings = TranscriptionSettings(
             vad_filter=False,
             word_timestamps=word_timestamps,
@@ -401,6 +415,8 @@ async def transcribe_batch(
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
+            speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
+            original_filename=_orig_filename,
             output_mode=output_mode,
         )
 
@@ -792,6 +808,547 @@ async def update_segments(job_id: str, request: SegmentUpdate):
         "language": job.language,
         "language_probability": job.language_probability,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Job-level speaker assignment
+#
+# Diarization produces anonymous labels like "SPEAKER_00" or "Speaker 1".
+# These endpoints let the user pin each label to a real speaker in the
+# Speakers registry (creating new ones on the fly), which:
+#   - renames the label in-place across segments + speaker turns
+#   - saves a voice embedding (when audio is on disk) so future jobs auto-match
+#   - increments the speaker's call_count / total_speaking_time
+#   - optionally extracts personality insights from the transcript and
+#     appends them to the speaker's personality.md (requires the `claude` CLI)
+# ──────────────────────────────────────────────────────────────────────────
+
+import re as _re
+
+_ANONYMOUS_SPEAKER_RE = _re.compile(r"^(?:SPEAKER_\d+|Speaker\s*\d+|Unknown)$", _re.IGNORECASE)
+
+
+def _is_anonymous_label(name: Optional[str]) -> bool:
+    if not name:
+        return True
+    return bool(_ANONYMOUS_SPEAKER_RE.match(name.strip()))
+
+
+def _longest_turn_for_label(turns: list, label: str) -> Optional[dict]:
+    """Return the longest diarization turn matching this label (for embedding)."""
+    candidates = [t for t in (turns or []) if t.get("speaker") == label]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda t: (t.get("end", 0) - t.get("start", 0)))
+
+
+def _resolve_job_audio_path(job_id: str) -> Optional[str]:
+    """Best-effort lookup of the on-disk audio file for a completed job.
+
+    Order of attempts:
+      1. The tmp path we stored at upload time (may have been GC'd).
+      2. A file_path explicitly stored in settings (rare).
+      3. The original filename under JPR_WATCH_PATH — works for audio the
+         user uploaded from their Just Press Record folder even after the
+         tmp has been cleaned, so voice-embedding backfill can still run.
+    """
+    meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+    if meta and meta.get("file_path"):
+        p = Path(meta["file_path"])
+        if p.exists():
+            return str(p)
+    settings = meta.get("settings") if meta else None
+    if isinstance(settings, dict):
+        if settings.get("file_path"):
+            p = Path(settings["file_path"])
+            if p.exists():
+                return str(p)
+        orig = settings.get("original_filename")
+        if orig:
+            try:
+                from config import JPR_WATCH_PATH
+                for candidate in JPR_WATCH_PATH.rglob(orig):
+                    if candidate.is_file():
+                        return str(candidate)
+            except Exception:
+                logger.warning("JPR rglob fallback failed", exc_info=True)
+    return None
+
+
+def _extract_speaker_insights_sync(job_id: str) -> dict:
+    """For each named (non-anonymous) speaker in the job's segments, refresh
+    both their EXPLICIT-insights and IMPLICIT-insights markdown from this
+    transcript. The user-maintained `profile.md` (bio) is never touched
+    by the LLM.
+
+    Result shape: {
+      "updated": ["Arnaud:explicit", "Arnaud:implicit", ...],
+      "skipped": [{speaker, reason}, ...],
+      "errors":  ["Arnaud:explicit: <err>", ...]
+    }"""
+    result = {"updated": [], "skipped": [], "errors": []}
+
+    if not state.deliverable_available or state.deliverable_service is None:
+        result["errors"].append("claude CLI not available — insights skipped")
+        return result
+
+    job = state.jobs.get(job_id)
+    if not job or not job.segments:
+        result["errors"].append("job has no segments")
+        return result
+
+    from services.deliverable_service import _build_transcript_text, SPEAKERS_DIR
+
+    named = {
+        (seg.get("speaker") or "").strip()
+        for seg in job.segments
+        if seg.get("speaker") and not _is_anonymous_label(seg.get("speaker"))
+    }
+    if not named:
+        result["errors"].append("no named speakers to extract insights for")
+        return result
+
+    transcript_text = _build_transcript_text(job.segments)
+
+    sections = (
+        ("explicit", "explicit_insights.md", "update_explicit_insights"),
+        ("implicit", "implicit_insights.md", "update_implicit_insights"),
+    )
+
+    for name in sorted(named):
+        speaker_lines = [
+            line for line in transcript_text.split("\n")
+            if f"] {name}:" in line
+        ]
+        if not speaker_lines:
+            result["skipped"].append({"speaker": name, "reason": "no lines"})
+            continue
+        speaker_transcript = "\n".join(speaker_lines[:100])
+
+        speaker_folder = SPEAKERS_DIR / name
+        speaker_folder.mkdir(parents=True, exist_ok=True)
+
+        for tag, filename, method_name in sections:
+            try:
+                path = speaker_folder / filename
+                existing = path.read_text(encoding="utf-8") if path.exists() else ""
+                logger.info("Updating %s for %s from job %s", tag, name, job_id)
+                method = getattr(state.deliverable_service, method_name)
+                updated = method(name, speaker_transcript, existing)
+                path.write_text(updated, encoding="utf-8")
+                result["updated"].append(f"{name}:{tag}")
+            except Exception as e:
+                logger.error("Insight extraction failed for %s:%s: %s", name, tag, e, exc_info=True)
+                result["errors"].append(f"{name}:{tag}: {e}")
+
+    return result
+
+
+class SpeakerAssignment(BaseModel):
+    label: str
+    speaker_name: str
+    create_new: bool = False
+
+
+class AssignSpeakersRequest(BaseModel):
+    assignments: List[SpeakerAssignment]
+    extract_insights: bool = True
+
+
+@router.get("/job/{job_id}/speakers/labels")
+async def list_job_speaker_labels(job_id: str):
+    """List anonymous speaker labels + speaking time for a completed job.
+
+    Returns one entry per unique label found in job.speakers / segments,
+    flagging whether it still needs naming and whether we have enough audio
+    to extract a voice embedding for it.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed first")
+
+    # Build a {label: {duration, count, matched_name}} summary from both
+    # segment-level and turn-level speaker annotations.
+    stats: dict[str, dict] = {}
+    for seg in job.segments or []:
+        label = seg.get("speaker")
+        if not label:
+            continue
+        dur = max(0.0, float(seg.get("end", 0)) - float(seg.get("start", 0)))
+        s = stats.setdefault(label, {"label": label, "total_seconds": 0.0, "segment_count": 0})
+        s["total_seconds"] += dur
+        s["segment_count"] += 1
+    for turn in job.speakers or []:
+        label = turn.get("speaker")
+        if not label or label in stats:
+            continue
+        dur = max(0.0, float(turn.get("end", 0)) - float(turn.get("start", 0)))
+        stats.setdefault(label, {"label": label, "total_seconds": dur, "segment_count": 0})
+
+    labels = []
+    for label, s in stats.items():
+        anon = _is_anonymous_label(label)
+        existing = None if anon else state.speaker_store.get_by_name(label)
+        longest = _longest_turn_for_label(job.speakers or [], label)
+        labels.append({
+            **s,
+            "total_seconds": round(s["total_seconds"], 2),
+            "anonymous": anon,
+            "matched_speaker_id": existing["speaker_id"] if existing else None,
+            "can_extract_embedding": longest is not None and (longest.get("end", 0) - longest.get("start", 0)) >= 2.0,
+        })
+    labels.sort(key=lambda x: -x["total_seconds"])
+    return {"job_id": job_id, "labels": labels}
+
+
+def _apply_speaker_assignments(
+    job,
+    assignments,
+    audio_path: Optional[str] = None,
+) -> dict:
+    """Apply a list of SpeakerAssignment entries to a completed job.
+
+    Shared between POST /job/{id}/speakers/assign (the legacy review flow)
+    and POST /job/{id}/re-refine (Plan 5A new endpoint). For each assignment:
+      - locate or create the speaker in the registry
+      - extract a voice embedding from the longest matching turn if audio is
+        on disk (register for new / EMA-update for existing)
+      - rename the label in job.segments and job.speakers in-place
+      - bump the speaker's call_count + total_speaking_time
+
+    Returns:
+        {
+            "mapping": {old_label: new_name, ...},
+            "results": [
+                {
+                    "label": str,
+                    "speaker_id": str,            # always populated (never None)
+                    "speaker_name": str,
+                    "created": bool,
+                    "embedding_saved": bool,
+                    "speaking_time_seconds": float,
+                },
+                ...
+            ],
+        }
+
+    Raises HTTPException on invalid input (400 for anonymous-name reuse, 404
+    for missing speaker without create_new=true) — same status codes the
+    legacy route raised.
+    """
+    from services.speaker_embedding import SPEAKERS_DIR as _SPEAKERS_DIR
+    embedding_service = state.get_speaker_embedding_service()
+
+    mapping: dict[str, str] = {}  # old label → new name
+    results = []
+
+    for a in assignments:
+        name = a.speaker_name.strip()
+        if not name:
+            continue
+        if _is_anonymous_label(name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{name}' looks like an anonymous diarization label; pick a real speaker name",
+            )
+
+        existing = state.speaker_store.get_by_name(name)
+        longest = _longest_turn_for_label(job.speakers or [], a.label)
+        embedding = None
+        if audio_path and longest and (longest["end"] - longest["start"]) >= 2.0:
+            try:
+                embedding = embedding_service.extract_embedding(
+                    audio_path, longest["start"], longest["end"],
+                )
+            except Exception as e:
+                logger.warning("Embedding extraction failed for %s: %s", a.label, e)
+
+        if not existing:
+            if not a.create_new:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Speaker '{name}' not found. Set create_new=true to create it.",
+                )
+            if embedding is not None:
+                speaker_id = embedding_service.register_speaker(name, embedding)
+            else:
+                # No embedding available — create via the speaker_store directly.
+                import uuid as _uuid
+                speaker_id = str(_uuid.uuid4())
+                folder = _SPEAKERS_DIR / name
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "personality.md").write_text(
+                    f"# {name}\n\n*No personality insights yet.*\n", encoding="utf-8",
+                )
+                state.speaker_store.create(
+                    speaker_id, name,
+                    str(folder.relative_to(_SPEAKERS_DIR.parent)),
+                )
+            speaker = state.speaker_store.get(speaker_id)
+        else:
+            speaker = existing
+            speaker_id = speaker["speaker_id"]
+            # EMA-update embedding with the new sample.
+            if embedding is not None:
+                try:
+                    embedding_service.update_embedding(name, embedding)
+                except Exception as e:
+                    logger.warning("EMA update failed for %s: %s", name, e)
+
+        # Accumulate rename mapping + speaking time.
+        mapping[a.label] = name
+        speaking_time = sum(
+            max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+            for s in (job.segments or [])
+            if s.get("speaker") == a.label
+        )
+        try:
+            state.speaker_store.increment_call_count(speaker_id, speaking_time)
+        except Exception:  # non-fatal
+            logger.warning("increment_call_count failed for %s", name, exc_info=True)
+
+        results.append({
+            "label": a.label,
+            "speaker_id": speaker_id,
+            "speaker_name": name,
+            "created": not existing,
+            "embedding_saved": embedding is not None,
+            "speaking_time_seconds": round(speaking_time, 2),
+        })
+
+    # Apply the rename in both segments and turns, then persist.
+    if mapping:
+        for seg in (job.segments or []):
+            if seg.get("speaker") in mapping:
+                seg["speaker"] = mapping[seg["speaker"]]
+        for turn in (job.speakers or []):
+            if turn.get("speaker") in mapping:
+                turn["speaker"] = mapping[turn["speaker"]]
+        try:
+            state.jobs.update(job)
+        except Exception:
+            logger.warning("Failed to persist job after speaker rename", exc_info=True)
+
+    return {"mapping": mapping, "results": results}
+
+
+@router.post("/job/{job_id}/speakers/assign")
+async def assign_job_speakers(
+    job_id: str,
+    req: AssignSpeakersRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Map anonymous diarization labels to named speakers in the registry.
+
+    Thin wrapper around ``_apply_speaker_assignments`` — preserved for
+    backwards compatibility. The new ``/re-refine`` route uses the same
+    helper and adds a refinement re-run on top.
+
+    After all assignments land, asynchronously extract personality insights
+    from the transcript and append to each affected speaker's personality.md.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed first")
+    if not req.assignments:
+        raise HTTPException(status_code=400, detail="No assignments provided")
+
+    audio_path = _resolve_job_audio_path(job_id)
+    out = _apply_speaker_assignments(job, req.assignments, audio_path=audio_path)
+
+    # Kick off insight extraction in the background so the HTTP response is
+    # fast. The user sees an "Extracting insights…" state in the UI.
+    insight_scheduled = False
+    if req.extract_insights and state.deliverable_available:
+        background_tasks.add_task(_extract_speaker_insights_sync, job_id)
+        insight_scheduled = True
+
+    return {
+        "job_id": job_id,
+        "assignments": out["results"],
+        "insight_extraction_scheduled": insight_scheduled,
+        "segments": job.segments,
+        "speakers": sorted({s.get("speaker") for s in (job.segments or []) if s.get("speaker")}),
+    }
+
+
+def _resolve_match_scope(settings: Optional[dict]) -> tuple[Optional[list], Optional[list], str]:
+    """Decide how auto-match should scope its candidate pool based on the
+    job's pre-transcription picks vs the declared speaker count.
+
+    Returns (restrict_to_ids, prefer_ids, mode) where mode is one of:
+      "scoped"          — picks.length == num_speakers > 0
+      "global-prefer"   — picks present but fewer than num_speakers (or auto)
+      "global"          — no picks at all
+    """
+    picks = (settings or {}).get("speaker_ids") or []
+    num_raw = (settings or {}).get("num_speakers")
+    try:
+        num = int(num_raw) if num_raw not in (None, "", "auto") else None
+    except (TypeError, ValueError):
+        num = None
+
+    if num is not None and num > 0 and len(picks) == num:
+        return picks, None, "scoped"
+    if picks:
+        return None, picks, "global-prefer"
+    return None, None, "global"
+
+
+@router.post("/job/{job_id}/speakers/auto-match")
+async def auto_match_job_speakers(job_id: str):
+    """Voice-embedding match diarization labels to speakers in the registry.
+
+    Scope is derived from the job's stored settings:
+      - picks.length == num_speakers → scoped to picks
+      - picks < num_speakers (or auto-detect) → global, with picks as tiebreaker
+      - no picks → global
+
+    Does NOT mutate segments. The frontend pre-fills the "Name the speakers"
+    panel with these suggestions; the user still reviews and saves via the
+    existing /job/{id}/speakers/assign endpoint.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed first")
+    if not job.speakers:
+        return {"job_id": job_id, "mode": "global", "suggestions": []}
+
+    audio_path = _resolve_job_audio_path(job_id)
+    if not audio_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio file unavailable — needed to extract voice embeddings",
+        )
+
+    meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+    settings = (meta or {}).get("settings") or {}
+    restrict, prefer, mode = _resolve_match_scope(settings)
+
+    try:
+        embedding_service = state.get_speaker_embedding_service()
+        ident = embedding_service.auto_identify_speakers(
+            audio_path, job.speakers, job_id,
+            restrict_to_ids=restrict,
+            prefer_ids=prefer,
+        )
+    except Exception:
+        logger.error("auto-match failed for %s", job_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="Voice match failed")
+
+    # Per-label speaking time (for UI ranking + can-extract hints).
+    time_per_label: dict[str, float] = {}
+    for seg in (job.segments or []):
+        lbl = seg.get("speaker")
+        if lbl:
+            time_per_label[lbl] = time_per_label.get(lbl, 0.0) + max(
+                0.0, float(seg.get("end", 0)) - float(seg.get("start", 0))
+            )
+
+    suggestions = []
+    for label, info in ident.items():
+        suggestions.append({
+            "label": label,
+            "speaker_id": info.get("speaker_id"),
+            "speaker_name": info.get("name"),
+            "confidence": info.get("confidence", 0.0),
+            "source": info.get("source"),
+            "matched": info.get("matched", False),
+            "total_seconds": round(time_per_label.get(label, 0.0), 2),
+        })
+    suggestions.sort(key=lambda s: -s["total_seconds"])
+
+    return {"job_id": job_id, "mode": mode, "suggestions": suggestions}
+
+
+@router.post("/job/{job_id}/speakers/refresh-embeddings")
+async def refresh_job_speaker_embeddings(job_id: str):
+    """For every NAMED (non-anonymous) speaker in this job's diarization,
+    re-extract a voice embedding from their longest turn in the source
+    audio and persist it to their speaker profile.
+
+    Covers the case where /speakers/assign ran after the tmp upload was
+    garbage-collected (no audio → no embedding extracted), or where the
+    speaker was created without a voice sample. Uses the same extractor
+    as the Calls flow, so the embedding format matches everywhere.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.speakers:
+        return {"job_id": job_id, "updated": [], "skipped": [], "note": "no diarization data"}
+
+    audio_path = _resolve_job_audio_path(job_id)
+    if not audio_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Source audio not found — tmp was GC'd and no original_filename/JPR match.",
+        )
+
+    embedding_service = state.get_speaker_embedding_service()
+
+    # Group diarization turns by speaker label; skip anonymous labels.
+    from collections import defaultdict
+    by_speaker: dict[str, list] = defaultdict(list)
+    for turn in job.speakers or []:
+        label = (turn.get("speaker") or "").strip()
+        if label and not _is_anonymous_label(label):
+            by_speaker[label].append(turn)
+
+    updated, skipped, errors = [], [], []
+    for name, turns in by_speaker.items():
+        longest = max(turns, key=lambda t: float(t.get("end", 0)) - float(t.get("start", 0)))
+        duration = float(longest["end"]) - float(longest["start"])
+        if duration < 2.0:
+            skipped.append({"speaker": name, "reason": f"longest turn {duration:.1f}s < 2s"})
+            continue
+        try:
+            # extract_embedding internally creates its own asyncio loop to
+            # load pyannote on first use. That clashes with FastAPI's running
+            # loop on this thread, so push the call into a worker thread.
+            emb = await asyncio.to_thread(
+                embedding_service.extract_embedding,
+                audio_path, longest["start"], longest["end"],
+            )
+        except Exception as e:
+            errors.append(f"{name}: extract failed — {e}")
+            continue
+
+        # Persist: if no speaker with embedding_path yet, update_embedding will
+        # write the .npy AND flip embedding_path in the speaker_store (see
+        # SpeakerEmbeddingService.update_embedding).
+        try:
+            existing = state.speaker_store.get_by_name(name)
+            if existing:
+                await asyncio.to_thread(embedding_service.update_embedding, name, emb)
+            else:
+                # Fresh speaker — register_speaker writes embedding_path.
+                await asyncio.to_thread(embedding_service.register_speaker, name, emb)
+            updated.append({"speaker": name, "duration_s": round(duration, 2)})
+        except Exception as e:
+            errors.append(f"{name}: save failed — {e}")
+
+    return {"job_id": job_id, "source_audio": audio_path, "updated": updated, "skipped": skipped, "errors": errors}
+
+
+@router.post("/job/{job_id}/speakers/extract-insights")
+async def extract_job_speaker_insights(job_id: str):
+    """Manually trigger insight extraction for already-named speakers."""
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed first")
+    if not state.deliverable_available:
+        raise HTTPException(status_code=503, detail="Insights require the `claude` CLI")
+
+    return _extract_speaker_insights_sync(job_id)
 
 
 @router.get("/job/{job_id}/search")

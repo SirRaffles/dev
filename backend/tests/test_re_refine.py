@@ -97,3 +97,45 @@ def test_match_speaker_returns_three_tuple_when_no_match(monkeypatch):
     name, score, runner_up = result
     assert name is None
     assert runner_up is None
+
+
+# ---------- Task 3: _apply_speaker_assignments shared helper ----------
+
+def test_apply_speaker_assignments_helper_exists_and_returns_results(
+    icloud_base, sample_job, clean_speakers, monkeypatch
+):
+    """The helper extracted from /speakers/assign is callable and returns the
+    same shape as the route used to return."""
+    import state
+    from routes.transcription import _apply_speaker_assignments
+    from routes.transcription import SpeakerAssignment
+
+    job = state.job_store.get(sample_job)
+    job.segments = [
+        {"start": 0, "end": 5, "text": "hi",   "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10, "text": "bonjour", "speaker": "SPEAKER_01"},
+    ]
+    job.speakers = [
+        {"start": 0, "end": 5, "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_01"},
+    ]
+    state.job_store.update(job)
+
+    # Pre-create a speaker so the assignment doesn't need create_new.
+    # `speaker_store.create(speaker_id, name, folder_path)` — see
+    # backend/tests/test_stores.py:15 for the established pattern.
+    import uuid as _uuid
+    sid = str(_uuid.uuid4())
+    state.speaker_store.create(sid, "PascalWeber_TestT3", "speakers/Pascal Weber")
+    clean_speakers.append(sid)
+
+    assignments = [SpeakerAssignment(label="SPEAKER_00", speaker_name="PascalWeber_TestT3", create_new=False)]
+
+    out = _apply_speaker_assignments(job, assignments, audio_path=None)
+
+    assert "mapping" in out and out["mapping"] == {"SPEAKER_00": "PascalWeber_TestT3"}
+    assert "results" in out and len(out["results"]) == 1
+    assert out["results"][0]["label"] == "SPEAKER_00"
+    assert out["results"][0]["speaker_name"] == "PascalWeber_TestT3"
+    # Side effect: segment label was rewritten in-place
+    assert job.segments[0]["speaker"] == "PascalWeber_TestT3"
