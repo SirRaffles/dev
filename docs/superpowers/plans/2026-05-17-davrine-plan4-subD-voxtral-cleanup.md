@@ -878,6 +878,24 @@ grep -n "MISTRAL_API_KEY\|voxtral" docker-compose.local.yml 2>/dev/null
 
 If matches exist, delete those lines too.
 
+- [ ] **Step 3b: Edit `.env.example`** (added per code review)
+
+The onboarding template still references the dead env var.
+
+```bash
+cd ~/Development/apps/whisper-transcription-app
+grep -n "MISTRAL_API_KEY" .env.example
+```
+
+Expected match (line ~25):
+```
+# MISTRAL_API_KEY=your_mistral_api_key_here
+```
+
+Delete that line. Re-grep — zero matches expected.
+
+**Do NOT touch the user's actual `~/Development/apps/whisper-transcription-app/.env`** if it exists — the user may have a real key there for unrelated services. If `MISTRAL_API_KEY` exists in `.env`, flag it to the user; do not delete without confirmation.
+
 - [ ] **Step 4: Audit `.claude/settings.local.json`**
 
 ```bash
@@ -893,7 +911,7 @@ If any **other** entry mentions our own code paths (e.g. `whisper-transcription-
 
 ```bash
 cd ~/Development/apps/whisper-transcription-app
-grep -rn "VoxtralService\|voxtral_service\|transcribe_with_voxtral\|MISTRAL_API_KEY\|useEngineAvailability\|VOXTRAL_MODELS\|VOXTRAL_LOCAL_MODELS\|engines.md" \
+grep -rin "VoxtralService\|voxtral_service\|transcribe_with_voxtral\|MISTRAL_API_KEY\|useEngineAvailability\|VOXTRAL_MODELS\|VOXTRAL_LOCAL_MODELS\|MODEL_SIZES\|ENGINES\|engines.md" \
   --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" \
   --include="*.md" --include="*.yml" --include="*.yaml" \
   . 2>/dev/null \
@@ -901,10 +919,15 @@ grep -rn "VoxtralService\|voxtral_service\|transcribe_with_voxtral\|MISTRAL_API_
   | grep -v "node_modules/" \
   | grep -v "backend/__pycache__/" \
   | grep -v "docs/superpowers/plans/" \
-  | grep -v "docs/superpowers/specs/"
+  | grep -v "docs/superpowers/specs/" \
+  | grep -v "backend/tests/test_youtube.py"
 ```
 
-Expected: **zero matches**. (The plan and spec files under `docs/superpowers/` legitimately reference these symbols as part of describing the cleanup — excluded above.)
+Expected: **zero matches**.
+
+**Acknowledged false-positives** (these paths intentionally keep references):
+- `docs/superpowers/plans/` + `docs/superpowers/specs/` legitimately reference these symbols as part of describing the cleanup.
+- `backend/tests/test_youtube.py` lines ~149 + ~177 have generic env-scrubbing security tests that mention `MISTRAL_API_KEY` as a representative secret to scrub from subprocess env. These assertions pass whether or not the env var is set — leave them alone.
 
 If any match survives outside those excluded paths: investigate, remove, and re-run the grep until clean.
 
