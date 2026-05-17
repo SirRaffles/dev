@@ -76,11 +76,6 @@ whisper_model_path = None
 whisper_model_ready = False
 diarization_pipeline = None
 
-# Voxtral has been removed (Plan 4D). These False sentinels remain only so
-# routes/models_api.py keeps responding until Task 3 deletes the references.
-_voxtral_available = False
-_voxtral_local_available = False
-
 # Parakeet state.
 # _parakeet_model holds a single cached parakeet_mlx model.
 # _parakeet_model_path tracks which HF path is currently loaded so we can

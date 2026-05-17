@@ -148,7 +148,7 @@ def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> L
 
     If per-word timestamps are available on a segment, the segment is split at
     speaker-turn boundaries so each output sub-segment has exactly one speaker.
-    If word timestamps are absent (Voxtral/Parakeet path), falls back to the
+    If word timestamps are absent (Parakeet path), falls back to the
     midpoint-of-segment heuristic.
     """
     if not speakers:
@@ -226,8 +226,8 @@ def assign_speakers_time_proportional(segments: List[dict], speaker_turns: List[
     """A3-light: split each segment at speaker-turn boundaries by
     time-proportional text ratio.
 
-    Used when the text engine does NOT emit per-word timestamps (Parakeet,
-    Voxtral). Handles N-way splits: a segment spanning 3+ pyannote turns
+    Used when the text engine does NOT emit per-word timestamps (Parakeet).
+    Handles N-way splits: a segment spanning 3+ pyannote turns
     produces 3+ sub-segments. Word allocation per sub-segment uses
     ceil(N_words * (sub_duration / total_duration)) with a final-segment
     rounding fix to absorb the +ceil bias so total word count matches input.

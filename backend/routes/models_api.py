@@ -8,7 +8,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS, VOXTRAL_MODELS, VOXTRAL_LOCAL_MODELS
+from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS
 from services.model_manager import get_model_manager, ModelName
 import state
 
@@ -63,11 +63,8 @@ async def health(request: Request):
         "model_path": state.whisper_model_path,
         "gpu_available": gpu_available,
         "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
-        "voxtral_available": state._voxtral_available,
         "engines": {
             "whisper": {"available": state.whisper_model_ready, "type": "local"},
-            "voxtral-local": {"available": state._voxtral_local_available, "type": "local"},
-            "voxtral-api": {"available": state._voxtral_available, "type": "cloud"},
         },
         "refinement_available": state.refinement_available,
         "active_jobs": state.job_store.get_active_count(),
@@ -98,30 +95,10 @@ async def list_models():
                 "engine": "whisper",
             })
 
-    if state._voxtral_local_available:
-        for key, val in VOXTRAL_LOCAL_MODELS.items():
-            models.append({
-                "id": key,
-                "path": val["path"],
-                "description": val["description"],
-                "engine": "voxtral-local",
-            })
-
-    if state._voxtral_available:
-        for key, val in VOXTRAL_MODELS.items():
-            models.append({
-                "id": key,
-                "api_id": val["api_id"],
-                "description": val["description"],
-                "engine": val["engine"],
-            })
-
     return {
         "models": models,
         "default": "large-v3-turbo",
         "parakeet_available": state._parakeet_available,
-        "voxtral_local_available": state._voxtral_local_available,
-        "voxtral_available": state._voxtral_available,
         "engine_capabilities": {
             "whisper": {
                 "context_bias": False,
@@ -131,24 +108,6 @@ async def list_models():
                 "translation": True,
                 "noise_reduction": True,
                 "two_pass": False,
-            },
-            "voxtral-local": {
-                "context_bias": False,
-                "timestamps": True,
-                "word_timestamps": False,
-                "diarization": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
-                "translation": False,
-                "noise_reduction": True,
-                "two_pass": False,
-            },
-            "voxtral-api": {
-                "context_bias": True,
-                "timestamps": True,
-                "word_timestamps": True,
-                "diarization": True,
-                "translation": False,
-                "noise_reduction": True,
-                "two_pass": True,
             },
         },
     }

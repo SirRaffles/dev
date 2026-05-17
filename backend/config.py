@@ -85,44 +85,6 @@ PARAKEET_MODELS = {
 # Keep it pointing at the English v2 model so existing behavior is unchanged.
 PARAKEET_MODEL = PARAKEET_MODELS["parakeet-en-v2"]
 
-# Voxtral cloud transcription models (Mistral API)
-VOXTRAL_MODELS = {
-    "voxtral-mini": {
-        "api_id": "voxtral-mini-latest",
-        "description": "Cloud: Best accuracy, built-in diarization ($0.003/min)",
-        "engine": "voxtral-api",
-    },
-}
-
-# Voxtral local models (via mlx-audio on Apple Silicon).
-# Architecture flag distinguishes the 3B 2507 family (original audio-LM,
-# bf16 or 4-bit) from the 4B Realtime 2602 family, which uses a separate
-# generator path and takes a transcription_delay_ms parameter. In batch
-# mode with delay=2400ms, the 4B Realtime matches Voxtral Transcribe V2
-# quality (~4% WER FLEURS avg) — roughly half the WER of 3B 2507.
-VOXTRAL_LOCAL_MODELS = {
-    "voxtral-realtime-4b": {
-        "path": "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit",
-        "description": "Best quality (~4% WER, Transcribe V2 class), 4-bit (~3.2GB)",
-        "architecture": "realtime",
-    },
-    "voxtral-mini-3b": {
-        "path": "mlx-community/Voxtral-Mini-3B-2507-bf16",
-        "description": "Legacy 3B 2507 audio-LM (~7-8% WER, 9.4GB)",
-        "architecture": "audio_lm",
-    },
-    "voxtral-mini-3b-4bit": {
-        "path": "mzbac/voxtral-mini-3b-4bit-mixed",
-        "description": "Legacy 3B 2507, lower memory (~3.2GB)",
-        "architecture": "audio_lm",
-    },
-}
-
-# Voxtral local supported languages (13 languages)
-VOXTRAL_LOCAL_LANGUAGES = {
-    "auto", "en", "fr", "de", "es", "it", "pt", "nl", "ru", "zh", "ja", "ko", "ar", "hi",
-}
-
 # Allowed file extensions for transcription upload
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".webm", ".mov"}
