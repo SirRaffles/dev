@@ -546,6 +546,10 @@ async def get_job_status(job_id: str):
         "auto_speaker_matches": getattr(job, "auto_speaker_matches", None),
         "learning_summary": getattr(job, "learning_summary", None),
         "learning_status": getattr(job, "learning_status", None),
+        # Rename-source feature: original JPR filename (None for non-JPR jobs) +
+        # ISO created_at so the rename modal can suggest "YYYY-MM-DD HH-MM — ..."
+        "original_filename": getattr(getattr(job, "settings", None), "original_filename", None),
+        "created_at": job.created_at.isoformat() if getattr(job, "created_at", None) else None,
     }
 
     if job.status == "completed":

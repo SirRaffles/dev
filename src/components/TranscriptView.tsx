@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, UserPlus, Sparkles, Scissors } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, assignJobSpeakers, Speaker, SpeakerAssignmentInput } from '../utils/api';
+import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, assignJobSpeakers, Speaker, SpeakerAssignmentInput, fetchJobStatus } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
 import AutoMatchBadge from './AutoMatchBadge';
-// RenameFileModal exists in src/components/ but isn't wired up yet —
-// the rename-source feature ships in a follow-up commit.
+import RenameFileModal from './RenameFileModal';
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
 
 // Diarization emits generic labels like SPEAKER_00 / "Speaker 1". Anything
@@ -45,6 +44,24 @@ function TranscriptView({
   onSeekToTime,
   className = '',
 }: TranscriptViewProps) {
+  // Rename-source modal: only shown for JPR-sourced jobs. Fetched once per
+  // jobId via fetchJobStatus — the backend exposes original_filename +
+  // created_at on the /job/{id} response. displayFilename keeps the local
+  // copy in sync after a successful rename.
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [displayFilename, setDisplayFilename] = useState<string | undefined>(undefined);
+  const [jobCreatedAt, setJobCreatedAt] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    fetchJobStatus(jobId)
+      .then((js) => {
+        if (cancelled) return;
+        setDisplayFilename(js.original_filename || undefined);
+        setJobCreatedAt(js.created_at || undefined);
+      })
+      .catch(() => { /* silent — non-JPR jobs just won't surface the button */ });
+    return () => { cancelled = true; };
+  }, [jobId]);
   const [showTimestamps, setShowTimestamps] = useState(true);
   const [showSpeakers, setShowSpeakers] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -549,6 +566,17 @@ function TranscriptView({
         )}
         {refineState?.refinement_status && (
           <RefinementBadge status={refineState.refinement_status} />
+        )}
+        {displayFilename && (
+          <button
+            type="button"
+            onClick={() => setShowRenameModal(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600"
+            title={`Rename source file: ${displayFilename}`}
+          >
+            <Edit3 className="w-3 h-3" />
+            <span className="truncate max-w-[16rem]">{displayFilename}</span>
+          </button>
         )}
         {speakers.length > 0 && (
           <div className="flex items-center gap-2">
@@ -1063,6 +1091,17 @@ function TranscriptView({
         onConfirm={replaceAll}
         onCancel={() => setConfirmReplace(0)}
       />
+
+      {showRenameModal && displayFilename && (
+        <RenameFileModal
+          jobId={jobId}
+          currentFilename={displayFilename}
+          jobCreatedAt={jobCreatedAt}
+          analysis={null}
+          onClose={() => setShowRenameModal(false)}
+          onRenamed={(newName) => setDisplayFilename(newName)}
+        />
+      )}
     </div>
   );
 }

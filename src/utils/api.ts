@@ -48,6 +48,7 @@ export interface JobStatus {
   error?: string;
   filename?: string;
   created_at?: string;
+  original_filename?: string;  // JPR-sourced jobs only; non-JPR jobs leave undefined
   is_generated?: boolean;      // mirrored at top level by the captions fast-path
   source?: string;
   // B2 auto-refine fields (populated post-completion by the refinement pipeline).
@@ -1035,5 +1036,24 @@ export async function fetchLearningLog(params: {
   if (params.offset !== undefined) qs.set('offset', String(params.offset));
   const r = await fetchWithTimeout(`${API_URL}/learning/log?${qs.toString()}`);
   if (!r.ok) throw new Error(`fetchLearningLog failed: ${r.status}`);
+  return r.json();
+}
+
+export interface RenameSourceResponse {
+  status: string;
+  old_name: string;
+  new_name: string;
+}
+
+export async function renameJobSource(jobId: string, newName: string): Promise<RenameSourceResponse> {
+  const r = await fetchWithTimeout(`${API_URL}/jpr/job/${jobId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`renameJobSource failed: ${r.status} ${detail.slice(0, 120)}`);
+  }
   return r.json();
 }
