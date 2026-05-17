@@ -372,3 +372,113 @@ def test_apply_corrections_speaker_corrections_overrides_speaker_mapping():
     refined, _mapping, _count = svc.apply_corrections(segments, analysis)
     assert refined[0]["speaker"] == "David"   # speaker_mapping applied
     assert refined[1]["speaker"] == "Pascal"  # speaker_corrections overrides
+
+
+def test_refine_propagates_speaker_turns_to_analyze():
+    """refine() must forward speaker_turns to analyze() so the
+    Diarization context block gets emitted by the underlying analyze call."""
+    svc = _make_service()
+    turns = [
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 6.0, "speaker": "SPEAKER_01"},
+    ]
+    with patch.object(svc, "analyze", return_value={
+        "language": "en", "domain": "test", "summary": "",
+        "speakers": [], "corrections": [], "uncertain_terms": [],
+    }) as mock_analyze:
+        svc.refine(
+            [{"start": 0, "end": 1, "text": "x", "speaker": "SPEAKER_00"}],
+            context_text="ctx",
+            glossary_terms=["t1"],
+            speaker_turns=turns,
+        )
+    mock_analyze.assert_called_once()
+    _, kwargs = mock_analyze.call_args
+    assert kwargs.get("context_text") == "ctx"
+    assert kwargs.get("glossary_terms") == ["t1"]
+    assert kwargs.get("speaker_turns") == turns
+
+
+def test_refine_defaults_speaker_turns_to_none():
+    """Backward compat: callers that don't pass speaker_turns get the
+    pre-Combo-C behavior — analyze receives speaker_turns=None."""
+    svc = _make_service()
+    with patch.object(svc, "analyze", return_value={
+        "language": "en", "domain": "test", "summary": "",
+        "speakers": [], "corrections": [], "uncertain_terms": [],
+    }) as mock_analyze:
+        svc.refine([{"start": 0, "end": 1, "text": "x", "speaker": "SPEAKER_00"}])
+    _, kwargs = mock_analyze.call_args
+    assert kwargs.get("speaker_turns") is None
+
+
+def test_run_refinement_for_job_builds_speaker_turns_from_job_speakers(monkeypatch):
+    """_run_refinement_for_job must build speaker_turns from job.speakers
+    (pyannote output) and pass it into refine()."""
+    import state
+    from routes.refinement import _run_refinement_for_job
+
+    # Fixture job with pyannote turns in job.speakers
+    class _Job:
+        job_id = "j1"
+        status = "completed"
+        segments = [{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}]
+        speakers = [
+            {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+            {"start": 5.0, "end": 6.0, "speaker": "SPEAKER_01"},
+        ]
+        auto_speaker_matches = None
+        refinement_status = None
+
+    job = _Job()
+
+    # Stub job store
+    class _JobStore:
+        def get(self, jid): return job
+        def update(self, j): pass
+    monkeypatch.setattr(state, "job_store", _JobStore())
+    monkeypatch.setattr(state, "jobs", _JobStore())
+
+    # Stub refinement store
+    class _RefStore:
+        def update_status(self, jid, s, err=None): pass
+        def save_result(self, jid, r): pass
+    monkeypatch.setattr(state, "refinement_store", _RefStore())
+
+    captured = {}
+    class _RefSvc:
+        def refine(self, segments, context_text=None, glossary_terms=None,
+                   speaker_turns=None):
+            captured["speaker_turns"] = speaker_turns
+            return {
+                "analysis": {"corrections": []},
+                "refined_segments": segments,
+                "speaker_mapping": {},
+                "corrections_applied": 0,
+                "speakers_identified": 0,
+                "web_searches_performed": 0,
+            }
+    monkeypatch.setattr(state, "refinement_service", _RefSvc())
+
+    # Stub context loaders to avoid touching disk
+    import services.transcription as txn
+    import services.glossary as glo
+    monkeypatch.setattr(txn, "load_context_document", lambda p: "")
+    monkeypatch.setattr(txn, "load_speakers_context", lambda ids: "")
+    monkeypatch.setattr(txn, "merge_context_sources", lambda *a: "")
+    monkeypatch.setattr(glo, "load_global_glossary", lambda: "")
+    monkeypatch.setattr(glo, "load_global_glossary_terms", lambda: [])
+
+    # Stub the B7 orchestrator — out of scope for this test
+    import routes.refinement as rr
+    monkeypatch.setattr(rr, "_run_post_refinement_learning", lambda **kw: None)
+
+    _run_refinement_for_job("j1", speaker_ids=None, context_path=None, audio_path=None)
+
+    assert captured.get("speaker_turns") is not None, (
+        "_run_refinement_for_job must pass speaker_turns into refine()"
+    )
+    assert captured["speaker_turns"] == [
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 6.0, "speaker": "SPEAKER_01"},
+    ]

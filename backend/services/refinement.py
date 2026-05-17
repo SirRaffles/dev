@@ -462,9 +462,16 @@ Return ONLY the JSON object, no other text."""
         return refined, speaker_mapping, corrections_applied
 
     def refine(self, segments: list, context_text: Optional[str] = None,
-               glossary_terms: Optional[List[str]] = None) -> dict:
+               glossary_terms: Optional[List[str]] = None,
+               speaker_turns: Optional[List[dict]] = None) -> dict:
         """
-        Full refinement pipeline: analyze → web verify → finalize → apply.
+        Full refinement pipeline: analyze -> web verify -> finalize -> apply.
+
+        Optional `speaker_turns` (pyannote turn list) enables Combo C semantic
+        diarization polish in the analyze phase — Sonnet's response may include
+        a `speaker_corrections` array that apply_corrections will use to
+        re-attribute mis-assigned speakers on a per-segment basis. See
+        analyze() docstring for the speaker_turns shape.
 
         Returns dict with all refinement results.
         """
@@ -472,7 +479,12 @@ Return ONLY the JSON object, no other text."""
 
         # Phase 1: Analyze
         logger.info("Phase 1: Analyzing transcript with Claude...")
-        analysis = self.analyze(segments, context_text=context_text, glossary_terms=glossary_terms)
+        analysis = self.analyze(
+            segments,
+            context_text=context_text,
+            glossary_terms=glossary_terms,
+            speaker_turns=speaker_turns,
+        )
         logger.info(
             "Analysis complete: %d speakers, %d corrections, %d uncertain terms",
             len(analysis.get("speakers", [])),

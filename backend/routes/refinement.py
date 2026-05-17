@@ -233,10 +233,34 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
         )
         glossary_terms = load_global_glossary_terms() or None
 
+        # Build pyannote turn list for Combo C semantic diarization polish.
+        # Same shape and source as _run_post_refinement_learning uses (job.speakers
+        # is the pyannote diarization output set by transcription.py). Falls back
+        # to deriving turns from job.segments when job.speakers is empty (e.g.
+        # diarization was disabled or failed).
+        raw_turns = (job.speakers or [])
+        if raw_turns:
+            speaker_turns = [
+                {"start": float(t.get("start", 0)),
+                 "end": float(t.get("end", 0)),
+                 "speaker": (t.get("speaker") or "").strip()}
+                for t in raw_turns
+                if (t.get("speaker") or "").strip()
+            ]
+        else:
+            speaker_turns = [
+                {"start": float(seg.get("start", 0)),
+                 "end": float(seg.get("end", 0)),
+                 "speaker": (seg.get("speaker") or "").strip()}
+                for seg in (job.segments or [])
+                if (seg.get("speaker") or "").strip()
+            ]
+
         result = state.refinement_service.refine(
             job.segments,
             context_text=context_text,
             glossary_terms=glossary_terms,
+            speaker_turns=speaker_turns or None,
         )
         state.refinement_store.save_result(job_id, result)
         _set_refinement_status(job, "done")
