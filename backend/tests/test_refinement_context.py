@@ -124,3 +124,26 @@ def test_analyze_passes_300s_timeout_to_run_claude():
     with patch("services.refinement._run_claude", side_effect=fake_run):
         svc.analyze([{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
     assert captured["timeout"] == 300
+
+
+def test_analysis_schema_includes_speaker_corrections():
+    """The exported schema must declare speaker_corrections so Sonnet's
+    output is recognized as valid when the field is present."""
+    import json
+    from services.refinement import ANALYSIS_SCHEMA
+
+    schema = json.loads(ANALYSIS_SCHEMA)
+    props = schema["properties"]
+    assert "speaker_corrections" in props, (
+        "ANALYSIS_SCHEMA must declare speaker_corrections for Combo C diarization polish"
+    )
+    sc = props["speaker_corrections"]
+    assert sc["type"] == "array"
+    item = sc["items"]
+    assert item["type"] == "object"
+    assert set(item["required"]) == {"segment_index", "speaker", "reason"}
+    assert item["properties"]["segment_index"]["type"] == "integer"
+    assert item["properties"]["speaker"]["type"] == "string"
+    assert item["properties"]["reason"]["type"] == "string"
+    # speaker_corrections must NOT be in top-level required — it's optional
+    assert "speaker_corrections" not in schema["required"]

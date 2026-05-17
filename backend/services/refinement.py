@@ -63,6 +63,19 @@ ANALYSIS_SCHEMA = json.dumps({
             "type": "array",
             "items": {"type": "string"},
             "description": "Terms that may be misspelled but need web verification"
+        },
+        "speaker_corrections": {
+            "type": "array",
+            "description": "Semantic re-attribution of mis-assigned speakers (Combo C). Optional; absent when no corrections apply.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "segment_index": {"type": "integer", "description": "0-based index into the segments array passed to analyze()"},
+                    "speaker": {"type": "string", "description": "Corrected speaker label (e.g. SPEAKER_01 or an identified name)"},
+                    "reason": {"type": "string", "description": "Brief justification, e.g. 'mid-sentence interjection by Pascal'"}
+                },
+                "required": ["segment_index", "speaker", "reason"]
+            }
         }
     },
     "required": ["language", "domain", "summary", "speakers", "corrections", "uncertain_terms"]
