@@ -624,6 +624,8 @@ async def get_job_status(job_id: str):
         "status": job.status,
         "progress": job.progress,
         "progress_message": job.progress_message,
+        # Plan 4A: phase pill for phased progress bar
+        "phase": getattr(job, "phase", None),
         # B2: surface auto-refine indicators for UI polling (None when not applicable)
         "refinement_status": getattr(job, "refinement_status", None),
         "auto_speaker_matches": getattr(job, "auto_speaker_matches", None),

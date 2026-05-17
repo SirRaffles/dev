@@ -34,6 +34,10 @@ class TranscriptionJob:
         self.auto_speaker_matches = None    # Dict[str, Dict] from B5
         self.learning_summary = None        # Dict[str, int] populated by Plan 2
         self.learning_status = None         # "ok" | "partial" | "failed" — populated by Plan 2
+        # Plan 4A: phase pill for the UI's phased progress bar (in-memory only,
+        # not persisted to SQL). Values: None | "diarizing" | "transcribing" |
+        # "aligning" | "refining" | "learning". None = no active phase.
+        self.phase = None
 
 
 class BatchJob:

@@ -651,14 +651,29 @@ def _should_auto_refine(settings: TranscriptionSettings) -> bool:
     return bool(settings.speaker_ids or settings.context_path)
 
 
-def _update_job(job, progress: int = None, message: str = None, status: str = None):
-    """Update job fields and persist to DB so progress survives restarts."""
+_PHASE_UNSET = object()  # sentinel — distinguishes "not provided" from explicit None
+
+
+def _update_job(job, progress: int = None, message: str = None, status: str = None,
+                phase=_PHASE_UNSET, _clear_phase: bool = False):
+    """Update job fields and persist to DB so progress survives restarts.
+
+    `phase` uses a sentinel because None has meaning (pre-start / done).
+    Pass `_clear_phase=True` together with `phase=None` to explicitly clear.
+    """
     if status is not None:
         job.status = status
     if progress is not None:
         job.progress = progress
     if message is not None:
         job.progress_message = message
+    if phase is not _PHASE_UNSET:
+        # Only assign if the caller actually passed the kwarg.
+        if phase is None and not _clear_phase:
+            # Defensive: a stray phase=None without _clear_phase is a no-op.
+            pass
+        else:
+            job.phase = phase
     state.jobs.update(job)
 
 
