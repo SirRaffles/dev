@@ -107,8 +107,16 @@ class _TranscribeProgressTicker:
             elapsed = time.monotonic() - t0
             frac = min(0.95, elapsed / self._expected)
             pct = self._start + int(frac * self._span)
+            # Append elapsed time to the message so the user sees the
+            # transcription is still progressing even after pct hits the
+            # 95% cap (long audio / cold model / over-optimistic RT estimate).
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
+            elapsed_str = (f" ({mins}m{secs:02d}s elapsed)" if mins
+                           else f" ({secs}s elapsed)")
             try:
-                _update_job(self._job, progress=pct, message=self._message,
+                _update_job(self._job, progress=pct,
+                            message=self._message + elapsed_str,
                             phase=self._phase)
             except Exception:
                 logger.debug("progress ticker update failed (job moved on?)",
