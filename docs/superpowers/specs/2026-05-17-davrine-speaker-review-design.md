@@ -209,7 +209,7 @@ Modal shown when user clicks Reject on an identified speaker. Renders:
 
 **Reference** (read-only):
 - `backend/routes/refinement.py:_run_refinement_for_job` — re-used as-is for the re-refinement dispatch
-- `backend/services/speakers.py` — `create_speaker()` re-used for the "new:name" path
+- `backend/services/speaker_embedding.py:235` — `SpeakerEmbeddingService.register_speaker(name, embedding)` re-used for the "new:name" path (creates folder + DB row + saves .npy in one call)
 - `backend/services/orchestrator.py` — unchanged (orchestrator owns the first refinement; re-refinement bypasses orchestrator and calls `_run_refinement_for_job` directly, same pattern as Plan 1's manual `/refine/job/{id}` route)
 
 **Deleted**:
@@ -241,7 +241,7 @@ This is a UI-level replacement with no breaking API change:
 
 This ships as **one Plan 5** in two halves that lockstep-release:
 
-- **Plan 5A — Backend**: runner-up exposure + `/re-refine` endpoint + tests. ~5 tasks. Owns: `services/learning.py`, `services/speaker_embedding.py`, `routes/transcription.py`, `tests/test_re_refine.py`.
+- **Plan 5A — Backend**: runner-up exposure + `/re-refine` endpoint + tests. ~5 tasks. Owns: `services/speaker_embedding.py`, `routes/transcription.py` (refactor `/speakers/assign` helper + add `/re-refine`), `tests/test_re_refine.py`.
 - **Plan 5B — Frontend**: `SpeakerReviewPanel` + `RejectMatchModal` + `api.ts` extension + `TranscriptView` cleanup. ~6 tasks. Owns: `src/components/SpeakerReviewPanel.tsx`, `src/components/RejectMatchModal.tsx`, `src/components/TranscriptView.tsx`, `src/utils/api.ts`, deletion of `src/components/AutoMatchBadge.tsx`.
 
 They ship together; 5A's `runner_up` field is consumed only by 5B, so split-ship would leave the field unused.
