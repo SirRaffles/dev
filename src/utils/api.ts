@@ -32,6 +32,15 @@ export interface AutoSpeakerMatch {
   matched: boolean;
   source?: "pick" | "registry" | null;
   note?: string;
+  // Plan 5A backend extension: 2nd-best registry candidate from the cosine
+  // similarity ranking. Null when registry has <2 candidates or when the
+  // runner-up confidence is below the min threshold (~0.4). Optional so
+  // pre-Plan-5 jobs and the legacy code path continue to deserialise.
+  runner_up?: {
+    speaker_id: string;
+    name: string;
+    confidence: number;
+  } | null;
 }
 
 export interface JobStatus {
@@ -1036,6 +1045,42 @@ export async function fetchLearningLog(params: {
   if (params.offset !== undefined) qs.set('offset', String(params.offset));
   const r = await fetchWithTimeout(`${API_URL}/learning/log?${qs.toString()}`);
   if (!r.ok) throw new Error(`fetchLearningLog failed: ${r.status}`);
+  return r.json();
+}
+
+export interface ReRefineResponse {
+  job_id: string;
+  status: string;
+  phase: string | null;
+  speakers_created: Array<{ speaker_id: string; name: string }>;
+  speakers_assigned: number;
+}
+
+/**
+ * Plan 5: trigger a single re-refinement run with corrected speaker
+ * assignments. `assignments` maps a diarization label (e.g. "SPEAKER_00")
+ * to one of:
+ *   - a speaker UUID (re-attribute to existing speaker)
+ *   - the literal string "unknown" (strip name, mark anonymous)
+ *   - "new:<Display Name>" (create a new speaker; backend extracts a voice
+ *     embedding from that label's segments via register_speaker)
+ *
+ * Backend dispatches a single Sonnet refinement call on success, transitioning
+ * job.phase from null → "refining" → "learning" → null.
+ */
+export async function reRefineJob(
+  jobId: string,
+  assignments: Record<string, string>,
+): Promise<ReRefineResponse> {
+  const r = await fetchWithTimeout(`${API_URL}/job/${jobId}/re-refine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ speaker_assignments: assignments }),
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`reRefineJob failed: ${r.status} ${detail.slice(0, 200)}`);
+  }
   return r.json();
 }
 
