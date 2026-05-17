@@ -463,11 +463,25 @@ Expected: a hook that polls `/job/{id}` and returns `{refinement_status, learnin
 
 Note for this task: we expose `currentPhase` as an optional prop so the panel can show "Re-refining…" copy that mirrors the backend phase. `TranscriptView` will wire this in Task 4.
 
-- [ ] **Step 2: Read the existing `isAnonymousLabel` helper used in TranscriptView**
+- [ ] **Step 2: Export `isAnonymousLabel` from `TranscriptView.tsx` so the new panel can reuse it**
 
-Run: `grep -rn "export function isAnonymousLabel\|export const isAnonymousLabel" src/`
+The helper exists at `src/components/TranscriptView.tsx:14-17` but is NOT exported. Its regex matches **three** label shapes: `SPEAKER_\d+`, `Speaker \d+` (with optional space), and the literal string `Unknown`. We must reuse this exact pattern — narrowing it would silently regress today's behavior (e.g. labels like `"Speaker 1"` or `"Unknown"` would stop appearing in the Unknown section of the panel).
 
-Expected: a utility (likely in `src/utils/`) that detects `SPEAKER_XX` style labels. If it lives somewhere importable, this task imports it. If it's inline-defined in `TranscriptView.tsx`, this task uses an equivalent inline regex `/^SPEAKER_\d+$/i` (document both possibilities — Step 3's code uses the regex form; convert to the import if the helper exists).
+Edit `src/components/TranscriptView.tsx`. At line 13 the file currently has:
+```ts
+const ANON_SPEAKER_RE = /^(?:SPEAKER_\d+|Speaker\s*\d+|Unknown)$/i;
+const isAnonymousLabel = (name: string | null | undefined) =>
+```
+
+Replace those two `const` declarations to `export` both:
+```ts
+export const ANON_SPEAKER_RE = /^(?:SPEAKER_\d+|Speaker\s*\d+|Unknown)$/i;
+export const isAnonymousLabel = (name: string | null | undefined) =>
+```
+
+(Just add the `export` keyword in front of each — the regex body and function body don't change.)
+
+Step 3's `SpeakerReviewPanel.tsx` will then `import { isAnonymousLabel } from './TranscriptView'`. No standalone regex in the panel.
 
 - [ ] **Step 3: Create `SpeakerReviewPanel.tsx`**
 
@@ -484,6 +498,7 @@ import {
   reRefineJob,
 } from '../utils/api';
 import RejectMatchModal, { RejectTarget } from './RejectMatchModal';
+import { isAnonymousLabel } from './TranscriptView';  // exported in Task 5's Step 2
 
 /**
  * Single source of truth for post-completion speaker review (Plan 5).
@@ -520,11 +535,10 @@ type CorrectionAction =
   | { kind: 'new'; name: string }
   | { kind: 'unknown' };
 
-const ANONYMOUS_RE = /^SPEAKER_\d+$/i;
-
-function isAnonymous(label: string): boolean {
-  return ANONYMOUS_RE.test(label);
-}
+// Use `isAnonymousLabel` imported from TranscriptView — it matches all 3
+// shapes (SPEAKER_\d+, "Speaker N", literal "Unknown"). A narrower regex
+// here would misclassify "Speaker 1"-style and "Unknown" labels and break
+// today's behavior.
 
 export default function SpeakerReviewPanel({
   jobId,
@@ -551,8 +565,8 @@ export default function SpeakerReviewPanel({
     return Array.from(set).sort();
   }, [segments]);
 
-  const identifiedLabels = allLabels.filter((l) => !isAnonymous(l) || autoMatches[l]?.matched);
-  const unknownLabels = allLabels.filter((l) => isAnonymous(l) && !autoMatches[l]?.matched);
+  const identifiedLabels = allLabels.filter((l) => !isAnonymousLabel(l) || autoMatches[l]?.matched);
+  const unknownLabels = allLabels.filter((l) => isAnonymousLabel(l) && !autoMatches[l]?.matched);
 
   // Load registry once (used for the modal picker + identified-name display).
   useEffect(() => {
@@ -997,7 +1011,15 @@ In `src/components/TranscriptView.tsx`, delete the entire `handleAssignSpeakers`
 
 - [ ] **Step 6: Delete the "Name the speakers" JSX block**
 
-In `src/components/TranscriptView.tsx`, delete the entire `{anonymousLabels.length > 0 && ( ... )}` block at lines ~607-682 (starting with the `{/* Name the speakers */}` comment at line ~607, ending with the closing `)}` after the `</div>` at line ~682). Also delete the `anonymousLabels` useMemo (around line 126-129) if `SpeakerReviewPanel` is now its only consumer — verify with `grep -n "anonymousLabels" src/components/TranscriptView.tsx` after the delete; if the count is 0 the variable + useMemo can be removed.
+In `src/components/TranscriptView.tsx`, delete the entire `{anonymousLabels.length > 0 && ( ... )}` block at lines ~607-682 (starting with the `{/* Name the speakers */}` comment at line ~607, ending with the closing `)}` after the `</div>` at line ~682).
+
+**Unconditional cleanup of `anonymousLabels`**: grep confirms `anonymousLabels` is used only at lines 126 (the `useMemo` definition), 612, 625, 661, and 687 — all four use sites are inside the block being deleted. Delete the `useMemo` at line 126-129 outright; no conditional check needed.
+
+Sanity-check after both deletions:
+```bash
+grep -n "anonymousLabels" src/components/TranscriptView.tsx
+```
+Expected: empty output (no leftover references). If anything remains, it's stale and should also be removed.
 
 - [ ] **Step 7: Delete the bulk "Accept all" mini-banner**
 
