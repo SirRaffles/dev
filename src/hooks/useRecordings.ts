@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchJPRRecordings, JPRRecording, JPRListParams } from '../utils/api';
+import { fetchRecordings, JPRRecording, JPRListParams } from '../utils/api';
 
 export type RecordingsStatus = 'all' | 'unprocessed' | 'processed' | 'processing' | 'failed';
 export type RecordingsSort = 'date' | 'completed_at';
@@ -44,7 +44,7 @@ export default function useRecordings(opts: Options = {}) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchJPRRecordings(params);
+      const data = await fetchRecordings(params);
       if (ac.signal.aborted) return;
       setRecordings(data.recordings);
       setTotal(data.total);

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Mic, CheckCircle, Clock, AlertCircle, Loader2, RefreshCw,
   Search, Edit3, FileText, X, Check, Users, ArrowUpDown,
+  Upload, Link as LinkIcon,
 } from 'lucide-react';
 import useRecordings, { RecordingsStatus, RecordingsSort } from '../hooks/useRecordings';
 import {
@@ -30,6 +31,38 @@ function StatusIcon({ status }: { status: string }) {
     default:
       return <Clock className={`${className} text-slate-500 dark:text-slate-400`} aria-label="Unprocessed" />;
   }
+}
+
+/**
+ * Small badge showing where the recording came from. JPR-sourced rows are
+ * the default and intentionally render no badge (would just add noise) —
+ * we badge the non-JPR cases so they're scannable.
+ */
+function SourceBadge({ source }: { source?: string }) {
+  const common = 'inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium';
+  if (source === 'upload') {
+    return (
+      <span
+        className={`${common} bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300`}
+        title="Direct upload"
+      >
+        <Upload className="w-3 h-3" aria-hidden="true" />
+        Upload
+      </span>
+    );
+  }
+  if (source === 'youtube') {
+    return (
+      <span
+        className={`${common} bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300`}
+        title="YouTube ingest"
+      >
+        <LinkIcon className="w-3 h-3" aria-hidden="true" />
+        YouTube
+      </span>
+    );
+  }
+  return null;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -252,7 +285,7 @@ function RecordingsView() {
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <Mic className="w-6 h-6 text-blue-500 dark:text-blue-400" aria-hidden="true" />
-          <h2 className="text-xl font-semibold">Just Press Record</h2>
+          <h2 className="text-xl font-semibold">Recordings</h2>
           <span className="text-sm text-slate-500 dark:text-slate-400">({total} {total === 1 ? 'recording' : 'recordings'})</span>
         </div>
         <button
@@ -369,7 +402,10 @@ function RecordingsView() {
                     title={canOpenTranscript ? 'Open transcript' : 'No transcript yet'}
                     className={`flex-1 min-w-0 text-left ${canOpenTranscript ? 'cursor-pointer hover:underline' : 'cursor-default'}`}
                   >
-                    <p className="text-sm font-medium truncate">{rec.filename}</p>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <p className="text-sm font-medium truncate">{rec.filename}</p>
+                      <SourceBadge source={rec.source} />
+                    </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate sm:hidden">
                       {formatDate(whenShown)}
                       {' · '}

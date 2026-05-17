@@ -76,6 +76,7 @@ from routes.calls import router as calls_router
 from routes.contexts import router as contexts_router
 from routes.jpr import router as jpr_router
 from routes.learning import router as learning_router
+from routes.recordings import router as recordings_router
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +273,7 @@ app.include_router(speakers_router, dependencies=_rate_dep)
 app.include_router(calls_router, dependencies=_rate_dep)
 app.include_router(contexts_router, dependencies=_rate_dep)
 app.include_router(jpr_router, dependencies=_rate_dep)
+app.include_router(recordings_router, dependencies=_rate_dep)
 
 
 # Serve frontend build from static/ when running in single-container mode.

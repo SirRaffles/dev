@@ -593,6 +593,9 @@ export interface JPRRecording {
   completed_at?: string | null;
   error?: string | null;
   transcript_path?: string | null;
+  // Where this entry came from. Set by the unified /recordings endpoint.
+  // Absent on rows from the legacy /jpr/recordings endpoint (treat as 'jpr').
+  source?: 'jpr' | 'upload' | 'youtube';
 }
 
 export interface JPRListParams {
@@ -921,6 +924,30 @@ export async function fetchJPRRecordings(params: JPRListParams = {}): Promise<{
   if (params.sort_dir) qs.set('sort_dir', params.sort_dir);
   if (params.q && params.q.trim()) qs.set('q', params.q.trim());
   const response = await fetchWithTimeout(`${API_URL}/jpr/recordings?${qs}`);
+  if (!response.ok) throw new Error('Failed to fetch recordings');
+  return response.json();
+}
+
+/**
+ * Unified recordings list — merges JPR-discovered files with direct uploads
+ * and YouTube ingests. Same param shape as {@link fetchJPRRecordings} so the
+ * hook can swap endpoints without UI-state changes. Each returned recording
+ * carries a `source` field ('jpr' | 'upload' | 'youtube') the UI can use to
+ * render a badge.
+ */
+export async function fetchRecordings(params: JPRListParams = {}): Promise<{
+  recordings: JPRRecording[];
+  total: number;
+  watcher_status?: { available: boolean; completed?: number; pending?: number; failed?: number };
+}> {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params.limit ?? 50));
+  qs.set('offset', String(params.offset ?? 0));
+  if (params.status) qs.set('status', params.status);
+  if (params.sort_by) qs.set('sort_by', params.sort_by);
+  if (params.sort_dir) qs.set('sort_dir', params.sort_dir);
+  if (params.q && params.q.trim()) qs.set('q', params.q.trim());
+  const response = await fetchWithTimeout(`${API_URL}/recordings?${qs}`);
   if (!response.ok) throw new Error('Failed to fetch recordings');
   return response.json();
 }
