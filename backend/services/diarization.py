@@ -220,3 +220,104 @@ def assign_speakers_to_segments(segments: List[dict], speakers: List[dict]) -> L
             _flush(buf_words[-1].get("end", seg.get("end", buf_start)))
 
     return out
+
+
+def assign_speakers_time_proportional(segments: List[dict], speaker_turns: List[dict]) -> List[dict]:
+    """A3-light: split each segment at speaker-turn boundaries by
+    time-proportional text ratio.
+
+    Used when the text engine does NOT emit per-word timestamps (Parakeet,
+    Voxtral). Handles N-way splits: a segment spanning 3+ pyannote turns
+    produces 3+ sub-segments. Word allocation per sub-segment uses
+    ceil(N_words * (sub_duration / total_duration)) with a final-segment
+    rounding fix to absorb the +ceil bias so total word count matches input.
+
+    Args:
+        segments: List of {start, end, text} segments (no word timestamps).
+        speaker_turns: List of pyannote turns {start, end, speaker}.
+
+    Returns:
+        New list of sub-segments {start, end, text, speaker}. A segment
+        fully inside one turn passes through unchanged (with speaker added).
+        A segment outside all turns gets speaker="Unknown".
+    """
+    import math
+
+    if not speaker_turns:
+        return segments
+
+    out: List[dict] = []
+
+    for seg in segments:
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", 0.0))
+        seg_text = (seg.get("text") or "").strip()
+        if not seg_text:
+            continue
+        words = seg_text.split()
+        n_words = len(words)
+        seg_duration = max(seg_end - seg_start, 1e-6)
+
+        # Compute the speaker-turn overlaps for this segment, in time order.
+        spans = []  # list of (sub_start, sub_end, speaker)
+        for turn in speaker_turns:
+            t_start = float(turn["start"])
+            t_end = float(turn["end"])
+            overlap_start = max(seg_start, t_start)
+            overlap_end = min(seg_end, t_end)
+            if overlap_end > overlap_start:
+                spans.append((overlap_start, overlap_end, turn["speaker"]))
+        # Sort by start so output order is chronological.
+        spans.sort(key=lambda s: s[0])
+
+        if not spans:
+            # Segment lives outside any pyannote turn.
+            out.append({
+                "start": seg_start,
+                "end": seg_end,
+                "text": seg_text,
+                "speaker": "Unknown",
+            })
+            continue
+
+        # Single-span fast path (and N=1 edge case where the whole segment
+        # fits inside one turn): the full text belongs to one speaker.
+        if len(spans) == 1:
+            out.append({
+                "start": seg_start,
+                "end": seg_end,
+                "text": seg_text,
+                "speaker": spans[0][2],
+            })
+            continue
+
+        # N-way split. Allocate words proportional to each span's duration.
+        # ceil ensures every span gets >= 1 word when its duration > 0; the
+        # final span's count is recomputed as the remainder so totals match.
+        counts = []
+        used = 0
+        for i, (s_start, s_end, _spk) in enumerate(spans):
+            if i == len(spans) - 1:
+                counts.append(max(0, n_words - used))
+            else:
+                share = (s_end - s_start) / seg_duration
+                c = min(n_words - used, max(1, math.ceil(n_words * share)))
+                counts.append(c)
+                used += c
+
+        idx = 0
+        for (s_start, s_end, spk), c in zip(spans, counts):
+            if c <= 0:
+                continue
+            chunk = " ".join(words[idx:idx + c])
+            idx += c
+            if not chunk:
+                continue
+            out.append({
+                "start": s_start,
+                "end": s_end,
+                "text": chunk,
+                "speaker": spk,
+            })
+
+    return out
