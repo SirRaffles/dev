@@ -6,7 +6,19 @@
 
 **Architecture:** Pure-frontend change. Replaces the 3-button engine row + 3 model dropdowns + Speed/Two-Pass/Word-Timestamps/Context-Terms knobs in `SettingsPanel` with one Quality dial component (2 buttons). Updates `App.tsx` default settings to `engine: 'auto-best'`. Extends `useJobAutoRefinePolling` to also surface `phase` (Sub-plan A backend writes `phase` to `/job/{id}`). Renders a phase pill in `ProgressBar` above the existing 0-100% bar. Does NOT delete dead constants/hooks (Sub-plan D handles that sweep).
 
-**Tech Stack:** React 18 + TypeScript + TailwindCSS, `lucide-react` icons (`Sparkles` for Best, `Zap` for Quick). Vitest + React Testing Library for component tests (`vitest run --reporter=verbose` from repo root). Existing patterns: `React.memo` for components, settings flow via prop drilling from `App.tsx` → `SettingsPanel`, polling hooks in `src/hooks/`.
+**Tech Stack:** React 18 + TypeScript + TailwindCSS, `lucide-react` icons (`Sparkles` for Best, `Zap` for Quick). Existing patterns: `React.memo` for components, settings flow via prop drilling from `App.tsx` → `SettingsPanel`, polling hooks in `src/hooks/`.
+
+**⚠️ Test framework prerequisite — read before starting Task 1**
+
+This repo has **no Vitest or React Testing Library installed**. `package.json` devDeps include only `@playwright/test`, `@vitejs/plugin-react`, `tsc`, `tailwindcss`, etc. There is no `test` script, no `vitest.config.*`, no existing `*.test.tsx` files, no `node_modules/@testing-library/`. Following Plan 3's convention, this codebase uses **Playwright e2e + manual smoke** for frontend verification, not component unit tests.
+
+**Two paths the implementer chooses between** (pick at Task 1):
+
+- **Path A (recommended, matches Plan 3 convention):** **skip every Vitest test in this plan.** Tasks 1-7 that show `npx vitest run …` → instead verify via `npx tsc --noEmit` for type-correctness and `npm run dev` + browser smoke for behavior. Don't commit any `*.test.tsx` files. Task 8 (manual smoke) is the real verification.
+
+- **Path B (only if user explicitly wants to set up a test harness):** insert a Task 0 that adds `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom` to devDeps; creates `vitest.config.ts` with `environment: 'jsdom'`; adds `setupTests.ts` importing `@testing-library/jest-dom`; adds `"test": "vitest run"` to package.json scripts. Then Tasks 1-7's Vitest snippets work as-is.
+
+**Default**: Path A. The `npx vitest run …` commands and the `*.test.tsx` file creation steps in Tasks 1, 2, 3 below are aspirational — skip them, type-check with tsc, manually smoke via `npm run dev`. Do NOT commit test files that have no runner.
 
 **Dependency lockstep:** This sub-plan **must ship in the same release as Sub-plan A**. After Sub-plan A lands, the backend rejects any `engine` value other than `auto-best`/`auto-quick` with HTTP 400. The frontend cut-over here must happen at the same moment, or every transcription submission 400s.
 
@@ -1652,11 +1664,15 @@ const params = new URLSearchParams({
 
 Delete the `if (options.contextTerms)` block in this function too. Keep `numSpeakers`, `contextPath`, `speakerIds`.
 
-- [ ] **Step 4: Check `submitBatchTranscription` (if it builds params too)**
+- [ ] **Step 4: Apply the same transformation to `submitBatchTranscription`**
+
+`submitBatchTranscription` confirmed to build its own `URLSearchParams` with the same dead keys. Repeat Step 2's transformation on it: drop `model_size`, `speed_priority`, `two_pass`, `context_terms` (and any `engine`-derived value other than `auto-best`/`auto-quick`); keep `numSpeakers`, `contextPath`, `speakerIds`, `outputMode`.
+
+Sanity-check grep before and after to confirm nothing was missed:
 
 Run: `grep -n "submitBatchTranscription\|model_size\|speed_priority\|two_pass\|context_terms" src/utils/api.ts`
 
-If `submitBatchTranscription` (or any other helper) builds a `URLSearchParams` with the dead keys, repeat Step 2's transformation. Otherwise skip.
+After the edit the only remaining matches should be the function declaration and Sub-plan D-deferred constants (`MODEL_SIZES`, `VOXTRAL_MODELS`).
 
 - [ ] **Step 5: TypeScript check**
 
