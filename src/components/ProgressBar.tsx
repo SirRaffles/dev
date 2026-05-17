@@ -1,5 +1,6 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import PhasePill from './PhasePill';
 
 interface BatchJob {
   job_id: string;
@@ -12,13 +13,15 @@ interface ProgressBarProps {
   progressMessage?: string;
   batchProgress?: BatchJob[];
   sourceType?: string;
+  phase?: string | null;
 }
 
 function ProgressBar({
   progress,
   progressMessage,
   batchProgress = [],
-  sourceType = 'audio'
+  sourceType = 'audio',
+  phase = null,
 }: ProgressBarProps) {
   const getMessage = () => {
     if (progressMessage) return progressMessage;
@@ -36,6 +39,11 @@ function ProgressBar({
 
   return (
     <div className="bg-white/80 dark:bg-slate-800/50 backdrop-blur rounded-2xl p-6 mb-8 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
+      {phase && (
+        <div className="mb-3">
+          <PhasePill phase={phase} />
+        </div>
+      )}
       <div className="flex items-center gap-3 mb-4">
         <Loader2 className="w-5 h-5 animate-spin text-blue-400" aria-hidden="true" />
         <span className="font-medium">{getMessage()}</span>
