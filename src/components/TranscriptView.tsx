@@ -1,10 +1,9 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, UserPlus, Sparkles, Scissors } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, assignJobSpeakers, Speaker, SpeakerAssignmentInput, fetchJobStatus } from '../utils/api';
+import React, { useState, useRef, useEffect } from 'react';
+import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, Sparkles, Scissors } from 'lucide-react';
+import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchSpeakers, Speaker, fetchJobStatus } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
-import AutoMatchBadge from './AutoMatchBadge';
 import SpeakerReviewPanel from './SpeakerReviewPanel';
 import RenameFileModal from './RenameFileModal';
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
@@ -88,17 +87,10 @@ function TranscriptView({
   const [speakerError, setSpeakerError] = useState<string | null>(null);
 
   // Post-transcription speaker assignment.
-  //   draftAssignments: per-label text input state (empty = skip for now)
-  //   registry: known speakers (for autocomplete)
-  //   insightStatus: whether the async insight-extraction task is running
+  //   registry: known speakers (for autocomplete in the legacy "Rename
+  //   Speakers" block — the consolidated SpeakerReviewPanel fetches its own
+  //   copy independently).
   const [registry, setRegistry] = useState<Speaker[]>([]);
-  const [draftAssignments, setDraftAssignments] = useState<Record<string, string>>({});
-  const [assignSaving, setAssignSaving] = useState(false);
-  const [assignError, setAssignError] = useState<string | null>(null);
-  const [insightStatus, setInsightStatus] = useState<'idle' | 'running' | 'done'>('idle');
-  // B6b: inline auto-match data source — replaces the deleted post-hoc fetch.
-  // `auto_speaker_matches` is fed by the refinement polling hook below.
-  const [rejectedMatches, setRejectedMatches] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -124,116 +116,13 @@ function TranscriptView({
 
   // Get unique speakers from result
   const speakers = result?.speakers || [];
-  const anonymousLabels = useMemo(
-    () => speakers.filter(isAnonymousLabel),
-    [speakers],
-  );
-
-  // B6b: pre-compute which segment index is the FIRST occurrence of each
-  // speaker label, so the AutoMatchBadge renders exactly once per label.
-  // Computed via useMemo (pure) instead of mutating a ref during render —
-  // keeps React 18 Strict Mode safe.
-  const firstOccurrenceIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    (result?.segments ?? []).forEach((seg, i) => {
-      const spk = seg.speaker;
-      if (spk && !map.has(spk)) map.set(spk, i);
-    });
-    return map;
-  }, [result?.segments]);
 
   // B6a: poll for refinement + learning state once the job is completed.
   // The parent transcription poller stops at completion; this hook takes over
-  // for the post-completion refinement lifecycle.
+  // for the post-completion refinement lifecycle. Feeds the SpeakerReviewPanel
+  // with auto-match data + phase context.
   const refineState = useJobAutoRefinePolling(jobId, true);
-
-  // B6b: inline auto-match data source — keyed by pyannote label
-  // (SPEAKER_00…). Sourced from the refinement poller above; replaces the
-  // old post-hoc auto-match fetch.
   const autoMatches = refineState?.auto_speaker_matches || {};
-
-  // B6b: accept/reject handlers for the inline AutoMatchBadge. Accept reuses
-  // the existing assign endpoint with create_new=false (we already know the
-  // speaker exists in the registry — that's how voice-match found them).
-  const handleAcceptAutoMatch = async (label: string, name: string, _speakerId: string) => {
-    try {
-      await assignJobSpeakers(jobId, [{ label, speaker_name: name, create_new: false }], false);
-      // Locally rename the label so the badge disappears + the transcript
-      // text updates without waiting for a full refresh.
-      setSpeakerNames((prev) => ({ ...prev, [label]: name }));
-      // Also patch result.segments so exports/search/re-extract see the new
-      // name — without this, the backend has been updated but the in-memory
-      // result object holds stale SPEAKER_XX, creating a split-brain.
-      if (onResultUpdate && result?.segments) {
-        onResultUpdate({
-          ...result,
-          segments: result.segments.map(s =>
-            s.speaker === label ? { ...s, speaker: name } : s
-          ),
-        });
-      }
-    } catch (e) {
-      // Surface in console only — the badge stays visible for retry.
-      // eslint-disable-next-line no-console
-      console.error('Accept auto-match failed', e);
-    }
-  };
-
-  const handleRejectAutoMatch = (label: string) => {
-    setRejectedMatches((prev) => ({ ...prev, [label]: true }));
-  };
-
-  const handleAssignSpeakers = async () => {
-    const assignments: SpeakerAssignmentInput[] = [];
-    for (const label of anonymousLabels) {
-      const name = (draftAssignments[label] || '').trim();
-      if (!name) continue;
-      const existing = registry.find((r) => r.name.toLowerCase() === name.toLowerCase());
-      assignments.push({
-        label,
-        speaker_name: existing ? existing.name : name,
-        create_new: !existing,
-      });
-    }
-    if (assignments.length === 0) {
-      setAssignError('Fill in at least one name');
-      return;
-    }
-    setAssignSaving(true);
-    setAssignError(null);
-    setInsightStatus('idle');
-    try {
-      const res = await assignJobSpeakers(jobId, assignments, true);
-      // Refresh the transcript view with the newly-named segments.
-      onResultUpdate?.({
-        ...result,
-        segments: res.segments,
-        speakers: res.speakers,
-      });
-      // Clear the drafts that were just saved.
-      setDraftAssignments((prev) => {
-        const next = { ...prev };
-        for (const a of assignments) delete next[a.label];
-        return next;
-      });
-      // Refresh the registry so new speakers appear in the autocomplete.
-      try {
-        const list = await fetchSpeakers();
-        setRegistry(list);
-      } catch { /* non-fatal */ }
-      if (res.insight_extraction_scheduled) {
-        setInsightStatus('running');
-        // Simple heuristic timer: surface a "done" banner ~20s later. The
-        // backend runs the update asynchronously via BackgroundTasks; there's
-        // no streaming progress hook, so we show a best-effort indicator.
-        setTimeout(() => setInsightStatus('done'), 20000);
-      }
-    } catch (err: any) {
-      setAssignError(err?.message || 'Assignment failed');
-    } finally {
-      setAssignSaving(false);
-    }
-  };
 
   // Get current playing segment index
   const getCurrentSegmentIndex = () => {
@@ -605,10 +494,10 @@ function TranscriptView({
         )}
       </div>
 
-      {/* Plan 5: consolidated post-completion review panel.
-          Replaces the legacy AutoMatchBadge inline render + "Name the
-          speakers" block (both removed in the same change as this insert in
-          a real cut, kept here as additive Task 4 → Task 5 removes them). */}
+      {/* Plan 5: consolidated post-completion review panel — the single
+          surface for accepting/rejecting voice-match suggestions, naming
+          anonymous labels, and triggering re-refinement. Replaced the
+          legacy inline badge + "Name the speakers" block. */}
       {result?.segments && result.segments.length > 0 && (
         <SpeakerReviewPanel
           jobId={jobId}
@@ -616,94 +505,12 @@ function TranscriptView({
           autoMatches={autoMatches}
           currentPhase={refineState?.phase ?? null}
           onReRefineStart={() => {
-            // Best-effort hook for the parent to clear any local UI state
-            // that would otherwise stale while the re-refinement runs. The
-            // polling hook will pull re-derived segments + matches once the
-            // backend completes. Task 4 leaves the legacy `rejectedMatches`
-            // state in place (Task 5 deletes it) — for now this callback is
-            // intentionally a no-op so the cleanup commits stay isolated.
-            // After Task 5, this stays a no-op (or can become a future hook
-            // for clearing manual edits, per spec § "Collision with manual
-            // segment edits" — out of scope for this plan).
+            // No-op for now — the polling hook re-derives segments + matches
+            // once the backend completes. A future hook could clear manual
+            // edits here (per spec § "Collision with manual segment edits"
+            // — out of scope for this plan).
           }}
         />
-      )}
-
-      {/* Name the speakers — only surfaces while there are still anonymous
-          diarization labels waiting to be mapped to real speakers in the
-          registry. Unlike the inline "Rename Speakers" block below, this one
-          writes back to the Speakers DB, saves a voice embedding for future
-          auto-match, and kicks off personality-insight extraction. */}
-      {anonymousLabels.length > 0 && (
-        <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl">
-          <h3 className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-1 flex items-center gap-2">
-            <UserPlus className="w-4 h-4" aria-hidden="true" />
-            Name the speakers
-          </h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-            Type any name — if it matches an existing speaker you'll see <span className="font-medium text-slate-600 dark:text-slate-300">↪ existing</span>; otherwise a new speaker is created in your registry on save, marked <span className="font-medium text-emerald-700 dark:text-emerald-400">＋ new</span>. Their voice is saved so future recordings auto-match, and insights from this call are appended to their profile.
-          </p>
-          <datalist id="speakers-registry">
-            {registry.map((s) => <option key={s.speaker_id} value={s.name} />)}
-          </datalist>
-          <div className="space-y-2">
-            {anonymousLabels.map((label) => {
-              const value = draftAssignments[label] ?? '';
-              const match = registry.find((r) => r.name.toLowerCase() === value.trim().toLowerCase());
-              return (
-                <div key={label} className="flex items-center gap-2 flex-wrap">
-                  <span className="inline-flex items-center gap-1 text-xs font-mono px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                    {label}
-                  </span>
-                  <input
-                    type="text"
-                    list="speakers-registry"
-                    value={value}
-                    onChange={(e) => setDraftAssignments((prev) => ({ ...prev, [label]: e.target.value }))}
-                    placeholder="Speaker name (existing or new)"
-                    disabled={assignSaving}
-                    className="flex-1 min-w-[180px] px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
-                  />
-                  {value.trim() && (
-                    <span
-                      className={`text-xs font-medium px-2 py-1 rounded ${
-                        match
-                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                      }`}
-                    >
-                      {match ? '↪ existing' : '＋ new speaker'}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-3 mt-3 flex-wrap">
-            <button
-              type="button"
-              onClick={handleAssignSpeakers}
-              disabled={assignSaving || anonymousLabels.every((l) => !(draftAssignments[l] || '').trim())}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
-            >
-              {assignSaving ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Save className="w-4 h-4" aria-hidden="true" />}
-              Save speakers
-            </button>
-            {insightStatus === 'running' && (
-              <span className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-                <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" aria-hidden="true" />
-                Extracting personality insights in the background…
-              </span>
-            )}
-            {insightStatus === 'done' && (
-              <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-                <Sparkles className="w-4 h-4" aria-hidden="true" />
-                Speakers updated with new insights.
-              </span>
-            )}
-            {assignError && <span role="alert" className="text-red-500 text-xs">{assignError}</span>}
-          </div>
-        </div>
       )}
 
       {/* Speaker Renaming */}
@@ -935,31 +742,6 @@ function TranscriptView({
             {splitError}
           </div>
         )}
-        {/* B6b: mini-banner with bulk "Accept all" when 2+ speakers are
-            auto-matched and not yet accepted/rejected. */}
-        {(() => {
-          const pending = Object.entries(autoMatches).filter(
-            ([lbl, m]) => m?.matched && !rejectedMatches[lbl] && !speakerNames[lbl]
-          );
-          if (pending.length < 2) return null;
-          return (
-            <div className="mb-3 px-3 py-2 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-sm text-indigo-700 dark:text-indigo-300 flex items-center justify-between">
-              <span>{pending.length} speakers auto-matched from your registry.</span>
-              <button
-                onClick={async () => {
-                  for (const [lbl, m] of pending) {
-                    if (m.speaker_id && m.name) {
-                      await handleAcceptAutoMatch(lbl, m.name, m.speaker_id);
-                    }
-                  }
-                }}
-                className="ml-3 px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white"
-              >
-                Accept all
-              </button>
-            </div>
-          );
-        })()}
         {(showTimestamps || showSpeakers) && (draftSegments ?? result.segments) ? (
           <div className="space-y-3">
             {(draftSegments ?? result.segments ?? []).map((segment: any, index: number) => {
@@ -995,30 +777,13 @@ function TranscriptView({
                       [{formatTime(segment.start)}]
                     </button>
                   )}
-                  {showSpeakers && segment.speaker && !isEditing && (() => {
-                    const lbl = segment.speaker;
-                    const showBadge = (
-                      isAnonymousLabel(lbl) &&
-                      !!autoMatches[lbl]?.matched &&
-                      !rejectedMatches[lbl] &&
-                      firstOccurrenceIndex.get(lbl) === index
-                    );
-                    return (
-                      <span className="flex items-center gap-1 pt-1 whitespace-nowrap">
-                        <span className="text-purple-400 font-medium text-xs sm:text-sm">
-                          {speakerNames[lbl] || lbl}:
-                        </span>
-                        {showBadge && (
-                          <AutoMatchBadge
-                            label={lbl}
-                            match={autoMatches[lbl]}
-                            onAccept={handleAcceptAutoMatch}
-                            onReject={handleRejectAutoMatch}
-                          />
-                        )}
+                  {showSpeakers && segment.speaker && !isEditing && (
+                    <span className="flex items-center gap-1 pt-1 whitespace-nowrap">
+                      <span className="text-purple-400 font-medium text-xs sm:text-sm">
+                        {speakerNames[segment.speaker] || segment.speaker}:
                       </span>
-                    );
-                  })()}
+                    </span>
+                  )}
                   {isEditing && segment.speaker && speakers.length > 0 && (
                     <select
                       value={segment.speaker}
