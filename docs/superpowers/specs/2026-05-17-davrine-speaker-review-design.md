@@ -83,12 +83,13 @@ The orchestrator (Plan 4A Task 6), B5 inline auto-match, refinement (Plan 1 + Pl
 3. **User makes corrections** → local `pendingCorrections: Map<label, Action>` state. No backend calls during accumulation.
 4. **User clicks "Apply & re-refine"** → frontend POST `/job/{id}/re-refine` with `{speaker_assignments: {label: speaker_id | "unknown" | "new:name"}}`.
 5. **Backend handler**:
-   - For each "new:name" entry → call `services.speakers.create_speaker(name)` + save voice embedding (extracted from segments matching that label).
+   - For each "new:name" entry → extract a voice embedding from the audio segments matching that label, then call `state.get_speaker_embedding_service().register_speaker(name, embedding)` (`backend/services/speaker_embedding.py:235`). This single call creates the folder, DB row, and saves the `.npy` — no separate save step needed.
+   - **Reuse the existing assign helper**: `POST /job/{job_id}/speakers/assign` (`backend/routes/transcription.py:1006`) already handles "map labels → speaker names, creating speakers when needed". The new `/re-refine` endpoint **calls into the same internal helper** that powers `/speakers/assign` (refactor the helper out of the route body into a callable, then both routes call it). The differences: `/re-refine` adds the re-refinement dispatch on top, and accepts `"unknown"` as an explicit value (to strip names back to anonymous).
    - Build final `speaker_ids` list (union of confirmed + newly-created).
-   - Update `job.segments[*].speaker` per the assignments map.
+   - Update `job.segments[*].speaker` per the assignments map (delegated to the shared helper above).
    - Update `job.settings.speaker_ids` so future logic sees the canonical set.
    - Reset `job.refinement_status = "pending"`, `job.phase = "refining"`.
-   - Submit `_run_refinement_for_job(job_id, speaker_ids, context_path, audio_path)` to `state.transcription_executor` (existing entry point from Plan 4B).
+   - Dispatch `_run_refinement_for_job(job_id, speaker_ids, context_path, audio_path)` via `state.transcription_executor.submit(_run_refinement_for_job, job_id, speaker_ids, context_path, audio_path)` — the same call site pattern used by the orchestrator at `backend/services/orchestrator.py:193`. This is also what Plan 1's manual `/refine/job/{id}` route uses (`backend/routes/refinement.py:314`); the contract is established and consistent across all 3 dispatch points.
 6. **Refinement re-runs**:
    - `_run_refinement_for_job` (existing Plan 4B wiring) loads the union of `speaker_ids` + auto-matched IDs (`1bb28fb` augmentation) → merges personality.md into context.
    - Sonnet runs with new context → produces corrections + diarization polish.
@@ -98,7 +99,7 @@ The orchestrator (Plan 4A Task 6), B5 inline auto-match, refinement (Plan 1 + Pl
 
 ### Backend shape: `auto_speaker_matches` extension
 
-**Today** (from `services/learning.py`):
+**Today** (produced by `services/speaker_embedding.py:auto_identify_speakers`, ~lines 357-440):
 ```python
 auto_speaker_matches = {
     "SPEAKER_00": {
@@ -106,12 +107,14 @@ auto_speaker_matches = {
         "speaker_id": "uuid-pascal",
         "name": "Pascal Weber",
         "confidence": 0.87,
+        "source": "registry",   # existing: "pick" | "registry" | None
+        "note": "...",          # existing: optional human note
     },
     ...
 }
 ```
 
-**Extended** (this design):
+**Extended** (this design — additive, all existing fields preserved):
 ```python
 auto_speaker_matches = {
     "SPEAKER_00": {
@@ -119,7 +122,9 @@ auto_speaker_matches = {
         "speaker_id": "uuid-pascal",
         "name": "Pascal Weber",
         "confidence": 0.87,
-        # NEW: 2nd-best candidate (if confidence above threshold; otherwise null)
+        "source": "registry",
+        "note": "...",
+        # NEW: 2nd-best candidate (null when no qualifying runner-up exists)
         "runner_up": {
             "speaker_id": "uuid-arnaud",
             "name": "Arnaud Brolly",
@@ -133,6 +138,10 @@ auto_speaker_matches = {
 The runner-up is null when:
 - Registry has only 1 speaker (no 2nd candidate exists)
 - Runner-up confidence below a min threshold (e.g. 0.4) — not worth suggesting
+
+**Implementation location**: the runner-up is computed inside `SpeakerEmbeddingService.match_speaker` (`backend/services/speaker_embedding.py:172`) — which currently returns `(name, score)` for the top candidate. Extend it to return `(name, score, runner_up_dict_or_None)` by retaining the second-highest cosine similarity from the per-speaker scoring loop. `auto_identify_speakers` (same file, ~line 357) then propagates `runner_up` into each entry of the returned dict. Update both callers (B5 inline path + any direct callers).
+
+`backend/services/learning.py` (`update_speaker_embeddings`, line 68) is **not** modified — it's the B7 post-refinement embedding worker and is unrelated to B5 inline matching.
 
 ### New endpoint: `POST /job/{job_id}/re-refine`
 
@@ -193,10 +202,9 @@ Modal shown when user clicks Reject on an identified speaker. Renders:
 - `backend/tests/test_re_refine.py` (~80 lines)
 
 **Modified**:
-- `backend/routes/transcription.py` — new `POST /job/{job_id}/re-refine` endpoint (~60 lines)
-- `backend/services/learning.py` — `update_speaker_embeddings` returns runner-up alongside top match (~15 lines)
-- `backend/services/speaker_embedding.py` — top-N candidate retrieval helper (~10 lines)
-- `src/components/TranscriptView.tsx` — remove old `AutoMatchBadge` inline + "Name the speakers" panel, plumb `SpeakerReviewPanel` (~ -80 / +30 lines)
+- `backend/routes/transcription.py` — refactor the speaker-assignment body out of `POST /job/{id}/speakers/assign` (line 1006) into a callable helper; add new `POST /job/{id}/re-refine` endpoint that calls the helper + dispatches refinement (~80 lines net, including refactor)
+- `backend/services/speaker_embedding.py` — extend `match_speaker` to return `(name, score, runner_up_dict)`; propagate `runner_up` through `auto_identify_speakers` (~25 lines)
+- `src/components/TranscriptView.tsx` — remove old `AutoMatchBadge` inline + "Name the speakers" panel, plumb `SpeakerReviewPanel` (~ -80 / +30 lines). Confirmed by grep: `AutoMatchBadge` is imported only at `TranscriptView.tsx:7` and used only at `:987` — deletion is safe.
 - `src/utils/api.ts` — `reRefineJob(jobId, assignments)` helper + extended `AutoSpeakerMatch` type with `runner_up` (~25 lines)
 
 **Reference** (read-only):
@@ -205,8 +213,7 @@ Modal shown when user clicks Reject on an identified speaker. Renders:
 - `backend/services/orchestrator.py` — unchanged (orchestrator owns the first refinement; re-refinement bypasses orchestrator and calls `_run_refinement_for_job` directly, same pattern as Plan 1's manual `/refine/job/{id}` route)
 
 **Deleted**:
-- `src/components/AutoMatchBadge.tsx` — replaced by SpeakerReviewPanel's confirmation UI
-  - Verify no other component imports it before deleting
+- `src/components/AutoMatchBadge.tsx` — replaced by SpeakerReviewPanel's confirmation UI. Safe to delete: grep confirms the only importer is `TranscriptView.tsx:7` (its single render site).
 
 ## Out of scope
 
@@ -218,6 +225,8 @@ Modal shown when user clicks Reject on an identified speaker. Renders:
 - **Concurrent re-refinements** — user submits Apply, gets a loading state until completion. UI disables further corrections during in-flight re-refine.
 - **Speaker profile editing from this panel** — the panel triggers create-with-voice but for editing existing profiles (bio, expertise), user goes to the Speakers tab as today.
 - **Pending jobs auto-resume** (from the hotfix `ac02292` followup — different concern).
+- **Re-refinement when audio file is gone**: the "new:name" path needs `job.audio_path` to extract a voice embedding. If audio has been cleaned up (Plan 1 B5 cleanup deferral or manual rm), the create-speaker path fails. The endpoint returns `409 audio_unavailable` and skips that label; user can still register the speaker manually later via the Speakers tab. Confirm/reject/re-attribute paths don't need the audio and work unconditionally.
+- **Collision with manual segment edits**: if the user manually edited segment text or speaker labels between completion and Apply-and-re-refine, the re-refinement run via `_run_refinement_for_job` will overwrite those edits (it re-derives `refined_segments` from `job.segments` via Sonnet). User-facing warning copy: "Re-refining will replace your manual edits — continue?" confirmation modal before submission.
 
 ## Migration
 
@@ -245,7 +254,7 @@ When Plan 5 ships:
 2. Clicking Reject on a B5 match opens `RejectMatchModal` showing the runner-up speaker (when available) with one-click re-attribution.
 3. For an anonymous SPEAKER_XX label, the panel shows an inline "Create speaker" input that saves both the speaker profile AND a voice embedding extracted from that label's segments.
 4. After confirming/rejecting/creating, the "Apply & re-refine" button enables; clicking it sends one POST to `/re-refine` and the UI shows "Re-refining…" with the phase pill at `refining` then `learning` then None.
-5. Re-refinement completes within the typical refinement window (~30-90s for a 30-min call) and the transcript re-renders with the corrected speaker labels + updated corrections from Sonnet.
+5. Re-refinement completes within the same wall-clock window as the initial refinement on the same transcript (no extra overhead beyond the second Sonnet call); transcript re-renders with the corrected speaker labels + updated corrections.
 6. Existing transcripts (pre-Plan-5) continue to work — `auto_speaker_matches` without `runner_up` falls back to the picker-only flow.
 7. Pyright + ts strict — 0 new errors in frontend.
 8. Backend test suite green (~370 tests including new re-refine integration test).
