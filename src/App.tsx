@@ -73,19 +73,14 @@ function App() {
 
   // Settings
   const [settings, setSettings] = useState<Record<string, any>>({
-    modelSize: 'voxtral-mini-3b',
     language: 'auto',
     translateToEnglish: false,
     enableDiarization: true,
     numSpeakers: '',
-    wordTimestamps: false,
     enableNoiseReduction: false,
-    speedPriority: false,
-    engine: 'voxtral-local',
-    contextTerms: '',
+    engine: 'auto-best',
     contextPath: '',
     speakerIds: [] as string[],
-    twoPass: false,
     outputMode: 'verbatim',
   });
 
@@ -106,8 +101,7 @@ function App() {
   const { macState, setMacState, wakeStartTime, detectProxy, triggerWake, queueSubmit, hasPendingSubmit } =
     useWakeOnLan({
       onAwake: async () => {
-        const fallback = await refreshEngines();
-        if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
+        await refreshEngines();
       },
     });
 
@@ -145,16 +139,13 @@ function App() {
   // Check engine availability on mount (with wake-proxy awareness)
   useEffect(() => {
     detectProxy().then(async (proxyData) => {
-      if (proxyData) {
-        if (proxyData.mac_state === 'awake' && proxyData.model_loaded) {
-          const fallback = await refreshEngines();
-          if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
-        } else {
-          setSettings(prev => ({ ...prev, engine: 'whisper', modelSize: 'large-v3-turbo' }));
-        }
-      } else {
-        const fallback = await refreshEngines();
-        if (fallback) setSettings(prev => ({ ...prev, ...fallback }));
+      // Wake-proxy detection still drives macState inside useWakeOnLan.
+      // We no longer overwrite settings.engine — the Quality dial owns it.
+      // refreshEngines() still pings the backend to populate
+      // voxtralAvailable/voxtralLocalAvailable for the (soon-to-be-deleted)
+      // useEngineAvailability hook. Sub-plan D removes the hook entirely.
+      if (!proxyData || (proxyData.mac_state === 'awake' && proxyData.model_loaded)) {
+        await refreshEngines();
       }
     });
   }, [detectProxy, refreshEngines]);
@@ -222,16 +213,11 @@ function App() {
       language: settings.language,
       enableDiarization: settings.enableDiarization,
       enableNoiseReduction: settings.enableNoiseReduction,
-      modelSize: settings.modelSize,
-      wordTimestamps: settings.wordTimestamps,
       numSpeakers: settings.numSpeakers,
       translateToEnglish: settings.translateToEnglish,
-      speedPriority: settings.speedPriority,
       engine: settings.engine,
-      contextTerms: settings.contextTerms,
       contextPath: settings.contextPath,
       speakerIds: settings.speakerIds,
-      twoPass: settings.twoPass,
       outputMode: settings.outputMode,
     };
 
@@ -423,8 +409,6 @@ function App() {
             onSettingsChange={setSettings}
             showForDocuments={isDocumentMode}
             disabled={active.isProcessing}
-            voxtralAvailable={voxtralAvailable}
-            voxtralLocalAvailable={voxtralLocalAvailable}
           />
 
           {/* Start Button */}
@@ -489,6 +473,7 @@ function App() {
               progressMessage={active.progressMessage}
               sourceType={sourceType}
               batchProgress={transcription.batchProgress}
+              phase={active.phase}
             />
             {active.jobId && (
               <div className="flex justify-end">
