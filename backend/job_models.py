@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from pydantic import BaseModel
 
@@ -396,9 +396,8 @@ class TranscriptionSettings(BaseModel):
     enable_diarization: bool = True
     num_speakers: Optional[int] = None
     enable_noise_reduction: bool = False
-    model_size: str = "voxtral-realtime-4b"
     translate_to_english: bool = False
-    engine: str = "voxtral-local"
+    engine: Literal["auto-best", "auto-quick"] = "auto-best"
     context_terms: Optional[List[str]] = None
     context_path: Optional[str] = None  # Relative path under CONTEXTS_DIR to a .md context document
     speaker_ids: Optional[List[str]] = None  # Expected speakers — their personality.md is merged into the prompt

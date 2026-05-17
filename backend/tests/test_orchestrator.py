@@ -113,3 +113,64 @@ def test_run_post_refinement_learning_sets_then_clears_phase(monkeypatch):
 
     assert phase_writes[0] == "learning", f"first phase write should be 'learning', got {phase_writes!r}"
     assert phase_writes[-1] is None, f"last phase write should clear (None), got {phase_writes!r}"
+
+
+# --- Plan 4A Task 5: TranscriptionSettings.engine narrowing + model_size drop ---
+
+
+def test_engine_accepts_auto_best():
+    from job_models import TranscriptionSettings
+    s = TranscriptionSettings(engine="auto-best")
+    assert s.engine == "auto-best"
+
+
+def test_engine_accepts_auto_quick():
+    from job_models import TranscriptionSettings
+    s = TranscriptionSettings(engine="auto-quick")
+    assert s.engine == "auto-quick"
+
+
+def test_engine_default_is_auto_best():
+    from job_models import TranscriptionSettings
+    s = TranscriptionSettings()
+    assert s.engine == "auto-best", "default engine must be auto-best"
+
+
+def test_engine_rejects_legacy_whisper():
+    from job_models import TranscriptionSettings
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        TranscriptionSettings(engine="whisper")
+
+
+def test_engine_rejects_legacy_voxtral_local():
+    from job_models import TranscriptionSettings
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        TranscriptionSettings(engine="voxtral-local")
+
+
+def test_engine_rejects_legacy_voxtral_api():
+    from job_models import TranscriptionSettings
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        TranscriptionSettings(engine="voxtral-api")
+
+
+def test_engine_rejects_legacy_parakeet():
+    from job_models import TranscriptionSettings
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        TranscriptionSettings(engine="parakeet")
+
+
+def test_model_size_field_is_gone():
+    """TranscriptionSettings no longer has a model_size field.
+
+    Pydantic v2 by default IGNORES extra kwargs, so we assert on the dump
+    rather than expecting a ValidationError. (If the field were still
+    declared, it'd appear in model_dump().)
+    """
+    from job_models import TranscriptionSettings
+    s = TranscriptionSettings()
+    assert "model_size" not in s.model_dump()
