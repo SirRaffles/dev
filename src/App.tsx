@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
-import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, Info, RefreshCw, Moon, Sun } from 'lucide-react';
+import { Upload, Link, Loader2, CheckCircle, AlertCircle, Image, FileText, X, RefreshCw, Moon, Sun } from 'lucide-react';
 
 // Components (eagerly loaded - needed immediately)
 import Header from './components/Header';
@@ -17,7 +17,6 @@ import LearningToast from './components/LearningToast';
 import useProcessingState from './hooks/useProcessingState';
 import useAudioPlayback from './hooks/useAudioPlayback';
 import useWakeOnLan from './hooks/useWakeOnLan';
-import useEngineAvailability from './hooks/useEngineAvailability';
 import useTheme from './hooks/useTheme';
 import useGlobalKeyboard from './hooks/useGlobalKeyboard';
 
@@ -93,17 +92,8 @@ function App() {
   const viewTabsRef = useRef<HTMLDivElement>(null);
 
   // Custom hooks
-  const {
-    voxtralAvailable, voxtralLocalAvailable, backendError,
-    fallbackNotice, dismissFallbackNotice, refreshEngines,
-  } = useEngineAvailability();
-
   const { macState, setMacState, wakeStartTime, detectProxy, triggerWake, queueSubmit, hasPendingSubmit } =
-    useWakeOnLan({
-      onAwake: async () => {
-        await refreshEngines();
-      },
-    });
+    useWakeOnLan({});
 
   const { transcription, multiModal, isDocumentMode, sourceType, active, resetAll, updateResult } =
     useProcessingState(file);
@@ -136,19 +126,13 @@ function App() {
     tabs[nextIndex].click();
   }, []);
 
-  // Check engine availability on mount (with wake-proxy awareness)
+  // Detect wake-proxy on mount. The proxy (if present) drives macState
+  // inside useWakeOnLan; direct connections leave macState null and the UI
+  // operates as a plain local app. No engine-availability ping needed —
+  // the Quality dial owns engine selection now.
   useEffect(() => {
-    detectProxy().then(async (proxyData) => {
-      // Wake-proxy detection still drives macState inside useWakeOnLan.
-      // We no longer overwrite settings.engine — the Quality dial owns it.
-      // refreshEngines() still pings the backend to populate
-      // voxtralAvailable/voxtralLocalAvailable for the (soon-to-be-deleted)
-      // useEngineAvailability hook. Sub-plan D removes the hook entirely.
-      if (!proxyData || (proxyData.mac_state === 'awake' && proxyData.model_loaded)) {
-        await refreshEngines();
-      }
-    });
-  }, [detectProxy, refreshEngines]);
+    detectProxy();
+  }, [detectProxy]);
 
   // Auto-submit when Mac wakes with pending request
   const startProcessingRef = useRef<(() => void) | null>(null);
@@ -289,29 +273,6 @@ function App() {
         )}
 
         {activeTab === 'transcribe' && (<>
-        {/* Backend Error Banner */}
-        {backendError && (
-          <div role="alert" className="bg-amber-500/10 border border-amber-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0" aria-hidden="true" />
-            <span className="text-amber-300 text-sm">{backendError}</span>
-          </div>
-        )}
-
-        {/* Engine Fallback Notice */}
-        {fallbackNotice && (
-          <div className="bg-blue-500/10 border border-blue-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <Info className="w-5 h-5 text-blue-400 flex-shrink-0" aria-hidden="true" />
-            <span className="text-blue-300 text-sm flex-1">{fallbackNotice}</span>
-            <button
-              onClick={dismissFallbackNotice}
-              className="text-blue-400 hover:text-blue-300 transition-colors"
-              aria-label="Dismiss notice"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
         {/* Mac Sleeping Banner */}
         {macState === 'sleeping' && (
           <div className="bg-indigo-500/10 border border-indigo-500/50 rounded-xl p-4 mb-6 flex items-center gap-3">
@@ -414,17 +375,16 @@ function App() {
           {/* Start Button */}
           <button
             onClick={startProcessing}
-            disabled={!canStart || active.isProcessing || (backendError && !macState) || macState === 'waking'}
+            disabled={!canStart || active.isProcessing || macState === 'waking'}
             title={
               macState === 'waking' ? 'Mac is waking up...'
               : macState === 'sleeping' ? 'Click to wake Mac and start transcription'
-              : backendError && !macState ? 'Backend is unavailable'
               : !canStart ? 'Select a file or enter a YouTube URL first'
               : active.isProcessing ? 'Processing in progress'
               : undefined
             }
             className={`w-full mt-6 py-4 rounded-xl font-semibold text-lg transition-all ${
-              canStart && !active.isProcessing && !(backendError && !macState) && macState !== 'waking'
+              canStart && !active.isProcessing && macState !== 'waking'
                 ? macState === 'sleeping'
                   ? 'bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white'
                   : 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'

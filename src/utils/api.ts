@@ -16,12 +16,6 @@ export interface WakeStatus {
   model_loaded: boolean;
 }
 
-export interface HealthResponse {
-  status: string;
-  voxtral_available?: boolean;
-  engines?: Record<string, { available: boolean }>;
-}
-
 export type RefinementStatus = "pending" | "processing" | "done" | "failed" | null;
 export type LearningStatus = "ok" | "partial" | "failed" | null;
 
@@ -109,12 +103,6 @@ export interface TranscriptionOptions {
   language?: string;
   enableDiarization?: boolean;
   enableNoiseReduction?: boolean;
-  // Deprecated fields kept until Sub-plan D removes them; no longer sent.
-  modelSize?: string;
-  wordTimestamps?: boolean;
-  speedPriority?: boolean;
-  twoPass?: boolean;
-  contextTerms?: string;
   // Quality dial mode — backend orchestrator picks the actual engine + model.
   engine?: 'auto-best' | 'auto-quick';
   translateToEnglish?: boolean;
@@ -122,22 +110,6 @@ export interface TranscriptionOptions {
   numSpeakers?: number;
   contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
   speakerIds?: string[];  // Expected speakers — their personality.md is merged into the prompt
-}
-
-export interface EngineInfo {
-  label: string;
-  description: string;
-  type: string;
-  cost: string | null;
-}
-
-export interface ModelInfo {
-  label: string;
-  description: string;
-  // Back-compat: single-language restriction. Prefer `supportedLanguages` for
-  // multilingual models (e.g. Parakeet v3). When both are present, the list wins.
-  languageRestriction?: string;
-  supportedLanguages?: string[];
 }
 
 export interface ExportFormatInfo {
@@ -174,58 +146,6 @@ export const LANGUAGES: Record<string, string> = {
   ar: 'Arabic (العربية)',
   hi: 'Hindi (हिन्दी)',
   pl: 'Polish (Polski)',
-};
-
-// Transcription engines
-export const ENGINES: Record<string, EngineInfo> = {
-  whisper: {
-    label: 'Whisper (Local)',
-    description: 'Free, on-device, GPU-accelerated via Metal',
-    type: 'local',
-    cost: null,
-  },
-  'voxtral-local': {
-    label: 'Voxtral Local',
-    description: 'Best accuracy (~4% WER), on-device, 13 languages',
-    type: 'local',
-    cost: null,
-  },
-  'voxtral-api': {
-    label: 'Voxtral (Cloud)',
-    description: 'Best accuracy (~4% WER), built-in diarization',
-    type: 'cloud',
-    cost: '$0.003/min',
-  },
-};
-
-// Available model sizes (matching backend MLX_MODELS + PARAKEET_MODELS)
-export const MODEL_SIZES: Record<string, ModelInfo> = {
-  'tiny': { label: 'Tiny', description: 'Fastest (~1min audio in ~10s)' },
-  'base': { label: 'Base', description: 'Fast, good for real-time' },
-  'small': { label: 'Small', description: 'Balanced speed/quality' },
-  'medium': { label: 'Medium', description: 'High quality, moderate speed' },
-  'large-v3': { label: 'Large V3', description: 'Best quality, slowest' },
-  'large-v3-turbo': { label: 'Large V3 Turbo', description: '6x faster, near-best quality (Recommended)' },
-  'distil-large-v3': { label: 'Distil Large V3', description: '5x faster, fewer hallucinations' },
-  // Parakeet MLX — keep "parakeet" as the legacy English v2 alias for back-compat.
-  'parakeet': { label: 'Parakeet MLX', description: '60x speed, English only', languageRestriction: 'en' },
-  'parakeet-multi-v3': {
-    label: 'Parakeet V3 (Multilingual)',
-    description: '60x speed, 25 EU languages, best noise robustness',
-    supportedLanguages: ['en', 'fr', 'de', 'es', 'it', 'pt', 'nl', 'ru'],
-  },
-};
-
-// Voxtral cloud models
-export const VOXTRAL_MODELS: Record<string, ModelInfo> = {
-  'voxtral-mini': { label: 'Voxtral Mini', description: 'Best accuracy, built-in diarization ($0.003/min)' },
-};
-
-// Voxtral local models (via mlx-audio on Apple Silicon)
-export const VOXTRAL_LOCAL_MODELS: Record<string, ModelInfo> = {
-  'voxtral-realtime-4b': { label: 'Voxtral Realtime 4B', description: 'Best quality (~4% WER, Transcribe V2 class), 4-bit (~3.2GB)' },
-  'voxtral-mini-3b': { label: 'Voxtral Mini 3B (legacy)', description: 'Legacy 3B 2507 audio-LM (~7-8% WER, 9.4GB)' },
-  'voxtral-mini-3b-4bit': { label: 'Voxtral Mini 3B 4-bit (legacy)', description: 'Legacy 3B 2507, lower memory (~3.2GB)' },
 };
 
 // Export formats
