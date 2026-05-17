@@ -66,9 +66,11 @@ def test_run_refinement_for_job_loads_context_and_calls_refine(icloud_base, monk
     ))
 
     captured = {}
-    def fake_refine(segments, context_text=None, glossary_terms=None):
+    def fake_refine(segments, context_text=None, glossary_terms=None,
+                    speaker_turns=None):
         captured["context_text"] = context_text
         captured["glossary_terms"] = glossary_terms
+        captured["speaker_turns"] = speaker_turns
         return {"analysis": {}, "refined_segments": segments,
                 "speaker_mapping": {}, "corrections_applied": 0,
                 "speakers_identified": 0, "web_searches_performed": 0}
