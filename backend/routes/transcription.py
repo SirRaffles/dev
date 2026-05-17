@@ -17,8 +17,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks,
 from fastapi.responses import StreamingResponse
 
 from config import (
-    SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS, ALLOWED_EXTENSIONS,
-    ALLOWED_AUDIO_EXTENSIONS, VOXTRAL_LOCAL_MODELS, VOXTRAL_LOCAL_LANGUAGES,
+    SUPPORTED_LANGUAGES, ALLOWED_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS,
 )
 from job_models import (
     TranscriptionJob, BatchJob, TranscriptionSettings,
@@ -26,7 +25,7 @@ from job_models import (
 )
 from services.audio import extract_audio
 from services.youtube import download_youtube_audio, extract_video_id, get_youtube_transcript
-from services.transcription import select_optimal_model, transcribe_audio, is_parakeet_key
+from services.transcription import transcribe_audio
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import state
 
@@ -34,11 +33,22 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# All accepted keys when engine="whisper" — MLX Whisper variants plus every
-# Parakeet variant (including the legacy "parakeet" alias).
-_WHISPER_ENGINE_MODEL_KEYS: frozenset[str] = frozenset(
-    set(MLX_MODELS.keys()) | set(PARAKEET_MODELS.keys()) | {"parakeet"}
-)
+# Plan 4A: accepted engine values (mirror of TranscriptionSettings.engine Literal).
+_VALID_ENGINES = frozenset({"auto-best", "auto-quick"})
+
+
+def _validate_engine_or_400(engine: str) -> None:
+    """Hard-reject legacy engine values. The frontend was updated in lockstep
+    (Sub-plan C); any old client gets a clear 400 telling it what to send."""
+    if engine in _VALID_ENGINES:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Engine {engine!r} is no longer supported. "
+            f"Use 'auto-best' or 'auto-quick'."
+        ),
+    )
 
 
 def _validate_file_magic(file_path: str, expected_ext: str) -> bool:
@@ -109,47 +119,18 @@ async def transcribe_file(
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers (None = auto-detect)"),
     enable_noise_reduction: bool = Query(False, description="Apply noise reduction before transcription"),
-    model_size: str = Query("voxtral-realtime-4b", description="Model size: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3, parakeet, parakeet-en-v2, parakeet-multi-v3, voxtral-realtime-4b, voxtral-mini-3b, voxtral-mini-3b-4bit"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps (slower but more precise)"),
     translate_to_english: bool = Query(False, description="Translate output to English (any language -> English)"),
-    speed_priority: bool = Query(False, description="Optimize for speed (uses fastest model for language)"),
-    engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
-    context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral (up to 100)"),
+    engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
+    context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description="Path under CONTEXTS_DIR to a .md context document"),
-    two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
     if output_mode not in ("verbatim", "readable"):
         raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
-    if engine == "voxtral-api":
-        if not state._voxtral_available:
-            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
-    elif engine == "voxtral-local":
-        if not state._voxtral_local_available:
-            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
-    elif engine != "whisper":
-        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
 
-    if engine == "whisper" and not state.whisper_model_ready:
-        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
-
-    effective_model = model_size
-    if engine == "voxtral-local":
-        if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-realtime-4b"
-        if language not in VOXTRAL_LOCAL_LANGUAGES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
-            )
-    elif engine == "whisper":
-        effective_model = select_optimal_model(language, model_size, speed_priority)
-        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
-            )
+    _validate_engine_or_400(engine)
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -210,12 +191,10 @@ async def transcribe_file(
             enable_diarization=enable_diarization,
             num_speakers=num_speakers,
             enable_noise_reduction=enable_noise_reduction,
-            model_size=effective_model,
             translate_to_english=translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
-            two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
 
@@ -225,7 +204,7 @@ async def transcribe_file(
             job_id, input_path, audio_path, remove_input_after, settings,
         )
 
-        return {"job_id": job_id, "status": "processing", "model": effective_model, "engine": engine}
+        return {"job_id": job_id, "status": "processing", "engine": engine}
 
     except HTTPException:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -240,15 +219,12 @@ async def transcribe_file(
 async def transcribe_youtube(
     request: YouTubeRequest,
     background_tasks: BackgroundTasks,
-    model_size: str = Query("voxtral-realtime-4b", description="Model size"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers"),
     use_captions: bool = Query(True, description="Try YouTube captions first"),
-    speed_priority: bool = Query(False, description="Optimize for speed"),
-    engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
-    context_terms: Optional[str] = Query(None, description="Comma-separated context terms for Voxtral"),
+    engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
+    context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
-    two_pass: bool = Query(False, description="Two-pass mode: timestamps + language accuracy (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Download and transcribe audio from a YouTube URL."""
@@ -261,34 +237,7 @@ async def transcribe_youtube(
     if output_mode not in ("verbatim", "readable"):
         raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
 
-    if engine == "voxtral-api":
-        if not state._voxtral_available:
-            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
-    elif engine == "voxtral-local":
-        if not state._voxtral_local_available:
-            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
-    elif engine != "whisper":
-        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
-
-    if engine == "whisper" and not state.whisper_model_ready:
-        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
-
-    effective_model = model_size
-    if engine == "voxtral-local":
-        if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-realtime-4b"
-        if request.language not in VOXTRAL_LOCAL_LANGUAGES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
-            )
-    elif engine == "whisper":
-        effective_model = select_optimal_model(request.language, model_size, speed_priority)
-        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
-            )
+    _validate_engine_or_400(engine)
 
     if request.language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -371,12 +320,10 @@ async def transcribe_youtube(
             enable_diarization=request.enable_diarization,
             num_speakers=num_speakers,
             enable_noise_reduction=request.enable_noise_reduction,
-            model_size=effective_model,
             translate_to_english=request.translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
-            two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
 
@@ -391,7 +338,7 @@ async def transcribe_youtube(
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
-        return {"job_id": job_id, "status": "processing", "source": engine, "model": model_size, "engine": engine}
+        return {"job_id": job_id, "status": "processing", "engine": engine}
 
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -409,48 +356,18 @@ async def transcribe_batch(
     language: str = Query("auto", description="Language code"),
     enable_diarization: bool = Query(True, description="Enable speaker identification"),
     num_speakers: Optional[int] = Query(None, description="Expected number of speakers"),
-    model_size: str = Query("voxtral-realtime-4b", description="Model size"),
     word_timestamps: bool = Query(False, description="Enable word-level timestamps"),
     translate_to_english: bool = Query(False, description="Translate output to English"),
-    speed_priority: bool = Query(False, description="Optimize for speed"),
-    engine: str = Query("voxtral-local", description="Transcription engine: whisper, voxtral-local, or voxtral-api"),
-    context_terms: Optional[str] = Query(None, description="Context terms for Voxtral"),
+    engine: str = Query("auto-best", description="Quality mode: 'auto-best' or 'auto-quick'"),
+    context_terms: Optional[str] = Query(None, description="Context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
-    two_pass: bool = Query(False, description="Two-pass mode (voxtral-api only, 2x cost)"),
     output_mode: str = Query("verbatim", description="Output mode: verbatim (raw) or readable (cleaned, sentence-segmented)"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
     if output_mode not in ("verbatim", "readable"):
         raise HTTPException(status_code=400, detail="Invalid output_mode. Use: verbatim, readable")
 
-    if engine == "voxtral-api":
-        if not state._voxtral_available:
-            raise HTTPException(status_code=503, detail="Voxtral API not configured. Set MISTRAL_API_KEY environment variable.")
-    elif engine == "voxtral-local":
-        if not state._voxtral_local_available:
-            raise HTTPException(status_code=503, detail="Voxtral Local not available. Install mlx-audio.")
-    elif engine != "whisper":
-        raise HTTPException(status_code=400, detail="Invalid engine. Use: whisper, voxtral-local, or voxtral-api")
-
-    if engine == "whisper" and not state.whisper_model_ready:
-        raise HTTPException(status_code=503, detail="MLX-Whisper not configured")
-
-    effective_model = model_size
-    if engine == "voxtral-local":
-        if model_size not in VOXTRAL_LOCAL_MODELS:
-            effective_model = "voxtral-realtime-4b"
-        if language not in VOXTRAL_LOCAL_LANGUAGES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported language for Voxtral Local. Supported: {sorted(VOXTRAL_LOCAL_LANGUAGES)}"
-            )
-    elif engine == "whisper":
-        effective_model = select_optimal_model(language, model_size, speed_priority)
-        if effective_model not in _WHISPER_ENGINE_MODEL_KEYS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid model size. Use: {sorted(_WHISPER_ENGINE_MODEL_KEYS)}"
-            )
+    _validate_engine_or_400(engine)
 
     if language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
@@ -480,12 +397,10 @@ async def transcribe_batch(
             language=language,
             enable_diarization=enable_diarization,
             num_speakers=num_speakers,
-            model_size=effective_model,
             translate_to_english=translate_to_english,
             engine=engine,
             context_terms=parsed_context_terms,
             context_path=context_path,
-            two_pass=two_pass and engine == "voxtral-api",
             output_mode=output_mode,
         )
 
