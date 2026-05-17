@@ -109,15 +109,17 @@ export interface TranscriptionOptions {
   language?: string;
   enableDiarization?: boolean;
   enableNoiseReduction?: boolean;
+  // Deprecated fields kept until Sub-plan D removes them; no longer sent.
   modelSize?: string;
   wordTimestamps?: boolean;
-  translateToEnglish?: boolean;
   speedPriority?: boolean;
-  engine?: string;
   twoPass?: boolean;
+  contextTerms?: string;
+  // Quality dial mode — backend orchestrator picks the actual engine + model.
+  engine?: 'auto-best' | 'auto-quick';
+  translateToEnglish?: boolean;
   outputMode?: string;
   numSpeakers?: number;
-  contextTerms?: string;
   contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
   speakerIds?: string[];  // Expected speakers — their personality.md is merged into the prompt
 }
@@ -294,21 +296,13 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
     language: options.language || 'auto',
     enable_diarization: String(options.enableDiarization ?? true),
     enable_noise_reduction: String(options.enableNoiseReduction ?? false),
-    model_size: options.modelSize || 'voxtral-realtime-4b',
-    word_timestamps: String(options.wordTimestamps ?? false),
     translate_to_english: String(options.translateToEnglish ?? false),
-    speed_priority: String(options.speedPriority ?? false),
-    engine: options.engine || 'voxtral-local',
-    two_pass: String(options.twoPass ?? false),
+    engine: options.engine || 'auto-best',
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
     params.append('num_speakers', String(options.numSpeakers));
-  }
-
-  if (options.contextTerms) {
-    params.append('context_terms', options.contextTerms);
   }
 
   if (options.contextPath) {
@@ -352,20 +346,12 @@ export async function submitMultiModalProcessing(file: File, options: Transcript
 export async function submitYouTubeTranscription(url: string, options: TranscriptionOptions = {}): Promise<{ job_id: string; status?: string }> {
   // Query params for settings not in YouTubeRequest body
   const params = new URLSearchParams({
-    model_size: options.modelSize || 'voxtral-realtime-4b',
-    word_timestamps: String(options.wordTimestamps ?? false),
-    speed_priority: String(options.speedPriority ?? false),
-    engine: options.engine || 'voxtral-local',
-    two_pass: String(options.twoPass ?? false),
+    engine: options.engine || 'auto-best',
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
     params.append('num_speakers', String(options.numSpeakers));
-  }
-
-  if (options.contextTerms) {
-    params.append('context_terms', options.contextTerms);
   }
 
   if (options.contextPath) {
@@ -483,21 +469,13 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
   const params = new URLSearchParams({
     language: options.language || 'auto',
     enable_diarization: String(options.enableDiarization ?? true),
-    model_size: options.modelSize || 'voxtral-realtime-4b',
-    word_timestamps: String(options.wordTimestamps ?? false),
     translate_to_english: String(options.translateToEnglish ?? false),
-    speed_priority: String(options.speedPriority ?? false),
-    engine: options.engine || 'voxtral-local',
-    two_pass: String(options.twoPass ?? false),
+    engine: options.engine || 'auto-best',
     output_mode: options.outputMode || 'verbatim',
   });
 
   if (options.numSpeakers) {
     params.append('num_speakers', String(options.numSpeakers));
-  }
-
-  if (options.contextTerms) {
-    params.append('context_terms', options.contextTerms);
   }
 
   if (options.contextPath) {
