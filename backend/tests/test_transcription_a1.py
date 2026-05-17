@@ -191,3 +191,45 @@ def test_vad_trim_restores_segment_timestamps(tmp_path, monkeypatch):
     segs = job_obj.segments or []
     assert segs and segs[0]["start"] == 3.0 and segs[0]["end"] == 5.0, \
         f"Timestamps must be restored to original time base, got {segs}"
+
+
+def test_transcribe_with_whisper_is_callable_and_returns_result_dict(tmp_path, monkeypatch):
+    """Extraction proof: transcribe_with_whisper exists and returns
+    {text, segments, language} preserving A1 kwargs."""
+    from job_models import TranscriptionSettings
+    from services import transcription
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    fake_result = {
+        "segments": [{"start": 0.0, "end": 1.0, "text": "hi", "words": [
+            {"word": " hi", "start": 0.0, "end": 1.0, "probability": 0.99}
+        ]}],
+        "text": "hi",
+        "language": "en",
+    }
+
+    captured = {}
+
+    def fake_whisper(*_args, **kwargs):
+        captured.update(kwargs)
+        return fake_result
+
+    settings = TranscriptionSettings(
+        model_size="large-v3-turbo",  # still accepted in Task 2 — Task 5 removes it
+        language="en",
+        word_timestamps=True,
+        enable_diarization=False,
+        enable_noise_reduction=False,
+        engine="whisper",  # still legal in Task 2 — Task 5 narrows it
+    )
+
+    with patch("mlx_whisper.transcribe", side_effect=fake_whisper):
+        out = transcription.transcribe_with_whisper(str(audio_path), settings, job=None)
+
+    assert isinstance(out, dict), f"expected dict, got {type(out)}"
+    assert "segments" in out and "text" in out and "language" in out
+    assert captured.get("word_timestamps") is True
+    assert captured.get("condition_on_previous_text") is False
+    assert captured.get("logprob_threshold") == -1.0

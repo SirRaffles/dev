@@ -541,6 +541,106 @@ def transcribe_with_voxtral_local(audio_path: str, settings: TranscriptionSettin
     }
 
 
+def transcribe_with_whisper(audio_path: str, settings: TranscriptionSettings, job=None) -> dict:
+    """Transcribe with MLX-Whisper, preserving A1 decoding params + A2 VAD trim + A3 word-timestamp carry.
+
+    Returns {segments, text, language}. Words are carried INTERNALLY through
+    each segment so A3 word-boundary speaker assignment downstream can split.
+    The caller is responsible for the optional A1 strip of words from emitted
+    segments when settings.word_timestamps is False.
+    """
+    import mlx_whisper
+
+    # A2: trim leading silence before Whisper so language detection sees real speech.
+    from services.audio import find_first_speech_offset, make_trimmed_audio
+    trim_offset = find_first_speech_offset(audio_path)
+    audio_path_for_whisper = audio_path
+    trimmed_temp_path = None
+    if trim_offset > 0:
+        logger.info("A2: trimming %.2fs of leading silence before transcription", trim_offset)
+        trimmed_temp_path = make_trimmed_audio(audio_path, trim_offset)
+        audio_path_for_whisper = trimmed_temp_path
+
+    language = None if settings.language == "auto" else settings.language
+
+    # In Sub-plan A, settings.model_size is still present (Task 5 removes it).
+    # Default to large-v3-turbo — the orchestrator's Best mode always uses Turbo.
+    model_size = getattr(settings, "model_size", None) or "large-v3-turbo"
+    model_info = MLX_MODELS.get(model_size, MLX_MODELS["large-v3-turbo"])
+    model_path = model_info["path"]
+    logger.info("Using model: %s (%s)", model_size, model_path)
+
+    from services.glossary import load_global_glossary
+    context_text = merge_context_sources(
+        load_global_glossary(),
+        load_context_document(settings.context_path),
+        load_speakers_context(settings.speaker_ids),
+    )
+    initial_prompt = build_initial_prompt(context_text)
+    if initial_prompt:
+        logger.info("Using context document as initial_prompt (%d chars)", len(initial_prompt))
+
+    try:
+        result = mlx_whisper.transcribe(
+            audio_path_for_whisper,
+            path_or_hf_repo=model_path,
+            language=language,
+            task="translate" if settings.translate_to_english else "transcribe",
+            word_timestamps=True,                          # A1: forced on; needed by A3
+            condition_on_previous_text=False,              # A1
+            no_speech_threshold=0.6,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,                        # A1
+            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),    # A1
+            initial_prompt=initial_prompt,
+            verbose=False,
+            fp16=True,
+        )
+    finally:
+        # A2: clean up the VAD-trimmed temp file we may have created.
+        if trimmed_temp_path:
+            try:
+                os.remove(trimmed_temp_path)
+            except OSError:
+                pass
+
+    # A2: restore segment timestamps to the original time base.
+    if trim_offset > 0:
+        for segment in result.get("segments", []):
+            segment["start"] = segment.get("start", 0.0) + trim_offset
+            segment["end"] = segment.get("end", 0.0) + trim_offset
+            for w in segment.get("words", []) or []:
+                w["start"] = w.get("start", 0.0) + trim_offset
+                w["end"] = w.get("end", 0.0) + trim_offset
+
+    transcription_segments = []
+    full_text_parts = []
+    for segment in result.get("segments", []):
+        seg_data = {
+            "start": segment["start"],
+            "end": segment["end"],
+            "text": segment["text"].strip(),
+        }
+        if segment.get("words"):
+            seg_data["words"] = [
+                {
+                    "word": w.get("word", w.get("text", "")),
+                    "start": w["start"],
+                    "end": w["end"],
+                    "probability": w.get("probability", 1.0),
+                }
+                for w in segment["words"]
+            ]
+        transcription_segments.append(seg_data)
+        full_text_parts.append(segment["text"].strip())
+
+    return {
+        "segments": transcription_segments,
+        "text": result.get("text", " ".join(full_text_parts)),
+        "language": result.get("language", "unknown"),
+    }
+
+
 def _should_auto_refine(settings: TranscriptionSettings) -> bool:
     """B2 trigger rule. Tri-state auto_refine: explicit True/False overrides;
     None means auto-on iff speaker_ids or context_path is set."""
@@ -684,101 +784,12 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
                 full_text = result.get("text", "")
 
             else:
-                import mlx_whisper
-
-                # A2: trim leading silence before Whisper so language detection sees real speech.
-                # On phone calls the first 30s often contains jingles or silence, which
-                # confuses Whisper's auto language detector (we saw arabic on an EN call).
-                from services.audio import find_first_speech_offset, make_trimmed_audio
-                trim_offset = find_first_speech_offset(audio_path)
-                audio_path_for_whisper = audio_path
-                trimmed_temp_path = None
-                if trim_offset > 0:
-                    logger.info("A2: trimming %.2fs of leading silence before transcription", trim_offset)
-                    trimmed_temp_path = make_trimmed_audio(audio_path, trim_offset)
-                    audio_path_for_whisper = trimmed_temp_path
-
                 _update_job(job, progress=20, message="Transcribing with MLX-Whisper (GPU-accelerated)...")
-
-                language = None if settings.language == "auto" else settings.language
-
-                model_info = MLX_MODELS.get(settings.model_size, MLX_MODELS["large-v3-turbo"])
-                model_path = model_info["path"]
-                logger.info("Using model: %s (%s)", settings.model_size, model_path)
-
-                # Use the user-selected context document as initial_prompt,
-                # plus any expected-speaker context. Whisper's decoder has a
-                # 448-token context; ~900 chars is a safe budget that leaves
-                # room for actual audio tokens.
-                from services.glossary import load_global_glossary  # local import — avoids circular load
-                context_text = merge_context_sources(
-                    load_global_glossary(),
-                    load_context_document(settings.context_path),
-                    load_speakers_context(settings.speaker_ids),
-                )
-                initial_prompt = build_initial_prompt(context_text)
-                if initial_prompt:
-                    logger.info(
-                        "Using context document as initial_prompt (%d chars)",
-                        len(initial_prompt),
-                    )
-
-                result = mlx_whisper.transcribe(
-                    audio_path_for_whisper,
-                    path_or_hf_repo=model_path,
-                    language=language,
-                    task="translate" if settings.translate_to_english else "transcribe",
-                    word_timestamps=True,                          # A1: forced on; needed by A3
-                    condition_on_previous_text=False,              # A1: stop error propagation
-                    no_speech_threshold=0.6,
-                    compression_ratio_threshold=2.4,
-                    logprob_threshold=-1.0,                        # A1: trigger temperature fallback
-                    temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),    # A1: decoding fallback ladder
-                    initial_prompt=initial_prompt,
-                    verbose=False,
-                    fp16=True,
-                )
-
-                # A2: restore segment timestamps to the original time base.
-                if trim_offset > 0:
-                    for segment in result.get("segments", []):
-                        segment["start"] = segment.get("start", 0.0) + trim_offset
-                        segment["end"] = segment.get("end", 0.0) + trim_offset
-                        for w in segment.get("words", []) or []:
-                            w["start"] = w.get("start", 0.0) + trim_offset
-                            w["end"] = w.get("end", 0.0) + trim_offset
-
+                result = transcribe_with_whisper(audio_path, settings, job=job)
                 job.language = result.get("language", "unknown")
                 job.language_probability = 0.99
-
-                transcription_segments = []
-                full_text_parts = []
-
-                for segment in result.get("segments", []):
-                    seg_data = {
-                        "start": segment["start"],
-                        "end": segment["end"],
-                        "text": segment["text"].strip(),
-                    }
-
-                    # A1: always carry words through internally — A3 needs them to split at
-                    # speaker-turn boundaries. They are stripped at emission time below
-                    # (after stitch_speaker_turns) if the user opted out.
-                    if segment.get("words"):
-                        seg_data["words"] = [
-                            {
-                                "word": w.get("word", w.get("text", "")),
-                                "start": w["start"],
-                                "end": w["end"],
-                                "probability": w.get("probability", 1.0)
-                            }
-                            for w in segment["words"]
-                        ]
-
-                    transcription_segments.append(seg_data)
-                    full_text_parts.append(segment["text"].strip())
-
-                full_text = result.get("text", " ".join(full_text_parts))
+                transcription_segments = result["segments"]
+                full_text = result["text"]
 
             # Join the concurrent diarization (audit #9). Never let a diarization
             # failure prevent transcription from being returned.
@@ -904,12 +915,6 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
         logger.exception("Transcription failed for job %s", job_id)
 
     finally:
-        try:
-            # A2: clean up the VAD-trimmed temp file if one was created.
-            if 'trimmed_temp_path' in locals() and trimmed_temp_path and os.path.exists(trimmed_temp_path):
-                os.remove(trimmed_temp_path)
-        except Exception:
-            pass
         # Audit #16: retries re-use the same file_path. Don't rmtree if this
         # job was created from a retry — the parent dir is still wanted by any
         # subsequent retry attempt.
