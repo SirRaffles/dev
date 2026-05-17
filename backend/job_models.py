@@ -136,28 +136,26 @@ class JobStore:
 
     def _load_active_jobs(self):
         with self._get_connection() as conn:
-            # Any "processing" job from a previous backend instance is
-            # by definition orphaned — its executor died with the old
-            # process. Mark them as failed so the UI shows a real status
-            # instead of perpetual "Transcribing…".
+            # Any "processing" OR "pending" job from a previous backend
+            # instance is orphaned — processing jobs lost their executor
+            # thread; pending jobs lost their executor.submit() call from
+            # the route handler. Neither will resume on its own, so mark
+            # them all as failed and let the user retry.
             orphan_cursor = conn.execute(
                 "UPDATE jobs SET status='failed', "
                 "error='Backend restarted mid-job — please retry', "
                 "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status='processing'"
+                "WHERE status IN ('processing', 'pending')"
             )
             if orphan_cursor.rowcount:
                 conn.commit()
                 logger.info(
-                    "Marked %d orphan 'processing' jobs as failed on startup",
+                    "Marked %d orphan 'processing'/'pending' jobs as failed on startup",
                     orphan_cursor.rowcount,
                 )
-            cursor = conn.execute(
-                "SELECT * FROM jobs WHERE status IN ('pending', 'processing')"
-            )
-            for row in cursor.fetchall():
-                job = self._row_to_job(row)
-                self._cache[job.job_id] = job
+            # No active jobs survive a restart — the executor work is lost.
+            # Leaving _cache empty matches that reality; the UI shows real
+            # failure states + retry buttons instead of zombie polling.
         logger.info(f"Loaded {len(self._cache)} active jobs from database")
 
     def _prune_loop(self):
