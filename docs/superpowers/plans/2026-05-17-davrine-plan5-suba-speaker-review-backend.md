@@ -136,6 +136,13 @@ def _make_service_with_speakers(monkeypatch, embeddings):
 
 def test_match_speaker_returns_runner_up_when_two_qualifying(monkeypatch):
     """With 2+ speakers above the runner-up threshold, returns 2nd-best."""
+    import state
+    # The runner-up dict is built by looking up `speaker_id` via
+    # state.speaker_store.get_by_name(second_name). We don't seed the store,
+    # so stub it to None — the test's intent is to verify the runner-up name
+    # and confidence; speaker_id is expected to be None.
+    monkeypatch.setattr(state.speaker_store, "get_by_name", lambda n: None)
+
     svc = _make_service_with_speakers(monkeypatch, {
         "Pascal":  _unit([1.0, 0.0, 0.0, 0.0]),
         "Arnaud":  _unit([0.8, 0.6, 0.0, 0.0]),  # ~0.8 cosine to query
@@ -148,6 +155,7 @@ def test_match_speaker_returns_runner_up_when_two_qualifying(monkeypatch):
     assert score > 0.99
     assert runner_up is not None
     assert runner_up["name"] == "Arnaud"
+    assert runner_up["speaker_id"] is None  # store stubbed to None
     assert 0.7 < runner_up["confidence"] < 0.85
     # Fabrice should NOT appear (below 0.4 threshold)
     assert runner_up["name"] != "Fabrice"
@@ -155,6 +163,9 @@ def test_match_speaker_returns_runner_up_when_two_qualifying(monkeypatch):
 
 def test_match_speaker_returns_none_runner_up_when_only_one_speaker(monkeypatch):
     """Single-speaker registry has no possible runner-up."""
+    import state
+    monkeypatch.setattr(state.speaker_store, "get_by_name", lambda n: None)
+
     svc = _make_service_with_speakers(monkeypatch, {
         "Pascal": _unit([1.0, 0.0, 0.0, 0.0]),
     })
@@ -167,6 +178,9 @@ def test_match_speaker_returns_none_runner_up_when_only_one_speaker(monkeypatch)
 
 def test_match_speaker_runner_up_below_threshold_returns_none(monkeypatch):
     """Runner-up below RUNNER_UP_THRESHOLD (0.4) is suppressed."""
+    import state
+    monkeypatch.setattr(state.speaker_store, "get_by_name", lambda n: None)
+
     svc = _make_service_with_speakers(monkeypatch, {
         "Pascal":  _unit([1.0, 0.0, 0.0, 0.0]),
         "Fabrice": _unit([0.0, 0.0, 0.0, 1.0]),  # orthogonal, cosine = 0
@@ -202,7 +216,15 @@ cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m 
 ```
 Expected: FAIL with `ValueError: too many values to unpack` (current `match_speaker` returns 2-tuple) or `TypeError`. Confirm the failure is the expected unpacking error, not an import error.
 
-- [ ] **Step 3: Implement runner-up in `match_speaker`**
+- [ ] **Step 3: Stash WIP on `speaker_embedding.py` BEFORE editing**
+
+Stash WIP first so our task edits land on a clean base, then pop after committing (mirrors Task 3's stash-dance):
+```bash
+cd ~/Development/apps/whisper-transcription-app && git stash push -m "plan5A-wip-speaker-embedding" -- backend/services/speaker_embedding.py 2>/dev/null || true
+```
+If nothing was stashed (no WIP on this file), the command is a no-op — proceed.
+
+- [ ] **Step 4: Implement runner-up in `match_speaker`**
 
 Edit `backend/services/speaker_embedding.py`:
 
@@ -236,7 +258,9 @@ Edit `backend/services/speaker_embedding.py`:
    Build the runner-up dict (resolves `speaker_id` from `state.speaker_store`):
    ```python
    runner_up: Optional[Dict[str, object]] = None
-   if second_name is not None and second_score >= self.RUNNER_UP_THRESHOLD and second_name != best_name:
+   # `second_name is None` is the "single-qualifying-speaker" sentinel — the
+   # loop already guarantees second_name != best_name when set.
+   if second_name is not None and second_score >= self.RUNNER_UP_THRESHOLD:
        try:
            sp = state.speaker_store.get_by_name(second_name)
        except Exception:
@@ -257,7 +281,7 @@ Edit `backend/services/speaker_embedding.py`:
 
    Also update the two early-return `return None, 0.0` paths at the top of the function to `return None, 0.0, None`.
 
-- [ ] **Step 4: Run tests, watch them pass**
+- [ ] **Step 5: Run tests, watch them pass**
 
 Run:
 ```bash
@@ -265,7 +289,7 @@ cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m 
 ```
 Expected: 4 passed.
 
-- [ ] **Step 5: Update `auto_identify_speakers` and existing callers**
+- [ ] **Step 6: Update `auto_identify_speakers` and existing callers**
 
 Two unpacking sites need updating (the test suite caught the first one; the rest are runtime):
 
@@ -285,7 +309,7 @@ Two unpacking sites need updating (the test suite caught the first one; the rest
    ```
    For each runtime call site, expand the unpacking to 3-tuple (drop runner_up with `_` if unused). Test call sites that already use `match_speaker` are fine to update with `_` for runner_up.
 
-- [ ] **Step 6: Run the full backend test suite to catch unpacking regressions**
+- [ ] **Step 7: Run the full backend test suite to catch unpacking regressions**
 
 Run:
 ```bash
@@ -293,12 +317,10 @@ cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m 
 ```
 Expected: same baseline pass count from Task 1 Step 2 PLUS the 4 new tests. If any test fails with `too many values to unpack`, find the missed call site and fix it.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit + restore WIP stash**
 
 ```bash
-cd ~/Development/apps/whisper-transcription-app && git stash push -m "plan5A-wip-speaker-embedding" -- backend/services/speaker_embedding.py 2>/dev/null || true
-# (If the stash captured anything, re-apply task changes from memory — typically nothing was stashed since this task's edits are clean.)
-git add backend/services/speaker_embedding.py backend/tests/test_re_refine.py
+cd ~/Development/apps/whisper-transcription-app && git add backend/services/speaker_embedding.py backend/tests/test_re_refine.py
 git commit -m "Plan 5A Task 2: match_speaker returns runner-up (2nd-best) candidate"
 git stash list | grep -q "plan5A-wip-speaker-embedding" && git stash pop || true
 ```
@@ -406,7 +428,17 @@ def _apply_speaker_assignments(
     Returns:
         {
             "mapping": {old_label: new_name, ...},
-            "results": [{label, speaker_id, speaker_name, created, ...}, ...],
+            "results": [
+                {
+                    "label": str,
+                    "speaker_id": str,            # always populated (never None)
+                    "speaker_name": str,
+                    "created": bool,
+                    "embedding_saved": bool,
+                    "speaking_time_seconds": float,
+                },
+                ...
+            ],
         }
 
     Raises HTTPException on invalid input (400 for anonymous-name reuse, 404
@@ -416,13 +448,82 @@ def _apply_speaker_assignments(
     from services.speaker_embedding import SPEAKERS_DIR as _SPEAKERS_DIR
     embedding_service = state.get_speaker_embedding_service()
 
-    mapping: dict[str, str] = {}
+    mapping: dict[str, str] = {}  # old label → new name
     results = []
 
     for a in assignments:
-        # ... PASTE the body of the for-loop from the legacy route here,
-        # lines 1040-1112 (the per-assignment processing). Keep semantics
-        # IDENTICAL — same HTTPException codes, same fields in `results`.
+        name = a.speaker_name.strip()
+        if not name:
+            continue
+        if _is_anonymous_label(name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{name}' looks like an anonymous diarization label; pick a real speaker name",
+            )
+
+        existing = state.speaker_store.get_by_name(name)
+        longest = _longest_turn_for_label(job.speakers or [], a.label)
+        embedding = None
+        if audio_path and longest and (longest["end"] - longest["start"]) >= 2.0:
+            try:
+                embedding = embedding_service.extract_embedding(
+                    audio_path, longest["start"], longest["end"],
+                )
+            except Exception as e:
+                logger.warning("Embedding extraction failed for %s: %s", a.label, e)
+
+        if not existing:
+            if not a.create_new:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Speaker '{name}' not found. Set create_new=true to create it.",
+                )
+            if embedding is not None:
+                speaker_id = embedding_service.register_speaker(name, embedding)
+            else:
+                # No embedding available — create via the speaker_store directly.
+                import uuid as _uuid
+                speaker_id = str(_uuid.uuid4())
+                folder = _SPEAKERS_DIR / name
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "personality.md").write_text(
+                    f"# {name}\n\n*No personality insights yet.*\n", encoding="utf-8",
+                )
+                state.speaker_store.create(
+                    speaker_id, name,
+                    str(folder.relative_to(_SPEAKERS_DIR.parent)),
+                )
+            speaker = state.speaker_store.get(speaker_id)
+        else:
+            speaker = existing
+            speaker_id = speaker["speaker_id"]
+            # EMA-update embedding with the new sample.
+            if embedding is not None:
+                try:
+                    embedding_service.update_embedding(name, embedding)
+                except Exception as e:
+                    logger.warning("EMA update failed for %s: %s", name, e)
+
+        # Accumulate rename mapping + speaking time.
+        mapping[a.label] = name
+        speaking_time = sum(
+            max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+            for s in (job.segments or [])
+            if s.get("speaker") == a.label
+        )
+        try:
+            state.speaker_store.increment_call_count(speaker_id, speaking_time)
+        except Exception:  # non-fatal
+            logger.warning("increment_call_count failed for %s", name, exc_info=True)
+
+        results.append({
+            "label": a.label,
+            "speaker_id": speaker_id,
+            "speaker_name": name,
+            "created": not existing,
+            "embedding_saved": embedding is not None,
+            "speaking_time_seconds": round(speaking_time, 2),
+        })
 
     # Apply rename in segments + turns + persist (lines 1115-1125 of legacy).
     if mapping:
@@ -522,7 +623,7 @@ Add to `backend/tests/test_re_refine.py`:
 ```python
 # ---------- Task 4: POST /job/{id}/re-refine endpoint ----------
 # Note: `client` fixture (conftest.py:115) is an httpx.AsyncClient over the
-# real FastAPI app via ASGITransport. asyncio_mode = "auto" in pytest.ini
+# real FastAPI app via ASGITransport. asyncio_mode = "auto" in pyproject.toml
 # (line 62) so @pytest.mark.asyncio is implicit — but doesn't hurt to keep.
 
 import uuid
@@ -598,7 +699,7 @@ async def test_re_refine_happy_path_mixed_assignments(
 
 
 async def test_re_refine_409_when_job_not_completed(
-    icloud_base, sample_job, async_client
+    icloud_base, sample_job, client
 ):
     """409 if the job hasn't reached `completed`."""
     import state
@@ -732,18 +833,13 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     # Build the SpeakerAssignment list the shared helper expects.
     # Translate "unknown" → keep label as-is (no rename). Translate "new:name"
     # → register speaker first, then pass speaker_name to the helper.
-    # Track which labels are being stripped to "Unknown" so we can rename
+    # Track which labels are being stripped to anonymous so we can rename
     # them in segments + omit them from the refinement speaker_ids union.
     unknown_labels: list[str] = []
-    # Per-label counter to keep multiple unknowns distinguishable
-    # (Unknown_1, Unknown_2 ...) — re-refinement needs distinct labels so
-    # Sonnet doesn't collapse different real speakers into one.
-    unknown_counter = 0
 
     helper_assignments = []
     for label, target in req.speaker_assignments.items():
         if target == "unknown":
-            unknown_counter += 1
             unknown_labels.append(label)
             continue
         if target.startswith("new:"):
@@ -776,13 +872,21 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
         helper_assignments.append(SpeakerAssignment(label=label, speaker_name=sp["name"], create_new=False))
 
     # Apply via the shared helper (handles segment/turn rename + DB updates).
+    # Capture `out` so we can read back the speaker_id per assignment without
+    # re-querying the store (the helper already resolved them all).
+    out = {"results": []}
     if helper_assignments:
-        _apply_speaker_assignments(job, helper_assignments, audio_path=audio_path)
+        out = _apply_speaker_assignments(job, helper_assignments, audio_path=audio_path)
 
-    # Strip unknown labels to anonymous form. Use stable indices so distinct
-    # rejected speakers stay distinct in the re-refined transcript.
+    # Strip unknown labels to anonymous form. Use a DETERMINISTIC scheme keyed
+    # off the original diarization label (e.g. "Unknown_SPEAKER_03") so a
+    # second re-refinement marking the same label "unknown" is a no-op rather
+    # than a renumber. Note: this rename is ONE-WAY — once a label becomes
+    # `Unknown_<orig>`, subsequent re-refines that target it are no-ops because
+    # the next pass will receive the already-anonymized label from the
+    # frontend.
     if unknown_labels:
-        anon_map = {lbl: f"Unknown_{i+1}" for i, lbl in enumerate(unknown_labels)}
+        anon_map = {lbl: f"Unknown_{lbl}" for lbl in unknown_labels}
         for seg in (job.segments or []):
             if seg.get("speaker") in anon_map:
                 seg["speaker"] = anon_map[seg["speaker"]]
@@ -794,26 +898,30 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
         except Exception:
             logger.warning("Failed to persist job after unknown-label strip", exc_info=True)
 
-    # Build the speaker_ids list for refinement (union of all assigned targets).
-    speaker_ids: list[str] = []
-    for target in req.speaker_assignments.values():
-        if target == "unknown":
-            continue
-        if target.startswith("new:"):
-            # Find the corresponding created id
-            name = target[4:].strip()
-            sp = state.speaker_store.get_by_name(name)
-            if sp:
-                speaker_ids.append(sp["speaker_id"])
-        else:
-            speaker_ids.append(target)
-    speaker_ids = list(dict.fromkeys(speaker_ids))  # dedupe, preserve order
+    # Build the speaker_ids list for refinement directly from the helper's
+    # results — no need to re-query speaker_store. Order is preserved and we
+    # dedupe defensively in case the same speaker appears twice.
+    speaker_ids = list(dict.fromkeys(
+        r["speaker_id"] for r in out["results"] if r.get("speaker_id")
+    ))
 
-    # Reset refinement state so the UI polling re-renders correctly.
+    # Reset refinement state so the UI polling re-renders correctly. The first
+    # run created a row in refinement_store; on a re-refine the row already
+    # exists. RefinementStore.create() is idempotent (INSERT OR REPLACE — see
+    # backend/job_models.py:470) and conveniently resets status='pending'
+    # which is exactly what we want here. Mirrors orchestrator.py:191.
+    state.refinement_store.create(job_id)
+
     from routes.refinement import _set_refinement_status, _run_refinement_for_job
     from services.transcription import _update_job
     _set_refinement_status(job, "pending")
     _update_job(job, phase="refining")
+
+    # Mirror the orchestrator's pattern (services/orchestrator.py:192): mark
+    # the audio file as deferred so the refinement worker — not the original
+    # transcription cleanup path — controls when the temp audio is unlinked.
+    # Without this, a stale cleanup task could yank the file mid-refinement.
+    job._defer_audio_cleanup = True
 
     # Dispatch refinement on the same executor pool the orchestrator uses.
     context_path = (job.settings.context_path if getattr(job, "settings", None) else None)
@@ -830,6 +938,17 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     }
 ```
 
+**Out of scope for the re-refine path (intentional):**
+- *Insight extraction* (`_extract_speaker_insights_sync`). The legacy
+  `/speakers/assign` route schedules a background task to extract personality
+  insights for newly-created speakers; the re-refine path deliberately skips
+  this. Rationale: (1) insights are expensive (LLM calls per speaker), (2)
+  the typical re-refine scenario is correcting a misidentified speaker — the
+  insight was already captured on the original assignment or can be added
+  manually via the Speakers tab. Adding it here would silently double the
+  cost of every reject-flow correction. If users later request it, expose
+  it as an explicit `extract_insights: bool` field on `ReRefineRequest`.
+
 Make sure `SpeakerAssignment` is imported at the top of the file (it's already used as part of `AssignSpeakersRequest` — check the imports near `job_models`).
 
 - [ ] **Step 4: Run tests, watch them pass**
@@ -844,7 +963,7 @@ If a test fails:
 - **Happy path 404** — the route isn't registered. Confirm the `@router.post` decorator is inside `backend/routes/transcription.py` and the file's router is included in `backend/main.py`.
 - **Happy path validation error on body shape** — pydantic schema mismatch. Use `print(resp.text)` to see the 422 detail.
 - **400 invalid speaker_id test PASSES on 200 instead** — the lookup branch isn't validating; double-check `state.speaker_store.get(target)` actually returns `None` for unknown ids (some implementations raise instead — wrap in try/except as shown).
-- **runner_up test KeyError** — Task 2 Step 5 didn't propagate the field through the no-embedding fallback path. Re-check the `if label not in results:` block in `auto_identify_speakers`.
+- **runner_up test KeyError** — Task 2 Step 6 didn't propagate the field through the no-embedding fallback path. Re-check the `if label not in results:` block in `auto_identify_speakers`.
 
 - [ ] **Step 5: Run the full backend test suite**
 
@@ -879,7 +998,7 @@ cd ~/Development/apps/whisper-transcription-app/backend && ./venv/bin/python -m 
 ```
 Expected: baseline pass count from Task 1 Step 2, PLUS 9 new tests in `test_re_refine.py`, ALL green. Aim for ~370+ passing.
 
-If any pre-existing test now fails, investigate — most likely cause is a `match_speaker` call site missed in Task 2 Step 5. Grep again:
+If any pre-existing test now fails, investigate — most likely cause is a `match_speaker` call site missed in Task 2 Step 6. Grep again:
 ```bash
 cd ~/Development/apps/whisper-transcription-app/backend && grep -rn "match_speaker(" services/ routes/ tests/ 2>/dev/null | grep -v __pycache__
 ```
@@ -939,6 +1058,6 @@ Plan 5A ships when:
 1. `SpeakerEmbeddingService.match_speaker` returns `(name, score, runner_up_dict | None)` at every return path, with `runner_up` populated only when there's a 2nd-best speaker scoring ≥ `RUNNER_UP_THRESHOLD = 0.4`.
 2. `auto_identify_speakers` propagates `runner_up` into each entry of `auto_speaker_matches` (None when no runner-up qualifies). All existing fields (`matched`, `speaker_id`, `name`, `confidence`, `source`, `note`) are preserved unchanged.
 3. `_apply_speaker_assignments(job, assignments, audio_path)` is a module-level callable in `backend/routes/transcription.py` shared by both `POST /job/{id}/speakers/assign` (unchanged external behavior) and the new `POST /job/{id}/re-refine`.
-4. `POST /job/{id}/re-refine` accepts `{speaker_assignments: {label: speaker_id | "unknown" | "new:name"}}`, handles all three target shapes correctly, dispatches `_run_refinement_for_job` via `state.transcription_executor.submit`, and returns the documented response with correct error codes (404 / 409 / 400).
+4. `POST /job/{id}/re-refine` accepts `{speaker_assignments: {label: speaker_id | "unknown" | "new:name"}}`, handles all three target shapes correctly, dispatches `_run_refinement_for_job` via `state.transcription_executor.submit`, and returns the documented response with correct error codes (404 / 409 / 400). Labels stripped to "unknown" become deterministic `Unknown_<orig_label>` (e.g. `Unknown_SPEAKER_03`) so repeated re-refines on the same label are no-ops. Re-refine also calls `state.refinement_store.create(job_id)` (idempotent reset) and sets `job._defer_audio_cleanup = True` to mirror the orchestrator's submit pattern (`services/orchestrator.py:191-192`).
 5. Backend test suite green (~370+ tests including 9 new tests in `test_re_refine.py`).
 6. No regression in `/speakers/assign` external behavior — existing test files (`test_speakers_api.py`, `test_inline_auto_match.py`, `test_speaker_auto_match_scope.py`) still pass.
