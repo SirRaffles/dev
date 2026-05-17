@@ -274,12 +274,14 @@ def test_analyze_caps_diarization_turns_at_50():
     # Turn 50 (the 51st) and beyond should NOT appear in the diarization block.
     # Use a structural check: count lines in the diarization block.
     block_start = prompt.index("## Diarization context")
-    # Block ends at the next "## " header OR at "Transcript:" — find whichever comes first.
     rest = prompt[block_start + len("## Diarization context"):]
-    # Find end of block: either next ##, "Review each segment", or "Transcript:"
-    end_candidates = [rest.find("Transcript:"), rest.find("Review each")]
-    end_candidates = [c for c in end_candidates if c >= 0]
-    block_end_rel = min(end_candidates) if end_candidates else len(rest)
+    # The diarization block ends with "---\n\n" (the spec's standard
+    # known-context separator). Searching for "Review each" or "Transcript:"
+    # is wrong: both strings appear INSIDE the block's instruction text,
+    # which would falsely truncate before any turn lines render. Use the
+    # "---" delimiter that immediately follows the block.
+    sep_idx = rest.find("---")
+    block_end_rel = sep_idx if sep_idx >= 0 else len(rest)
     block = rest[:block_end_rel]
     turn_lines = [ln for ln in block.splitlines() if "SPEAKER_" in ln]
     assert len(turn_lines) == 50, (
