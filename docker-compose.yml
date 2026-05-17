@@ -9,8 +9,6 @@ services:
       # HuggingFace token — required for speaker diarization (pyannote)
       # Get yours at https://huggingface.co/settings/tokens
       - HF_TOKEN=${HF_TOKEN:-}
-      # Mistral API key — enables Voxtral cloud transcription
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
       # Comma-separated allowed CORS origins (default: localhost dev ports)
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8000}
       # Set to "true" to add HSTS header (use behind a TLS-terminating proxy)

@@ -29,7 +29,6 @@ High-quality audio and video transcription powered by OpenAI Whisper Large-V3 vi
 - **Backend**: FastAPI (Python) with faster-whisper
 - **Transcription**: OpenAI Whisper Large-V3 via CTranslate2
 - **Speaker Diarization**: pyannote-audio 3.1
-- **Engine compatibility**: see [`docs/engines.md`](docs/engines.md) for which fixes/features apply to which transcription backend.
 
 ## Quick Start
 
