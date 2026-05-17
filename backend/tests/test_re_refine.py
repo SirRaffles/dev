@@ -1,5 +1,7 @@
 """Plan 5A — backend tests for runner-up exposure + /re-refine endpoint."""
 
+import uuid
+
 import numpy as np
 import pytest
 
@@ -139,3 +141,165 @@ def test_apply_speaker_assignments_helper_exists_and_returns_results(
     assert out["results"][0]["speaker_name"] == "PascalWeber_TestT3"
     # Side effect: segment label was rewritten in-place
     assert job.segments[0]["speaker"] == "PascalWeber_TestT3"
+
+
+# ---------- Task 4: POST /job/{job_id}/re-refine endpoint ----------
+# Note: `client` fixture (conftest.py:115) is an httpx.AsyncClient over the
+# real FastAPI app via ASGITransport. asyncio_mode = "auto" in pyproject.toml
+# (line 62) so @pytest.mark.asyncio is implicit — but doesn't hurt to keep.
+
+
+async def test_re_refine_happy_path_mixed_assignments(
+    icloud_base, sample_job, clean_speakers, client, monkeypatch
+):
+    """Happy path: confirm an existing match + create a new speaker + strip another to unknown."""
+    import state
+    from unittest.mock import MagicMock
+
+    # Use uniquified names to avoid colliding with leftover speakers in the
+    # shared DB across test runs.
+    suffix = uuid.uuid4().hex[:8]
+    pascal_name = f"PascalT4_{suffix}"
+    fabrice_name = f"FabriceDuboisT4_{suffix}"
+    arnaud_label = f"ArnaudT4_{suffix}"
+
+    job = state.job_store.get(sample_job)
+    job.segments = [
+        {"start": 0, "end": 5, "text": "hi", "speaker": pascal_name},
+        {"start": 5, "end": 10, "text": "bonjour", "speaker": "SPEAKER_01"},
+        {"start": 10, "end": 15, "text": "ciao", "speaker": arnaud_label},
+    ]
+    job.speakers = [
+        {"start": 0, "end": 5, "speaker": pascal_name},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_01"},
+        {"start": 10, "end": 15, "speaker": arnaud_label},
+    ]
+    job.status = "completed"
+    state.job_store.update(job)
+
+    # Pre-seed a speaker for the "confirm existing" path. SpeakerStore.create
+    # returns a row dict (job_models.py:566) so unwrap speaker_id here.
+    pascal_id = str(uuid.uuid4())
+    state.speaker_store.create(pascal_id, pascal_name, f"speakers/{pascal_name}")
+    clean_speakers.append(pascal_id)
+
+    # Stub the executor so we don't actually fire the refinement worker
+    submit_mock = MagicMock()
+    monkeypatch.setattr(state, "transcription_executor", MagicMock(submit=submit_mock))
+
+    # Stub embedding extraction so the "new:Fabrice" path doesn't need real audio
+    fake_emb = MagicMock()
+    monkeypatch.setattr(
+        state, "get_speaker_embedding_service",
+        lambda: MagicMock(
+            extract_embedding=MagicMock(return_value=fake_emb),
+            register_speaker=MagicMock(return_value="fabrice-uuid"),
+        ),
+        raising=False,
+    )
+
+    body = {
+        "speaker_assignments": {
+            pascal_name:   pascal_id,                # confirm existing
+            "SPEAKER_01":  f"new:{fabrice_name}",    # create new + embed
+            arnaud_label:  "unknown",                # strip back to anonymous
+        }
+    }
+    resp = await client.post(f"/job/{sample_job}/re-refine", json=body)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["job_id"] == sample_job
+    assert data["status"] == "refining"
+    assert data["phase"] == "refining"
+    assert data["speakers_assigned"] == 3
+    assert any(c["name"] == fabrice_name for c in data["speakers_created"])
+
+    # Register Fabrice for cleanup so we don't leak rows in the shared
+    # speakers DB across test runs.
+    fabrice_row = state.speaker_store.get_by_name(fabrice_name)
+    if fabrice_row and fabrice_row.get("speaker_id"):
+        clean_speakers.append(fabrice_row["speaker_id"])
+
+    # Refinement was dispatched on the executor
+    submit_mock.assert_called_once()
+    args = submit_mock.call_args[0]
+    # _run_refinement_for_job(job_id, speaker_ids, context_path, audio_path)
+    assert args[1] == sample_job
+
+    # Job state was reset
+    job_after = state.job_store.get(sample_job)
+    assert job_after.refinement_status == "pending"
+    assert job_after.phase == "refining"
+
+
+async def test_re_refine_409_when_job_not_completed(
+    icloud_base, sample_job, client
+):
+    """409 if the job hasn't reached `completed`."""
+    import state
+    job = state.job_store.get(sample_job)
+    job.status = "processing"
+    state.job_store.update(job)
+
+    resp = await client.post(
+        f"/job/{sample_job}/re-refine",
+        json={"speaker_assignments": {"SPEAKER_00": "unknown"}},
+    )
+    assert resp.status_code == 409
+    assert "completed" in resp.text.lower()
+
+
+async def test_re_refine_400_when_speaker_id_invalid(
+    icloud_base, sample_job, client, monkeypatch
+):
+    """400 if a target speaker_id doesn't exist in the registry."""
+    import state
+    from unittest.mock import MagicMock
+
+    job = state.job_store.get(sample_job)
+    job.segments = [{"start": 0, "end": 5, "text": "hi", "speaker": "SPEAKER_00"}]
+    job.status = "completed"
+    state.job_store.update(job)
+
+    monkeypatch.setattr(state, "transcription_executor", MagicMock(submit=MagicMock()))
+
+    resp = await client.post(
+        f"/job/{sample_job}/re-refine",
+        json={"speaker_assignments": {"SPEAKER_00": "nonexistent-uuid"}},
+    )
+    assert resp.status_code == 400
+    assert "speaker" in resp.text.lower()
+
+
+def test_runner_up_propagated_through_auto_identify(monkeypatch):
+    """auto_speaker_matches entries include runner_up when registry has ≥2."""
+    svc = _make_service_with_speakers(monkeypatch, {
+        "Pascal":  _unit([1.0, 0.0, 0.0, 0.0]),
+        "Arnaud":  _unit([0.8, 0.6, 0.0, 0.0]),
+    })
+
+    # Stub extract_speaker_embeddings to return one query embedding
+    monkeypatch.setattr(
+        svc, "extract_speaker_embeddings",
+        lambda audio_path, turns: {"SPEAKER_00": _unit([1.0, 0.0, 0.0, 0.0])},
+    )
+    # Stub speaker_store.get_by_name to avoid DB requirement
+    import state
+    monkeypatch.setattr(state.speaker_store, "get_by_name",
+                        lambda n: {"speaker_id": f"id-{n}"} if n in ("Pascal", "Arnaud") else None)
+    monkeypatch.setattr(svc, "save_unknown_embedding", lambda *a, **k: None)
+
+    result = svc.auto_identify_speakers(
+        audio_path="/fake.wav",
+        speaker_turns=[{"start": 0, "end": 5, "speaker": "SPEAKER_00"}],
+        job_id="job-T",
+    )
+
+    assert "SPEAKER_00" in result
+    entry = result["SPEAKER_00"]
+    assert entry["matched"] is True
+    assert entry["name"] == "Pascal"
+    assert "runner_up" in entry  # field is always present (may be None)
+    assert entry["runner_up"] is not None
+    assert entry["runner_up"]["name"] == "Arnaud"

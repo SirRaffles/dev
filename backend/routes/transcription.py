@@ -955,6 +955,11 @@ class AssignSpeakersRequest(BaseModel):
     extract_insights: bool = True
 
 
+class ReRefineRequest(BaseModel):
+    speaker_assignments: dict[str, str]
+    # value is one of: existing speaker_id, "unknown", or "new:<name>"
+
+
 @router.get("/job/{job_id}/speakers/labels")
 async def list_job_speaker_labels(job_id: str):
     """List anonymous speaker labels + speaking time for a completed job.
@@ -1173,6 +1178,147 @@ async def assign_job_speakers(
         "insight_extraction_scheduled": insight_scheduled,
         "segments": job.segments,
         "speakers": sorted({s.get("speaker") for s in (job.segments or []) if s.get("speaker")}),
+    }
+
+
+@router.post("/job/{job_id}/re-refine")
+async def re_refine_job(job_id: str, req: ReRefineRequest):
+    """Apply post-completion speaker corrections and re-run refinement.
+
+    Plan 5A. Accepts a speaker_assignments map where each value is one of:
+      - an existing speaker_id (re-attribute the label to that speaker)
+      - "unknown" (strip the label back to its original anonymous form)
+      - "new:<name>" (create the speaker with a voice embedding from
+        the longest matching turn, then attribute the label)
+
+    Returns 404 if job not found, 409 if job not completed (or audio
+    unavailable for a "new:" entry), 400 if a target speaker_id is
+    invalid / a "new:" name is malformed / a label is not in segments.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Job must be completed (currently {job.status!r})")
+    if not req.speaker_assignments:
+        raise HTTPException(status_code=400, detail="No speaker_assignments provided")
+
+    # Validate every label appears in job.segments
+    known_labels = {s.get("speaker") for s in (job.segments or []) if s.get("speaker")}
+    for label in req.speaker_assignments:
+        if label not in known_labels:
+            raise HTTPException(status_code=400, detail=f"Label {label!r} not in job segments")
+
+    audio_path = _resolve_job_audio_path(job_id)
+
+    # Build the SpeakerAssignment list the shared helper expects.
+    # Translate "unknown" → keep label as-is (no rename), tracked separately.
+    # Translate "new:name" → SpeakerAssignment with create_new=True; the
+    # helper handles embedding extraction + registration + speaker_store row.
+    # Track which labels are being stripped to anonymous so we can rename
+    # them in segments + omit them from the refinement speaker_ids union.
+    unknown_labels: list[str] = []
+    new_names: set[str] = set()
+
+    helper_assignments = []
+    for label, target in req.speaker_assignments.items():
+        if target == "unknown":
+            unknown_labels.append(label)
+            continue
+        if target.startswith("new:"):
+            new_name = target[4:].strip()
+            if not new_name or _is_anonymous_label(new_name):
+                raise HTTPException(status_code=400, detail=f"Invalid new speaker name: {new_name!r}")
+            new_names.add(new_name)
+            helper_assignments.append(SpeakerAssignment(label=label, speaker_name=new_name, create_new=True))
+            continue
+        # Otherwise it's an existing speaker_id — validate + look up the name.
+        try:
+            sp = state.speaker_store.get(target)
+        except Exception:
+            sp = None
+        if not sp or not sp.get("name"):
+            raise HTTPException(status_code=400, detail=f"Invalid speaker_id: {target!r}")
+        helper_assignments.append(SpeakerAssignment(label=label, speaker_name=sp["name"], create_new=False))
+
+    # Apply via the shared helper (handles segment/turn rename + speaker
+    # creation + embedding registration + DB updates). Capture `out` so we
+    # can read back the speaker_id per assignment without re-querying the
+    # store (the helper already resolved them all).
+    out = {"results": []}
+    if helper_assignments:
+        try:
+            out = _apply_speaker_assignments(job, helper_assignments, audio_path=audio_path)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Speaker assignment failed during re-refine")
+            raise HTTPException(status_code=409, detail=f"Failed to apply speaker assignments: {e}")
+
+    # Map helper results → speakers_created list for the response.
+    speakers_created: list[dict] = [
+        {"speaker_id": r["speaker_id"], "name": r["speaker_name"]}
+        for r in out["results"]
+        if r.get("created") and r.get("speaker_name") in new_names
+    ]
+
+    # Strip unknown labels to anonymous form. Use a DETERMINISTIC scheme keyed
+    # off the original diarization label (e.g. "Unknown_SPEAKER_03") so a
+    # second re-refinement marking the same label "unknown" is a no-op rather
+    # than a renumber. Note: this rename is ONE-WAY — once a label becomes
+    # `Unknown_<orig>`, subsequent re-refines that target it are no-ops because
+    # the next pass will receive the already-anonymized label from the
+    # frontend.
+    if unknown_labels:
+        anon_map = {lbl: f"Unknown_{lbl}" for lbl in unknown_labels}
+        for seg in (job.segments or []):
+            if seg.get("speaker") in anon_map:
+                seg["speaker"] = anon_map[seg["speaker"]]
+        for turn in (job.speakers or []):
+            if turn.get("speaker") in anon_map:
+                turn["speaker"] = anon_map[turn["speaker"]]
+        try:
+            state.jobs.update(job)
+        except Exception:
+            logger.warning("Failed to persist job after unknown-label strip", exc_info=True)
+
+    # Build the speaker_ids list for refinement directly from the helper's
+    # results — no need to re-query speaker_store. Order is preserved and we
+    # dedupe defensively in case the same speaker appears twice.
+    speaker_ids = list(dict.fromkeys(
+        r["speaker_id"] for r in out["results"] if r.get("speaker_id")
+    ))
+
+    # Reset refinement state so the UI polling re-renders correctly. The first
+    # run created a row in refinement_store; on a re-refine the row already
+    # exists. RefinementStore.create() is idempotent (INSERT OR REPLACE — see
+    # backend/job_models.py:470) and conveniently resets status='pending'
+    # which is exactly what we want here. Mirrors orchestrator.py:191.
+    state.refinement_store.create(job_id)
+
+    from routes.refinement import _set_refinement_status, _run_refinement_for_job
+    from services.transcription import _update_job
+    _set_refinement_status(job, "pending")
+    _update_job(job, phase="refining")
+
+    # Mirror the orchestrator's pattern (services/orchestrator.py:192): mark
+    # the audio file as deferred so the refinement worker — not the original
+    # transcription cleanup path — controls when the temp audio is unlinked.
+    # Without this, a stale cleanup task could yank the file mid-refinement.
+    job._defer_audio_cleanup = True
+
+    # Dispatch refinement on the same executor pool the orchestrator uses.
+    context_path = (job.settings.context_path if getattr(job, "settings", None) else None)
+    state.transcription_executor.submit(
+        _run_refinement_for_job, job_id, speaker_ids, context_path, audio_path,
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "refining",
+        "phase": "refining",
+        "speakers_created": speakers_created,
+        "speakers_assigned": len(req.speaker_assignments),
     }
 
 
