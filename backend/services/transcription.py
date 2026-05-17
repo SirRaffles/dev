@@ -21,6 +21,11 @@ import state
 
 logger = logging.getLogger(__name__)
 
+# Plan 4A: forward-declared for monkeypatching in tests. The real import
+# happens lazily inside _run_transcription_sync to avoid the circular load
+# (services.orchestrator imports from this module).
+orchestrate_transcription = None  # type: ignore
+
 # Cap the context document at ~4 KB of text; enough for a dense glossary, and
 # keeps downstream prompt-length limits satisfied (MLX-Whisper tolerates
 # ~224 tokens, we clamp further at use sites).
@@ -678,267 +683,48 @@ def _update_job(job, progress: int = None, message: str = None, status: str = No
 
 
 def _run_transcription_sync(job_id: str, audio_path: str, settings: TranscriptionSettings):
-    """Synchronous transcription worker - runs in thread pool."""
-    job = state.jobs.get(job_id)
+    """Synchronous transcription worker — runs in the thread pool.
 
+    Routes to the orchestrator based on settings.engine. All quality-mode
+    composition lives in services.orchestrator; this function is now a
+    routing shim plus the tmp-audio cleanup guard.
+    """
+    # Local import — services.orchestrator imports from this module, so a
+    # top-level import would be circular at module load time.
+    from services.orchestrator import orchestrate_transcription as _orchestrate
+    # Allow tests to monkeypatch the module-level name.
+    _dispatch = orchestrate_transcription or _orchestrate
+
+    job = state.jobs.get(job_id)
     if not job:
         return
 
-    use_voxtral = settings.engine == "voxtral-api"
-    use_voxtral_local = settings.engine == "voxtral-local"
-    use_parakeet = is_parakeet_key(settings.model_size) and not use_voxtral and not use_voxtral_local
-
-    if use_voxtral:
-        if not state._voxtral_available:
-            job.status = "failed"
-            job.error = "Voxtral API not configured. Set MISTRAL_API_KEY environment variable."
-            state.jobs.update(job)
-            return
-    elif use_voxtral_local:
-        if not state._voxtral_local_available:
-            job.status = "failed"
-            job.error = "Voxtral Local not available. Install with: pip install mlx-audio"
-            state.jobs.update(job)
-            return
-    elif use_parakeet:
-        if not state._parakeet_available:
-            job.status = "failed"
-            job.error = "Parakeet MLX not installed. Install with: pip install parakeet-mlx"
-            state.jobs.update(job)
-            return
-    elif not state.whisper_model_ready:
-        job.status = "failed"
-        job.error = "MLX-Whisper not configured. Please restart the server."
-        state.jobs.update(job)
-        return
-
     try:
-        _update_job(job, progress=5, message="Starting transcription...", status="processing")
-
-        if settings.enable_noise_reduction:
-            _update_job(job, progress=8, message="Applying noise reduction...")
-            # Audit #15: use Path.with_stem for safe suffix append.
-            src = Path(audio_path)
-            cleaned_audio_path = str(src.with_stem(src.stem + "_cleaned"))
-            audio_path = apply_noise_reduction(audio_path, cleaned_audio_path)
-
-        # === VOXTRAL API ENGINE ===
-        if use_voxtral:
-            _update_job(job, progress=15, message="Transcribing with Voxtral (cloud API)...")
-
-            result = transcribe_with_voxtral(audio_path, settings)
-
-            job.language = result.get("language", "unknown")
-            job.language_probability = 0.99
-
-            transcription_segments = result.get("segments", [])
-            full_text = result.get("text", "")
-
-            voxtral_speakers = result.get("speakers", [])
-            if voxtral_speakers:
-                job.speakers = [{"speaker": s} for s in voxtral_speakers]
-                transcription_segments = stitch_speaker_turns(transcription_segments)
-
+        if settings.engine == "auto-best":
+            _dispatch(job_id, audio_path, settings, mode="best")
+        elif settings.engine == "auto-quick":
+            _dispatch(job_id, audio_path, settings, mode="quick")
         else:
-            # === LOCAL ENGINES (Whisper / Parakeet / Voxtral Local) ===
-            # Audit #9: diarize concurrently with transcription via a side executor.
-            speakers = []
-            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-            diarization_future = None
-            diarization_executor = None
-
-            if settings.enable_diarization and hf_token:
-                if settings.num_speakers:
-                    _update_job(job, progress=10, message=f"Identifying {settings.num_speakers} speakers...")
-                else:
-                    _update_job(job, progress=10, message="Identifying speakers...")
-                diarization_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="diarize")
-                diarization_future = diarization_executor.submit(
-                    run_diarization, audio_path, settings.num_speakers
-                )
-            elif settings.enable_diarization and not hf_token:
-                logger.warning(
-                    "Diarization requested but HF_TOKEN is not set. "
-                    "Skipping speaker identification."
-                )
-
-            if use_voxtral_local:
-                if settings.word_timestamps:
-                    logger.warning("word_timestamps=True ignored: Voxtral Local does not support word-level timestamps")
-                _update_job(job, progress=20, message="Transcribing with Voxtral Local (~4% WER)...")
-                logger.info("Using Voxtral Local for transcription")
-
-                result = transcribe_with_voxtral_local(audio_path, settings, job=job)
-
-                job.language = result.get("language", "auto")
-                job.language_probability = 0.99
-
-                transcription_segments = result.get("segments", [])
-                full_text = result.get("text", "")
-
-            elif use_parakeet:
-                if settings.word_timestamps:
-                    logger.warning("word_timestamps=True ignored: Parakeet does not support word-level timestamps")
-
-                parakeet_key = resolve_parakeet_key(settings.model_size)
-                parakeet_info = PARAKEET_MODELS[parakeet_key]
-                _update_job(
-                    job,
-                    progress=20,
-                    message=f"Transcribing with Parakeet MLX ({parakeet_key})...",
-                )
-                logger.info("Using Parakeet MLX for transcription: %s", parakeet_key)
-
-                result = transcribe_with_parakeet(audio_path, parakeet_key)
-
-                # v2 is English-only; v3 is multilingual — keep label consistent.
-                job.language = parakeet_info.get("language", "en")
-                job.language_probability = 0.99
-
-                transcription_segments = result.get("segments", [])
-                full_text = result.get("text", "")
-
-            else:
-                _update_job(job, progress=20, message="Transcribing with MLX-Whisper (GPU-accelerated)...")
-                result = transcribe_with_whisper(audio_path, settings, job=job)
-                job.language = result.get("language", "unknown")
-                job.language_probability = 0.99
-                transcription_segments = result["segments"]
-                full_text = result["text"]
-
-            # Join the concurrent diarization (audit #9). Never let a diarization
-            # failure prevent transcription from being returned.
-            if diarization_future is not None:
-                try:
-                    speakers = diarization_future.result() or []
-                    job.speakers = speakers
-                except Exception as e:
-                    logger.warning("Diarization failed, continuing without speaker identification: %s", e)
-                    speakers = []
-                finally:
-                    if diarization_executor is not None:
-                        diarization_executor.shutdown(wait=False)
-
-            if speakers:
-                transcription_segments = assign_speakers_to_segments(transcription_segments, speakers)
-                transcription_segments = stitch_speaker_turns(transcription_segments)
-
-            # B5: inline auto-match — overlay registered speaker names on
-            # diarization labels using the voice-embedding registry. Reuses
-            # the same scope logic as the post-job /speakers/auto-match route.
-            # Adds ~1-5s to the critical path (embedding extraction).
-            if speakers and state.refinement_available:
-                _update_job(job, progress=68, message="Matching voices to registered speakers...")
-                try:
-                    from routes.transcription import _resolve_match_scope
-                    restrict_ids, prefer_ids, scope_mode = _resolve_match_scope({
-                        "speaker_ids": settings.speaker_ids,
-                        "num_speakers": settings.num_speakers,
-                    })
-                    embedding_service = state.get_speaker_embedding_service()
-                    auto_matches = embedding_service.auto_identify_speakers(
-                        audio_path=audio_path,
-                        speaker_turns=speakers,
-                        job_id=job_id,
-                        restrict_to_ids=restrict_ids,
-                        prefer_ids=prefer_ids,
-                    )
-                    job.auto_speaker_matches = auto_matches
-                    # Overlay matched names on both segments AND job.speakers so
-                    # downstream consumers join consistently on the speaker key.
-                    for seg in transcription_segments:
-                        lbl = seg.get("speaker", "")
-                        m = auto_matches.get(lbl)
-                        if m and m.get("matched"):
-                            seg["speaker"] = m["name"]
-                    for turn in (job.speakers or []):
-                        lbl = turn.get("speaker", "")
-                        m = auto_matches.get(lbl)
-                        if m and m.get("matched"):
-                            turn["speaker"] = m["name"]
-                    matched_count = sum(1 for m in auto_matches.values() if m.get("matched"))
-                    logger.info("B5 auto-match: scope=%s, matched %d/%d speakers",
-                                scope_mode, matched_count, len(auto_matches))
-                except Exception:
-                    logger.exception(
-                        "B5 auto-match failed for job %s; keeping SPEAKER_XX labels", job_id
-                    )
-
-        # A1: strip per-word data from emitted segments if user opted out.
-        # Words were carried internally so A3 could split at speaker-turn
-        # boundaries; they're not part of the user-facing contract unless
-        # settings.word_timestamps is True.
-        if not settings.word_timestamps:
-            for seg in transcription_segments:
-                seg.pop("words", None)
-
-        _update_job(job, progress=70, message="Processing segments...")
-
-        # Apply text normalization (whitespace, punctuation, stutter removal)
-        normalize_segments(transcription_segments)
-
-        # Apply readable-mode postprocessing if requested
-        if settings.output_mode == "readable":
-            apply_readable_mode(transcription_segments)
-            # Reconstruct full_text from cleaned segments
-            full_text = " ".join(
-                seg["text"].strip() for seg in transcription_segments if seg.get("text")
+            # Pydantic Literal should have caught this upstream, but defend
+            # in depth for any code path that bypasses validation.
+            job.status = "failed"
+            job.error = (
+                f"Unknown engine: {settings.engine!r}. "
+                f"Use 'auto-best' or 'auto-quick'."
             )
-
-        _update_job(job, progress=90, message="Finalizing...")
-
-        job.segments = transcription_segments
-        job.result = full_text
-        _update_job(job, progress=100, message="Complete!", status="completed")
-        if _should_auto_refine(settings) and state.refinement_available:
-            # The submitting HTTP request returned long ago — dispatch via the
-            # transcription executor (the same pool used for jobs). The helper
-            # loads context + glossary itself.
-            try:
-                from routes.refinement import _run_refinement_for_job
-                job.refinement_status = "pending"
-                state.jobs.update(job)
-                state.refinement_store.create(job_id)
-                # B7: keep tmp audio alive until learning workers finish (the refinement
-                # runner owns cleanup via _cleanup_deferred_audio in routes/refinement.py).
-                job._defer_audio_cleanup = True
-                state.transcription_executor.submit(
-                    _run_refinement_for_job,
-                    job_id,
-                    settings.speaker_ids,
-                    settings.context_path,
-                    audio_path,
-                )
-                logger.info("B2: auto-refine dispatched for job %s", job_id)
-            except Exception:
-                logger.exception("B2: auto-refine dispatch failed for job %s", job_id)
-                # Roll the pending status back so the UI doesn't poll forever.
-                try:
-                    job.refinement_status = "failed"
-                    state.jobs.update(job)
-                    state.refinement_store.update_status(job_id, "failed", "dispatch failed")
-                except Exception:
-                    logger.debug("B2: rollback after dispatch failure failed for job %s",
-                                 job_id, exc_info=True)
-        model_name = "Voxtral API" if use_voxtral else ("Voxtral Local" if use_voxtral_local else ("Parakeet MLX" if use_parakeet else "MLX-Whisper"))
-        logger.info(f"Transcription complete ({model_name}): {len(transcription_segments)} segments")
-
-    except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        state.jobs.update(job)
-        logger.exception("Transcription failed for job %s", job_id)
-
+            state.jobs.update(job)
+            return
     finally:
         # Audit #16: retries re-use the same file_path. Don't rmtree if this
-        # job was created from a retry — the parent dir is still wanted by any
-        # subsequent retry attempt.
+        # job was created from a retry — the parent dir is still wanted by
+        # any subsequent retry attempt.
         retry_of = getattr(job, "_retry_of", None) if job is not None else None
         if retry_of:
             return
-        # B7: if auto-refine was dispatched, the learning workers need the audio.
-        # _run_refinement_for_job's finally block will call _cleanup_deferred_audio
-        # once refinement + learning (or any failure path) completes.
+        # B7: if auto-refine was dispatched, the learning workers need the
+        # audio. _run_refinement_for_job's finally block will call
+        # _cleanup_deferred_audio once refinement + learning (or any failure
+        # path) completes.
         if getattr(job, "_defer_audio_cleanup", False):
             return
         try:

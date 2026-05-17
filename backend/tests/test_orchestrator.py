@@ -338,3 +338,51 @@ def test_orchestrate_best_dispatches_refinement_when_auto_refine_fires(tmp_path,
     # args = (_run_refinement_for_job, job_id, speaker_ids, context_path, audio_path)
     assert args[1] == "orch-refine"
     assert args[2] == ["sp-1"]
+
+
+def test_run_transcription_sync_routes_auto_best_to_orchestrator(tmp_path, monkeypatch):
+    """_run_transcription_sync with engine=auto-best calls orchestrate_transcription(mode='best')."""
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import transcription, orchestrator
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    calls = []
+    monkeypatch.setattr(orchestrator, "orchestrate_transcription",
+                        lambda jid, ap, s, mode: calls.append((jid, mode)))
+    # Also patch the symbol that transcription.py imports.
+    monkeypatch.setattr(transcription, "orchestrate_transcription",
+                        lambda jid, ap, s, mode: calls.append((jid, mode)), raising=False)
+
+    job = TranscriptionJob("router-1")
+    job._retry_of = None
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+
+    settings = TranscriptionSettings(engine="auto-best", language="en",
+                                     enable_diarization=False, enable_noise_reduction=False)
+    transcription._run_transcription_sync("router-1", str(audio_path), settings)
+    assert ("router-1", "best") in calls
+
+
+def test_run_transcription_sync_routes_auto_quick_to_orchestrator(tmp_path, monkeypatch):
+    from job_models import TranscriptionSettings, TranscriptionJob
+    from services import transcription, orchestrator
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"\x00" * 1024)
+
+    calls = []
+    monkeypatch.setattr(transcription, "orchestrate_transcription",
+                        lambda jid, ap, s, mode: calls.append((jid, mode)), raising=False)
+
+    job = TranscriptionJob("router-2")
+    job._retry_of = None
+    monkeypatch.setattr(transcription.state, "jobs",
+                        MagicMock(get=MagicMock(return_value=job), update=MagicMock()))
+
+    settings = TranscriptionSettings(engine="auto-quick", language="en",
+                                     enable_diarization=False, enable_noise_reduction=False)
+    transcription._run_transcription_sync("router-2", str(audio_path), settings)
+    assert ("router-2", "quick") in calls
