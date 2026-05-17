@@ -24,10 +24,9 @@ TRANSCRIPTION_SETTINGS = {
     "language": "auto",
     "enable_diarization": True,
     "enable_noise_reduction": False,
-    "model_size": "large-v3-turbo",
     "word_timestamps": False,
     "translate_to_english": False,
-    "engine": "whisper",
+    "engine": "auto-best",
     "output_mode": "readable",
 }
 
