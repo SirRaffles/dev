@@ -165,29 +165,97 @@ class SpeakerEmbeddingService:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
-    def match_speaker(self, embedding: np.ndarray) -> Tuple[Optional[str], float]:
-        """Compare an embedding against all known speakers.
+    # Tiebreaker gap: when a "preferred" pick is within this many cosine
+    # points of the global best match, we prefer the pick. Noise tolerance.
+    PREFER_GAP = 0.03
+
+    # Plan 5A: minimum cosine score for a 2nd-best candidate to be worth
+    # suggesting in the Speaker Review reject-flow modal.
+    RUNNER_UP_THRESHOLD = 0.4
+
+    def match_speaker(
+        self,
+        embedding: np.ndarray,
+        restrict_to_names: Optional[List[str]] = None,
+        prefer_names: Optional[List[str]] = None,
+    ) -> Tuple[Optional[str], float, Optional[Dict[str, object]]]:
+        """Compare an embedding against known speakers.
+
+        Args:
+            restrict_to_names: hard-scope — only match against these names.
+                Non-empty list = scoped mode; empty list or None = full registry.
+            prefer_names: when in full-registry mode, bump these ahead of the
+                global best match if they're within PREFER_GAP cosine points.
 
         Returns:
-            (speaker_name, confidence) or (None, 0.0) if no match above threshold.
+            (speaker_name, confidence, runner_up) — runner_up is a dict
+            {"speaker_id": str|None, "name": str, "confidence": float} when a
+            qualifying 2nd-best candidate (>= RUNNER_UP_THRESHOLD) exists,
+            else None. (None, 0.0, None) when no speakers / no qualifying
+            match.
         """
         self._load_known_embeddings()
 
         if not self._known_embeddings:
-            return None, 0.0
+            return None, 0.0, None
 
-        best_name = None
+        if restrict_to_names:
+            # Filter a fresh dict — never mutate the shared cache.
+            pool = {
+                name: emb
+                for name, emb in self._known_embeddings.items()
+                if name in restrict_to_names
+            }
+        else:
+            pool = self._known_embeddings
+
+        if not pool:
+            return None, 0.0, None
+
+        best_name: Optional[str] = None
         best_score = 0.0
-
-        for name, known_emb in self._known_embeddings.items():
+        second_name: Optional[str] = None
+        second_score = 0.0
+        for name, known_emb in pool.items():
             score = self.cosine_similarity(embedding, known_emb)
             if score > best_score:
-                best_score = score
-                best_name = name
+                second_name, second_score = best_name, best_score
+                best_name, best_score = name, score
+            elif score > second_score:
+                second_name, second_score = name, score
+
+        # Tiebreaker only applies in full-registry mode (restrict_to is falsy).
+        if not restrict_to_names and prefer_names and best_name not in prefer_names:
+            # Find the best scorer among preferred picks.
+            pref_best_name: Optional[str] = None
+            pref_best_score = 0.0
+            for name in prefer_names:
+                emb = self._known_embeddings.get(name)
+                if emb is None:
+                    continue
+                s = self.cosine_similarity(embedding, emb)
+                if s > pref_best_score:
+                    pref_best_score = s
+                    pref_best_name = name
+            if pref_best_name is not None and (best_score - pref_best_score) <= self.PREFER_GAP:
+                best_name, best_score = pref_best_name, pref_best_score
+
+        # Build runner-up dict — second best only if it clears the threshold.
+        runner_up: Optional[Dict[str, object]] = None
+        if second_name is not None and second_score >= self.RUNNER_UP_THRESHOLD:
+            try:
+                sp = state.speaker_store.get_by_name(second_name)
+            except Exception:
+                sp = None
+            runner_up = {
+                "speaker_id": sp["speaker_id"] if sp else None,
+                "name": second_name,
+                "confidence": round(float(second_score), 3),
+            }
 
         if best_score >= SPEAKER_MATCH_THRESHOLD:
-            return best_name, best_score
-        return None, best_score
+            return best_name, best_score, runner_up
+        return None, best_score, runner_up
 
     def register_speaker(self, name: str, embedding: np.ndarray) -> str:
         """Create a new speaker with a voice embedding.
@@ -239,6 +307,10 @@ class SpeakerEmbeddingService:
         new = alpha * sample + (1 - alpha) * existing
 
         This gradually improves the voiceprint as more samples are collected.
+
+        Also persists `embedding_path` in the speaker_store so `has_embedding`
+        flips to true the first time we capture a voice for an existing
+        speaker who was created without one.
         """
         self._load_known_embeddings()
 
@@ -253,8 +325,21 @@ class SpeakerEmbeddingService:
             updated = new_embedding
 
         # Save to disk
-        npy_path = SPEAKERS_DIR / name / "embedding.npy"
+        folder = SPEAKERS_DIR / name
+        folder.mkdir(parents=True, exist_ok=True)
+        npy_path = folder / "embedding.npy"
         np.save(str(npy_path), updated)
+
+        # Reflect in the speaker_store so the Speakers UI + auto-match both
+        # see the embedding. Missing DB row (or missing column) is non-fatal.
+        try:
+            speaker = state.speaker_store.get_by_name(name)
+            if speaker:
+                rel = str(npy_path.relative_to(ICLOUD_BASE_PATH))
+                if speaker.get("embedding_path") != rel:
+                    state.speaker_store.update(speaker["speaker_id"], embedding_path=rel)
+        except Exception:
+            logger.warning("Failed to persist embedding_path for %s", name, exc_info=True)
 
         # Update cache
         self._known_embeddings[name] = updated
@@ -275,13 +360,37 @@ class SpeakerEmbeddingService:
             return np.load(str(path))
         return None
 
+    def _ids_to_names(self, speaker_ids: Optional[List[str]]) -> Optional[List[str]]:
+        """Resolve a list of speaker_ids to their names via speaker_store.
+
+        Unknown / deleted ids are silently dropped. Empty input returns None.
+        """
+        if not speaker_ids:
+            return None
+        names: List[str] = []
+        for sid in speaker_ids:
+            if not sid:
+                continue
+            try:
+                sp = state.speaker_store.get(sid)
+            except Exception:
+                sp = None
+            if sp and sp.get("name"):
+                names.append(sp["name"])
+        return names or None
+
     def auto_identify_speakers(
-        self, audio_path: str, speaker_turns: List[dict], job_id: str
+        self,
+        audio_path: str,
+        speaker_turns: List[dict],
+        job_id: str,
+        restrict_to_ids: Optional[List[str]] = None,
+        prefer_ids: Optional[List[str]] = None,
     ) -> Dict[str, dict]:
         """Full auto-identification pipeline.
 
         1. Extract embeddings for each diarization label
-        2. Match each against known speakers
+        2. Match each against known speakers (optionally scoped / biased)
         3. Save unmatched embeddings to _unknown staging
         4. Return mapping with confidence scores
 
@@ -289,27 +398,48 @@ class SpeakerEmbeddingService:
             audio_path: Path to the audio file.
             speaker_turns: Diarization output [{start, end, speaker}].
             job_id: Job ID for staging unknown embeddings.
+            restrict_to_ids: hard-scope to these speaker_ids when provided
+                (typically passed when the user pre-picked exactly the
+                number of speakers they expect).
+            prefer_ids: tiebreaker bias toward these speaker_ids when the
+                global-best is within PREFER_GAP cosine points.
 
         Returns:
             Dict: {
-                "SPEAKER_00": {"name": "David", "confidence": 0.89, "speaker_id": "..."},
-                "SPEAKER_01": {"name": None, "confidence": 0.0, "speaker_id": None}
+                "SPEAKER_00": {"name": "David", "confidence": 0.89,
+                               "speaker_id": "...", "matched": True,
+                               "source": "pick"|"registry"},
+                "SPEAKER_01": {"name": None, "confidence": 0.0,
+                               "speaker_id": None, "matched": False}
             }
         """
+        restrict_names = self._ids_to_names(restrict_to_ids)
+        prefer_names = self._ids_to_names(prefer_ids)
+
         embeddings = self.extract_speaker_embeddings(audio_path, speaker_turns)
 
         results = {}
         for label, emb in embeddings.items():
-            matched_name, confidence = self.match_speaker(emb)
+            matched_name, confidence, runner_up = self.match_speaker(
+                emb,
+                restrict_to_names=restrict_names,
+                prefer_names=prefer_names,
+            )
 
             if matched_name:
                 speaker = state.speaker_store.get_by_name(matched_name)
                 speaker_id = speaker["speaker_id"] if speaker else None
+                from_pick = bool(
+                    (restrict_names and matched_name in restrict_names)
+                    or (prefer_names and matched_name in prefer_names)
+                )
                 results[label] = {
                     "name": matched_name,
                     "confidence": round(confidence, 3),
                     "speaker_id": speaker_id,
                     "matched": True,
+                    "source": "pick" if from_pick else "registry",
+                    "runner_up": runner_up,
                 }
             else:
                 # Save to unknown staging for later manual identification
@@ -319,6 +449,8 @@ class SpeakerEmbeddingService:
                     "confidence": round(confidence, 3),
                     "speaker_id": None,
                     "matched": False,
+                    "source": None,
+                    "runner_up": runner_up,
                 }
 
         # Also include speakers that had segments too short for embedding
@@ -330,6 +462,8 @@ class SpeakerEmbeddingService:
                     "confidence": 0.0,
                     "speaker_id": None,
                     "matched": False,
+                    "source": None,
+                    "runner_up": None,
                     "note": "Segment too short for voice embedding",
                 }
 
