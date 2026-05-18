@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import useRecordings, { RecordingsStatus, RecordingsSort } from '../hooks/useRecordings';
 import {
-  JPRRecording, JPRTranscript, fetchJPRTranscript, fetchJobStatus, renameJPRRecording,
+  JPRRecording, JPRTranscript, Segment, fetchJPRTranscript, fetchJobStatus, renameJPRRecording,
 } from '../utils/api';
 
 const STATUS_FILTERS: { key: RecordingsStatus; label: string }[] = [
@@ -172,22 +172,34 @@ function TranscriptModal({
         // we fetch the job result directly instead.
         if (rec.source === 'upload' && rec.job_id) {
           const job = await fetchJobStatus(rec.job_id);
-          const segments = job.result?.segments || [];
-          const speakers = Array.from(
-            new Set(
-              segments
-                .map((s) => s.speaker)
-                .filter((s): s is string => Boolean(s))
-            )
-          );
+          // Backend's /job/{id} returns segments/language/speakers at the
+          // TOP level for completed jobs (not nested under .result). The
+          // JobStatus TS type is loose here, so coerce via `any` to read
+          // the runtime shape used everywhere else (see App.tsx + the
+          // backend route in routes/transcription.py:541).
+          const jobAny = job as any;
+          const segments = (jobAny.segments as Segment[] | undefined) || [];
+          const speakers: string[] = Array.isArray(jobAny.speakers)
+            ? jobAny.speakers.filter((s: unknown): s is string => Boolean(s))
+            : Array.from(
+                new Set(
+                  segments
+                    .map((s) => s.speaker)
+                    .filter((s): s is string => Boolean(s))
+                )
+              );
+          const transcriptText: string | null =
+            (typeof jobAny.text === 'string' && jobAny.text) ||
+            segments.map((s) => s.text).join(' ').trim() ||
+            null;
           if (!cancelled) {
             setData({
               path: rec.path,
               filename: rec.filename,
-              transcript_text: job.result?.text ?? null,
+              transcript_text: transcriptText,
               segments,
               speakers,
-              language: job.result?.language ?? null,
+              language: (jobAny.language as string | null) ?? null,
               job_id: job.job_id,
               status: job.status,
             });
