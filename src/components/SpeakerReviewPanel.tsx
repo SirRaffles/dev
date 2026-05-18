@@ -87,10 +87,14 @@ export default function SpeakerReviewPanel({
     return () => { cancelled = true; };
   }, []);
 
-  // The panel is in "re-refining" mode when we've fired the POST and the
-  // backend phase is non-null. Once it drops back to null, the user can edit
-  // again and submit another correction cycle.
-  const reRefining = submitting || currentPhase === 'refining' || currentPhase === 'learning';
+  // The panel is in "re-refining" mode while a re-refine POST is in flight
+  // OR the orchestrator is actively in the refining phase. We deliberately do
+  // NOT block on `currentPhase === 'learning'`: the B7 learning phase runs
+  // *after* refinement completes (refinement_status==='done') and is just
+  // post-hoc embedding/profile enrichment — it shouldn't lock the panel,
+  // otherwise the user sees a stuck "Re-fining…" spinner while the Refined
+  // badge is already green.
+  const reRefining = submitting || currentPhase === 'refining';
 
   const setAction = (label: string, action: CorrectionAction) => {
     setPendingCorrections((prev) => {
@@ -266,6 +270,35 @@ export default function SpeakerReviewPanel({
                 <span className="text-xs text-slate-400 font-mono">{label}</span>
                 {renderAction(label) ?? (
                   <>
+                    {/* Assign to an existing registry speaker. Sends the
+                        speaker_id as the assignment; backend's
+                        _apply_speaker_assignments will re-attribute the
+                        label and refresh the speaker's voice embedding
+                        (EMA) from this audio — so users with an existing
+                        profile that diarization missed can just pick the
+                        name instead of creating a duplicate. */}
+                    <select
+                      value=""
+                      disabled={reRefining || registry.length === 0}
+                      onChange={(e) => {
+                        const sp = registry.find((r) => r.speaker_id === e.target.value);
+                        if (sp) {
+                          setAction(label, {
+                            kind: 'existing',
+                            speakerId: sp.speaker_id,
+                            name: sp.name,
+                          });
+                        }
+                      }}
+                      title={registry.length === 0 ? 'No existing speakers' : 'Assign to existing speaker'}
+                      className="px-2 py-1 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white disabled:opacity-50"
+                    >
+                      <option value="">Assign to existing…</option>
+                      {registry.map((sp) => (
+                        <option key={sp.speaker_id} value={sp.speaker_id}>{sp.name}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">or</span>
                     <input
                       type="text"
                       value={newSpeakerDrafts[label] || ''}

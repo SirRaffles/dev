@@ -44,10 +44,12 @@ function TranscriptView({
   onSeekToTime,
   className = '',
 }: TranscriptViewProps) {
-  // Rename-source modal: only shown for JPR-sourced jobs. Fetched once per
-  // jobId via fetchJobStatus — the backend exposes original_filename +
-  // created_at on the /job/{id} response. displayFilename keeps the local
-  // copy in sync after a successful rename.
+  // Rename-source surface. Fetched once per jobId via fetchJobStatus — the
+  // backend exposes original_filename + created_at on the /job/{id} response.
+  // We fall back to `filename` so UI-upload + non-JPR jobs that surface a
+  // basename through that field still show the inline rename affordance on
+  // the main transcription screen (the actual rename endpoint is JPR-only
+  // today and will 400 cleanly for other sources, which the modal surfaces).
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [displayFilename, setDisplayFilename] = useState<string | undefined>(undefined);
   const [jobCreatedAt, setJobCreatedAt] = useState<string | undefined>(undefined);
@@ -56,7 +58,7 @@ function TranscriptView({
     fetchJobStatus(jobId)
       .then((js) => {
         if (cancelled) return;
-        setDisplayFilename(js.original_filename || undefined);
+        setDisplayFilename(js.original_filename || js.filename || undefined);
         setJobCreatedAt(js.created_at || undefined);
       })
       .catch(() => { /* silent — non-JPR jobs just won't surface the button */ });
