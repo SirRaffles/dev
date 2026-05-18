@@ -1173,11 +1173,36 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     if not req.speaker_assignments:
         raise HTTPException(status_code=400, detail="No speaker_assignments provided")
 
-    # Validate every label appears in job.segments
+    # Filter assignments to labels currently present in segments. Post-
+    # refinement B7 learning + Sonnet speaker_corrections may have already
+    # renamed some original pyannote labels (e.g. SPEAKER_00 → Pascal Weber)
+    # by the time the user clicks Apply. The frontend panel was rendered
+    # from an earlier /job/{id} snapshot, so it can submit labels that
+    # no longer exist server-side. Skip them silently rather than 400 the
+    # whole request — the user's intent for the still-present labels is
+    # still actionable, and there's nothing left to do for the renamed ones.
     known_labels = {s.get("speaker") for s in (job.segments or []) if s.get("speaker")}
-    for label in req.speaker_assignments:
-        if label not in known_labels:
-            raise HTTPException(status_code=400, detail=f"Label {label!r} not in job segments")
+    skipped_labels = [lb for lb in req.speaker_assignments if lb not in known_labels]
+    if skipped_labels:
+        logger.info(
+            "re-refine: skipping %d label(s) not in current segments (likely "
+            "already renamed by refinement/learning): %s",
+            len(skipped_labels), skipped_labels,
+        )
+    actionable_assignments = {
+        lb: tgt for lb, tgt in req.speaker_assignments.items() if lb in known_labels
+    }
+    if not actionable_assignments:
+        # All submitted labels are stale → no work to do, but not an error.
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "phase": getattr(job, "phase", None),
+            "speakers_created": [],
+            "speakers_assigned": 0,
+            "skipped_labels": skipped_labels,
+        }
+    req_speaker_assignments_live = actionable_assignments
 
     audio_path = _resolve_job_audio_path(job_id)
 
@@ -1191,7 +1216,7 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     new_names: set[str] = set()
 
     helper_assignments = []
-    for label, target in req.speaker_assignments.items():
+    for label, target in req_speaker_assignments_live.items():
         if target == "unknown":
             unknown_labels.append(label)
             continue
