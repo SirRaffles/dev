@@ -323,7 +323,11 @@ Transcript:
 
 Return ONLY the JSON object, no other text."""
 
-        return _run_claude(prompt, ANALYSIS_SCHEMA, self.claude_path, timeout=300)
+        # 600s (10 min) handles long meetings — 158 segments + global glossary
+        # + speaker bios + diarization context block observed taking >5 min on
+        # a Pascal Weber/Manukai call (timed out at the previous 300s limit).
+        # Bumped to give comfortable headroom without abandoning the user.
+        return _run_claude(prompt, ANALYSIS_SCHEMA, self.claude_path, timeout=600)
 
     def web_verify(self, terms: list) -> dict:
         """

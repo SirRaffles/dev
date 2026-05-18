@@ -112,8 +112,13 @@ def test_run_claude_uses_sonnet_and_300s_timeout(monkeypatch):
     assert captured["timeout"] == 300
 
 
-def test_analyze_passes_300s_timeout_to_run_claude():
-    """B3: analyze() must request the 300s budget for Sonnet on full transcripts."""
+def test_analyze_passes_600s_timeout_to_run_claude():
+    """analyze() requests a 600s budget for Sonnet on full transcripts.
+
+    Bumped from 300s after a real-world timeout on a 158-segment Pascal
+    Weber/Manukai call: global glossary + speaker bios + diarization context
+    pushed Sonnet past 5min. 600s gives comfortable headroom while still
+    catching truly hung calls."""
     from unittest.mock import patch
     svc = _make_service()
     captured = {}
@@ -123,7 +128,7 @@ def test_analyze_passes_300s_timeout_to_run_claude():
                 "speakers": [], "corrections": [], "uncertain_terms": []}
     with patch("services.refinement._run_claude", side_effect=fake_run):
         svc.analyze([{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
-    assert captured["timeout"] == 300
+    assert captured["timeout"] == 600
 
 
 def test_analysis_schema_includes_speaker_corrections():
