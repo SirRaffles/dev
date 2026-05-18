@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import useRecordings, { RecordingsStatus, RecordingsSort } from '../hooks/useRecordings';
 import {
-  JPRRecording, JPRTranscript, fetchJPRTranscript, renameJPRRecording,
+  JPRRecording, JPRTranscript, fetchJPRTranscript, fetchJobStatus, renameJPRRecording,
 } from '../utils/api';
 
 const STATUS_FILTERS: { key: RecordingsStatus; label: string }[] = [
@@ -166,8 +166,36 @@ function TranscriptModal({
     let cancelled = false;
     (async () => {
       try {
-        const t = await fetchJPRTranscript(rec.path);
-        if (!cancelled) setData(t);
+        // Upload-sourced rows have an absolute temp path (e.g.
+        // /var/folders/.../whisper-upload-XXXX/audio.wav) that the JPR
+        // transcript endpoint rejects as path-traversal. For those rows
+        // we fetch the job result directly instead.
+        if (rec.source === 'upload' && rec.job_id) {
+          const job = await fetchJobStatus(rec.job_id);
+          const segments = job.result?.segments || [];
+          const speakers = Array.from(
+            new Set(
+              segments
+                .map((s) => s.speaker)
+                .filter((s): s is string => Boolean(s))
+            )
+          );
+          if (!cancelled) {
+            setData({
+              path: rec.path,
+              filename: rec.filename,
+              transcript_text: job.result?.text ?? null,
+              segments,
+              speakers,
+              language: job.result?.language ?? null,
+              job_id: job.job_id,
+              status: job.status,
+            });
+          }
+        } else {
+          const t = await fetchJPRTranscript(rec.path);
+          if (!cancelled) setData(t);
+        }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || 'Failed to load transcript');
       } finally {
@@ -175,7 +203,7 @@ function TranscriptModal({
       }
     })();
     return () => { cancelled = true; };
-  }, [rec.path]);
+  }, [rec.path, rec.source, rec.job_id, rec.filename]);
 
   return (
     <div
