@@ -87,6 +87,20 @@ export default function SpeakerReviewPanel({
     return () => { cancelled = true; };
   }, []);
 
+  // Reset per-job state when navigating between jobs. Without this, the
+  // panel keeps pendingCorrections from a previous job because TranscriptView
+  // re-uses the same SpeakerReviewPanel instance across jobId changes
+  // (React reconciliation). Symptom: user picks SPEAKER_00→David in job A,
+  // navigates to job B (no SPEAKER_00 in segments), clicks Apply → backend
+  // 400s because the leaked SPEAKER_00 key isn't in job B's segments.
+  useEffect(() => {
+    setPendingCorrections(new Map());
+    setNewSpeakerDrafts({});
+    setRejectModalLabel(null);
+    setSubmitting(false);
+    setSubmitError(null);
+  }, [jobId]);
+
   // The panel is in "re-refining" mode while a re-refine POST is in flight
   // OR the orchestrator is actively in the refining phase. We deliberately do
   // NOT block on `currentPhase === 'learning'`: the B7 learning phase runs

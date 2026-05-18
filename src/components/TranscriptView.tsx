@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Check, Loader2, Sparkles, Scissors } from 'lucide-react';
-import { LANGUAGES, updateSegments, updateSpeakers, Segment, fetchJobStatus } from '../utils/api';
+import { Clock, Users, Edit2, Save, Edit3, Search, Replace, X, Loader2, Sparkles, Scissors } from 'lucide-react';
+import { LANGUAGES, updateSegments, Segment, fetchJobStatus } from '../utils/api';
 import { formatTime } from './AudioPlayer';
 import ConfirmModal from './ConfirmModal';
 import RefinementBadge from './RefinementBadge';
@@ -81,12 +81,9 @@ function TranscriptView({
   // Local error (e.g. split refused because cursor is at edge).
   const [splitError, setSplitError] = useState<string | null>(null);
 
-  // Speaker renaming
-  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
-  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
-  const [tempSpeakerName, setTempSpeakerName] = useState('');
-  const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
-  const [speakerError, setSpeakerError] = useState<string | null>(null);
+  // Speaker labels — read from segments. SpeakerReviewPanel owns all
+  // renaming + re-attribution flows (Plan 5). The transcript display below
+  // shows `segment.speaker` directly with no client-side override.
 
   // Confirmation modals
   const [confirmSave, setConfirmSave] = useState(false);
@@ -297,36 +294,6 @@ function TranscriptView({
     }
   };
 
-  // Speaker renaming functions
-  const startEditingSpeaker = (speaker: string) => {
-    setEditingSpeaker(speaker);
-    setTempSpeakerName(speakerNames[speaker] || speaker);
-  };
-
-  const cancelEditingSpeaker = () => {
-    setEditingSpeaker(null);
-    setTempSpeakerName('');
-  };
-
-  const saveSpeakerName = async () => {
-    if (!editingSpeaker || !tempSpeakerName.trim() || !jobId) return;
-
-    setIsSavingSpeaker(true);
-    setSpeakerError(null);
-    try {
-      const mapping = { [editingSpeaker]: tempSpeakerName.trim() };
-      const data = await updateSpeakers(jobId, mapping);
-
-      setSpeakerNames(prev => ({ ...prev, [editingSpeaker]: tempSpeakerName.trim() }));
-      onResultUpdate?.({ ...result, segments: data.segments, speakers: data.speakers });
-      cancelEditingSpeaker();
-    } catch (err: any) {
-      setSpeakerError(err.message || 'Failed to rename speaker');
-    } finally {
-      setIsSavingSpeaker(false);
-    }
-  };
-
   // Search functions
   const performSearch = () => {
     if (!result?.segments || !searchQuery.trim()) {
@@ -501,67 +468,12 @@ function TranscriptView({
         />
       )}
 
-      {/* Speaker Renaming */}
-      {speakers.length > 0 && (
-        <div className="mb-6 p-4 bg-slate-100 dark:bg-slate-700/30 rounded-xl">
-          <h3 className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-3 flex items-center gap-2">
-            <Edit3 className="w-4 h-4" />
-            Rename Speakers
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            {speakers.map((speaker) => (
-              <div key={speaker} className="flex items-center gap-1">
-                {editingSpeaker === speaker ? (
-                  <div className="flex items-center gap-1 bg-slate-200 dark:bg-slate-600 rounded-lg px-2 py-1">
-                    <input
-                      type="text"
-                      value={tempSpeakerName}
-                      onChange={(e) => setTempSpeakerName(e.target.value)}
-                      className="w-24 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-2 py-1 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                      autoFocus
-                      disabled={isSavingSpeaker}
-                      onKeyDown={(e) => e.key === 'Enter' && saveSpeakerName()}
-                    />
-                    <button
-                      type="button"
-                      onClick={saveSpeakerName}
-                      disabled={isSavingSpeaker}
-                      aria-label="Save speaker name"
-                      className="p-2.5 min-w-[44px] min-h-[44px] text-green-500 hover:text-green-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-                    >
-                      {isSavingSpeaker
-                        ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                        : <Check className="w-4 h-4" aria-hidden="true" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cancelEditingSpeaker}
-                      disabled={isSavingSpeaker}
-                      aria-label="Cancel rename"
-                      className="p-2.5 min-w-[44px] min-h-[44px] text-red-500 hover:text-red-400 disabled:opacity-50 flex items-center justify-center"
-                    >
-                      <X className="w-4 h-4" aria-hidden="true" />
-                    </button>
-                    {speakerError && <span role="alert" className="text-red-400 text-xs ml-1">{speakerError}</span>}
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1 bg-purple-500/20 text-purple-300 rounded-lg px-3 py-1">
-                    <span className="text-sm">{speakerNames[speaker] || speaker}</span>
-                    <button
-                      type="button"
-                      onClick={() => startEditingSpeaker(speaker)}
-                      aria-label={`Rename speaker ${speakerNames[speaker] || speaker}`}
-                      className="p-2.5 min-w-[44px] min-h-[44px] hover:text-purple-200 transition-colors flex items-center justify-center"
-                    >
-                      <Edit3 className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Speaker renaming is now exclusively handled by SpeakerReviewPanel
+          (Plan 5): pick existing speaker OR create new + auto-trigger
+          re-refinement + save voice embedding. The legacy inline "Rename
+          Speakers" block was strictly inferior (no re-refinement, no
+          embedding save, no registry picker) and produced a confusing
+          duplicate surface for the same action. */}
 
       {/* Edit / Search Controls */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -768,7 +680,7 @@ function TranscriptView({
                   {showSpeakers && segment.speaker && !isEditing && (
                     <span className="flex items-center gap-1 pt-1 whitespace-nowrap">
                       <span className="text-purple-400 font-medium text-xs sm:text-sm">
-                        {speakerNames[segment.speaker] || segment.speaker}:
+                        {segment.speaker}:
                       </span>
                     </span>
                   )}
@@ -787,10 +699,10 @@ function TranscriptView({
                           top-level speakers list (rare: editing introduces
                           a name not in the distinct-set). */}
                       {!speakers.includes(segment.speaker) && (
-                        <option value={segment.speaker}>{speakerNames[segment.speaker] || segment.speaker}</option>
+                        <option value={segment.speaker}>{segment.speaker}</option>
                       )}
                       {speakers.map((sp) => (
-                        <option key={sp} value={sp}>{speakerNames[sp] || sp}</option>
+                        <option key={sp} value={sp}>{sp}</option>
                       ))}
                     </select>
                   )}
