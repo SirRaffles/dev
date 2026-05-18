@@ -237,7 +237,15 @@ def transcribe_with_parakeet(audio_path: str, model_key: str = "parakeet-en-v2")
         state._parakeet_model_path = model_path
         logger.info("Parakeet model loaded successfully")
 
-    result = state._parakeet_model.transcribe(audio_path)
+    # Chunk long audio so we don't blow past the Metal max-buffer limit
+    # (~14 GB on M-series). Default `chunk_duration=None` would push the
+    # entire waveform through the model in one shot — fine for short
+    # uploads, OOMs on hour-long recordings. 600s (10 min) chunks with the
+    # library default 15s overlap balance accuracy vs. memory: enough
+    # context per chunk that mid-sentence cuts are rare, small enough to
+    # fit comfortably in the buffer for typical M-series RAM. The chunked
+    # path is internally serial — RT factor stays ~6x.
+    result = state._parakeet_model.transcribe(audio_path, chunk_duration=600.0)
 
     segments = []
     all_text_parts = []
