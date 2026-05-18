@@ -9,13 +9,24 @@ interface AutoRefineState {
   phase: string | null;
 }
 
-const TERMINAL_STATES = new Set<string>(['done', 'failed']);
+const TERMINAL_REFINEMENT = new Set<string>(['done', 'failed']);
 const POLL_INTERVAL_MS = 5000;  // Per user decision Q6: 5s constant, no backoff.
 
 /**
  * Polls /job/{id} for the 4 B2 fields. Active only when the transcription
  * job is `completed` (so the parent transcription poller has already stopped).
- * Stops once refinement_status hits a terminal state (done|failed).
+ *
+ * Stop condition: we need BOTH refinement_status in {done, failed} AND
+ * phase === null. The backend's lifecycle is:
+ *   refinement_status="processing" + phase="refining"
+ *   → refinement_status="done" + phase="learning"   (post-refinement workers)
+ *   → refinement_status="done" + phase=null         (everything finished)
+ * Stopping at refinement_status="done" alone would park the UI on
+ * phase="learning" forever — the user sees "Learning…" stuck because the
+ * later phase=null update is never fetched. Wait for phase to clear too.
+ *
+ * `failed` is a hard terminal: phase may or may not clear, but no more
+ * meaningful transitions happen, so stop immediately.
  */
 export function useJobAutoRefinePolling(jobId: string | null, jobCompleted: boolean): AutoRefineState | null {
   const [state, setState] = useState<AutoRefineState | null>(null);
@@ -34,7 +45,12 @@ export function useJobAutoRefinePolling(jobId: string | null, jobCompleted: bool
         const next = await fetchJobAutoRefineState(jobId);
         if (cancelled) return;
         setState(next);
-        if (next.refinement_status && TERMINAL_STATES.has(next.refinement_status)) {
+        const ref = next.refinement_status;
+        if (ref === 'failed') {
+          stopRef.current = true;
+          return;
+        }
+        if (ref === 'done' && next.phase === null) {
           stopRef.current = true;
           return;
         }
@@ -52,3 +68,6 @@ export function useJobAutoRefinePolling(jobId: string | null, jobCompleted: bool
 
   return state;
 }
+
+// Re-exported for tests; not part of the public hook API.
+export const __TEST_TERMINAL_REFINEMENT = TERMINAL_REFINEMENT;
