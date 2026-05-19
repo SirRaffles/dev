@@ -18,7 +18,7 @@
 
 **Modify:**
 - `backend/job_models.py:18-40` — add `self.speakers_resolved = False` to `TranscriptionJob.__init__`; in `_row_to_job` (`:168-179`) set `job.speakers_resolved = True` after column reads when `row[1] == "completed"`.
-- `backend/services/orchestrator.py:271-298` — split the post-alignment block: delete the single unconditional `_update_job(progress=100, message="Complete!", status="completed", phase=None, _clear_phase=True)` line at `:276-277` and replace with the `_all_labels_matched(job)` branch. The auto-resolve branch keeps the clear + dispatches refinement (preserving the existing dispatch block `:282-305`); the awaiting branch sets `phase="awaiting_speakers"` and returns without dispatching.
+- `backend/services/orchestrator.py:271-305` — split the post-alignment block: delete the single unconditional `_update_job(progress=100, message="Complete!", status="completed", phase=None, _clear_phase=True)` line at `:276-277` and replace with the `_all_labels_matched(job)` branch. The auto-resolve branch keeps the clear + dispatches refinement (preserving the existing dispatch block `:282-305`); the awaiting branch sets `phase="awaiting_speakers"` and returns without dispatching.
 - `backend/routes/transcription.py:796-805` — DELETE the local `_ANONYMOUS_SPEAKER_RE` + `_is_anonymous_label`, replace with `from services.labels import is_anonymous_label` (alias the existing `_is_anonymous_label` name to the new symbol so existing call sites at `:875`, `:967`, `:1026`, `:1228`, `:1445` keep working — see Task 1 for the exact alias pattern).
 - `backend/routes/transcription.py:515-558` — surface `speakers_resolved` in the `GET /job/{job_id}` response dict (after `phase`).
 - `backend/routes/transcription.py:1320` (after `/re-refine`) — add `POST /job/{job_id}/confirm-speakers`.
@@ -27,7 +27,7 @@
 - `backend/routes/transcription.py:981-1133` — `_apply_speaker_assignments(job, assignments, audio_path=...)` — reused as-is. The name-based fallback (lines 1040-1057) from commit `19f9450` handles voice extraction when Sonnet+B7 have already overlaid label renames.
 - `backend/routes/transcription.py:1178-1320` — `/re-refine` route — the new `/confirm-speakers` mirrors its dispatch pattern (`_set_refinement_status`, `_update_job(phase="refining")`, `state.transcription_executor.submit(_run_refinement_for_job, ...)`).
 - `backend/routes/refinement.py:_run_refinement_for_job` — reused as-is for the dispatch.
-- `backend/services/orchestrator.py:70-127` — `_TranscribeProgressTicker` (commit `cef3396`) + elapsed-time message in `_run` (commit `b689cd3`). Preserve verbatim; the orchestrator edit only touches the post-alignment block at `:271-298`.
+- `backend/services/orchestrator.py:70-127` — `_TranscribeProgressTicker` (commit `cef3396`) + elapsed-time message in `_run` (commit `b689cd3`). Preserve verbatim; the orchestrator edit only touches the post-alignment block at `:271-305`.
 - `backend/routes/transcription.py:917-930` — `SpeakerAssignment` + `ReRefineRequest` pydantic models (reused/mirrored for the new endpoint).
 - `backend/tests/conftest.py` — `icloud_base`, `sample_job`, `clean_speakers`, `client` fixtures.
 - `backend/tests/test_re_refine.py` — established async-client integration test pattern.
@@ -51,7 +51,7 @@
     ```
     or (b) use `git add -p backend/routes/transcription.py` and hand-pick only the plan's hunks. Pick whichever feels safer for the size of the touch.
   - `backend/job_models.py` — verify with `git diff --stat backend/job_models.py`. If clean, edit normally; if WIP, apply the same stash-or-`add -p` discipline.
-  - `backend/services/orchestrator.py` — preserve `_TranscribeProgressTicker` (commit `cef3396`) and elapsed-time message in `_run` (commit `b689cd3`). The plan's only edit is at `:271-298` (the post-alignment block); verify your patch doesn't touch the ticker class at `:70-127`.
+  - `backend/services/orchestrator.py` — preserve `_TranscribeProgressTicker` (commit `cef3396`) and elapsed-time message in `_run` (commit `b689cd3`). The plan's only edit is at `:271-305` (the post-alignment block); verify your patch doesn't touch the ticker class at `:70-127`.
 - **Branch:** all work lands on the current branch (`dev` per recent plan precedent). No new branch.
 - **Venv & test command:** run pytest from the backend dir:
   ```bash
@@ -309,7 +309,7 @@ If WIP exists on `backend/routes/transcription.py` outside the GET-response regi
 ## Task 3: Orchestrator split — auto-resolve vs awaiting_speakers
 
 **Files:**
-- Modify: `backend/services/orchestrator.py:271-298` (replace the unconditional `_update_job(...status="completed", phase=None, _clear_phase=True)` with the `_all_labels_matched(job)` branch)
+- Modify: `backend/services/orchestrator.py:271-305` (replace the unconditional `_update_job(...status="completed", phase=None, _clear_phase=True)` with the `_all_labels_matched(job)` branch)
 - Test: extend `backend/tests/test_confirm_speakers.py` with 3 orchestrator-branch tests
 
 - [ ] **Step 1: RED — write the failing orchestrator-split tests**
@@ -720,8 +720,10 @@ async def test_confirm_speakers_happy_path(
     monkeypatch.setattr(
         state, "get_speaker_embedding_service",
         lambda: MagicMock(
+            # _apply_speaker_assignments only calls extract_embedding +
+            # update_embedding (it uses state.speaker_store.create directly
+            # for new profiles, NOT embedding_service.register_speaker).
             extract_embedding=MagicMock(return_value=fake_emb),
-            register_speaker=MagicMock(return_value="fabrice-uuid-stub"),
             update_embedding=MagicMock(),
         ),
         raising=False,
@@ -1012,6 +1014,11 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
     _update_job(job, phase="refining")
     job._defer_audio_cleanup = True
 
+    # Source speaker_ids from helper output (NOT from req.speaker_assignments
+    # directly) so that newly-created profiles — whose UUIDs are minted inside
+    # _apply_speaker_assignments — are included in the refinement context.
+    # "ignore" assignments are absent from out["results"] (skipped in helper),
+    # so they're naturally excluded.
     speaker_ids = list(dict.fromkeys(
         r["speaker_id"] for r in out["results"] if r.get("speaker_id")
     ))

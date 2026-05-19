@@ -692,7 +692,14 @@ export default function SpeakerReviewPanel({
           assignments[label] = `new:${action.name}`;
           break;
         case 'unknown':
-          assignments[label] = 'unknown';
+          // In post-refinement mode (`/re-refine`), 'unknown' is a legacy
+          // value that backend accepts. In pre-refinement mode
+          // (`/confirm-speakers`, Plan 7A), the endpoint only enumerates
+          // UUID / 'new:name' / 'ignore'. Map 'unknown' → 'ignore' when
+          // pre-refining so a RejectMatchModal "Mark as Unknown" choice
+          // doesn't 400. The semantics are equivalent in this mode (both
+          // = "don't attach this label to any profile").
+          assignments[label] = preRefinementMode ? 'ignore' : 'unknown';
           break;
         case 'ignore':
           assignments[label] = 'ignore';
