@@ -166,7 +166,10 @@ export default function SpeakerReviewPanel({
     } else if (target.kind === 'new') {
       setAction(label, { kind: 'new', name: target.name });
     } else {
-      setAction(label, { kind: 'unknown' });
+      // "Mark as Unknown" semantics differ by mode. Storing the mode-correct
+      // kind here (instead of remapping at submit) keeps renderAction's badge
+      // consistent with what the user picked.
+      setAction(label, { kind: preRefinementMode ? 'ignore' : 'unknown' });
     }
     setRejectModalLabel(null);
   };
