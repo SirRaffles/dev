@@ -1091,6 +1091,57 @@ export async function reRefineJob(
   return r.json();
 }
 
+export interface ConfirmSpeakersResponse {
+  job_id: string;
+  status: string;
+  phase: string | null;
+  speakers_created: Array<{ speaker_id: string; name: string }>;
+  speakers_assigned: number;
+  speakers_ignored: number;
+}
+
+/**
+ * Plan 7: pre-refinement gate — submit the user's speaker resolution
+ * decisions. Same assignment shape as reRefineJob, with one new action
+ * value: the literal string "ignore" (leave the label anonymous, no
+ * embedding extraction, no profile change; refinement still runs but
+ * treats this label as unknown).
+ *
+ * `assignments` maps a diarization label (e.g. "SPEAKER_00") to one of:
+ *   - a speaker UUID (assign to existing profile, extract voice from this
+ *     job's segments, save embedding with EMA-update if profile already
+ *     has one)
+ *   - "new:<Display Name>" (create a new speaker; extract voice, save
+ *     embedding)
+ *   - "ignore" (no profile change, segments stay anonymous)
+ *
+ * Backend dispatches a single Sonnet refinement call on success after
+ * flipping job.speakers_resolved=true, transitioning job.phase from
+ * 'awaiting_speakers' → 'refining' → 'learning' → null.
+ *
+ * Failures:
+ *   - 404 — job not found
+ *   - 409 — speakers_resolved already true (idempotent error: refinement is
+ *     either already in progress or done)
+ *   - 409 — job status !== 'completed' (transcription still in flight)
+ *   - 400 — empty assignments map, or malformed "new:" name
+ */
+export async function confirmSpeakers(
+  jobId: string,
+  assignments: Record<string, string>,
+): Promise<ConfirmSpeakersResponse> {
+  const r = await fetchWithTimeout(`${API_URL}/job/${jobId}/confirm-speakers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ speaker_assignments: assignments }),
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`confirmSpeakers failed: ${r.status} ${detail.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
 export interface RenameSourceResponse {
   status: string;
   old_name: string;
