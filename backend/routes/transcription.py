@@ -1030,12 +1030,36 @@ def _apply_speaker_assignments(
             )
 
         existing = state.speaker_store.get_by_name(name)
+        # Find audio for the embedding. Try the original pyannote turn first
+        # (label-based lookup); fall back to scanning segments for the target
+        # speaker's NAME. The fallback is what unblocks the user's flow when
+        # Sonnet+B7 have already renamed the labels in BOTH job.segments and
+        # job.speakers (e.g. SPEAKER_01 turns + segments all became "Pascal
+        # Weber"). Without the fallback, embedding_path stays null for
+        # registered profiles even after the user explicitly assigns voice.
         longest = _longest_turn_for_label(job.speakers or [], a.label)
+        window_start = window_end = None
+        if longest and (longest["end"] - longest["start"]) >= 2.0:
+            window_start, window_end = longest["start"], longest["end"]
+        else:
+            # Name-based fallback: longest segment where speaker == target name.
+            name_segs = [
+                s for s in (job.segments or [])
+                if (s.get("speaker") or "").strip() == name
+            ]
+            if name_segs:
+                pick = max(
+                    name_segs,
+                    key=lambda s: float(s.get("end", 0)) - float(s.get("start", 0)),
+                )
+                ws, we = float(pick.get("start", 0)), float(pick.get("end", 0))
+                if (we - ws) >= 2.0:
+                    window_start, window_end = ws, we
         embedding = None
-        if audio_path and longest and (longest["end"] - longest["start"]) >= 2.0:
+        if audio_path and window_start is not None and window_end is not None:
             try:
                 embedding = embedding_service.extract_embedding(
-                    audio_path, longest["start"], longest["end"],
+                    audio_path, window_start, window_end,
                 )
             except Exception as e:
                 logger.warning("Embedding extraction failed for %s: %s", a.label, e)
@@ -1173,28 +1197,14 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     if not req.speaker_assignments:
         raise HTTPException(status_code=400, detail="No speaker_assignments provided")
 
-    # Accept labels from EITHER current segments OR the pyannote turn list
-    # (job.speakers). Why both:
-    #   - segments[*].speaker gets renamed in place by Sonnet's
-    #     speaker_corrections + B7 learning's post-refinement overlay
-    #     (SPEAKER_00 → Pascal Weber). The panel renders from an earlier
-    #     /job/{id} snapshot so it may submit the original pyannote label
-    #     that's no longer in segments.
-    #   - job.speakers (the raw pyannote turn list) is NEVER renamed —
-    #     it keeps SPEAKER_XX labels. The downstream helper extracts voice
-    #     embeddings via _longest_turn_for_label(job.speakers, label), so
-    #     even when segments have been renamed, the label is STILL
-    #     actionable for the embedding-save half of the flow.
-    # Only labels that exist in neither set are truly bogus → 400.
-    seg_labels = {s.get("speaker") for s in (job.segments or []) if s.get("speaker")}
-    pya_labels = {t.get("speaker") for t in (job.speakers or []) if t.get("speaker")}
-    known_labels = seg_labels | pya_labels
-    bogus_labels = [lb for lb in req.speaker_assignments if lb not in known_labels]
-    if bogus_labels:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Labels {bogus_labels!r} found in neither job.segments nor job.speakers",
-        )
+    # Don't validate labels strictly. Post-refinement Sonnet speaker_corrections
+    # + B7 learning's overlay rename labels in both job.segments AND job.speakers
+    # (the pyannote turn list). The frontend panel renders from an earlier
+    # snapshot, so the user can submit labels that no longer exist anywhere
+    # server-side. Pass through anyway — _apply_speaker_assignments + the new
+    # name-based embedding-fallback below handle stale labels gracefully:
+    # they find audio for the embedding via the target speaker's NAME in
+    # current segments when the original label is gone.
     req_speaker_assignments_live = req.speaker_assignments
 
     audio_path = _resolve_job_audio_path(job_id)
