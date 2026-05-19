@@ -1173,36 +1173,29 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     if not req.speaker_assignments:
         raise HTTPException(status_code=400, detail="No speaker_assignments provided")
 
-    # Filter assignments to labels currently present in segments. Post-
-    # refinement B7 learning + Sonnet speaker_corrections may have already
-    # renamed some original pyannote labels (e.g. SPEAKER_00 → Pascal Weber)
-    # by the time the user clicks Apply. The frontend panel was rendered
-    # from an earlier /job/{id} snapshot, so it can submit labels that
-    # no longer exist server-side. Skip them silently rather than 400 the
-    # whole request — the user's intent for the still-present labels is
-    # still actionable, and there's nothing left to do for the renamed ones.
-    known_labels = {s.get("speaker") for s in (job.segments or []) if s.get("speaker")}
-    skipped_labels = [lb for lb in req.speaker_assignments if lb not in known_labels]
-    if skipped_labels:
-        logger.info(
-            "re-refine: skipping %d label(s) not in current segments (likely "
-            "already renamed by refinement/learning): %s",
-            len(skipped_labels), skipped_labels,
+    # Accept labels from EITHER current segments OR the pyannote turn list
+    # (job.speakers). Why both:
+    #   - segments[*].speaker gets renamed in place by Sonnet's
+    #     speaker_corrections + B7 learning's post-refinement overlay
+    #     (SPEAKER_00 → Pascal Weber). The panel renders from an earlier
+    #     /job/{id} snapshot so it may submit the original pyannote label
+    #     that's no longer in segments.
+    #   - job.speakers (the raw pyannote turn list) is NEVER renamed —
+    #     it keeps SPEAKER_XX labels. The downstream helper extracts voice
+    #     embeddings via _longest_turn_for_label(job.speakers, label), so
+    #     even when segments have been renamed, the label is STILL
+    #     actionable for the embedding-save half of the flow.
+    # Only labels that exist in neither set are truly bogus → 400.
+    seg_labels = {s.get("speaker") for s in (job.segments or []) if s.get("speaker")}
+    pya_labels = {t.get("speaker") for t in (job.speakers or []) if t.get("speaker")}
+    known_labels = seg_labels | pya_labels
+    bogus_labels = [lb for lb in req.speaker_assignments if lb not in known_labels]
+    if bogus_labels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Labels {bogus_labels!r} found in neither job.segments nor job.speakers",
         )
-    actionable_assignments = {
-        lb: tgt for lb, tgt in req.speaker_assignments.items() if lb in known_labels
-    }
-    if not actionable_assignments:
-        # All submitted labels are stale → no work to do, but not an error.
-        return {
-            "job_id": job_id,
-            "status": job.status,
-            "phase": getattr(job, "phase", None),
-            "speakers_created": [],
-            "speakers_assigned": 0,
-            "skipped_labels": skipped_labels,
-        }
-    req_speaker_assignments_live = actionable_assignments
+    req_speaker_assignments_live = req.speaker_assignments
 
     audio_path = _resolve_job_audio_path(job_id)
 
