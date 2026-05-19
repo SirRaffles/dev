@@ -74,31 +74,33 @@ Phase lifecycle table gains `awaiting_speakers`:
 
 ### Decision logic
 
-In `orchestrator.py`, after alignment + B5 inline auto-match:
+**Anonymous-label helper** (`_is_anonymous_label`) currently lives in `backend/routes/transcription.py:801` as module-private. Plan 7 needs it from both `routes/transcription.py` AND `services/orchestrator.py`. Refactor: move it to `backend/services/labels.py` (new module) and import from both call sites. Drop the leading underscore (`is_anonymous_label`) since it's now a shared public helper.
+
+**Orchestrator change** (`backend/services/orchestrator.py`). Today the post-alignment block calls `_update_job(job, phase=None, _clear_phase=True, status="completed", ...)` to clear the phase pill. This unconditional clear must be REPLACED by the branching below — the awaiting branch keeps phase set to `awaiting_speakers`:
 
 ```python
 def _all_labels_matched(job) -> bool:
     """True iff every distinct speaker label in segments is either a
     non-anonymous name OR has an `auto_speaker_matches` entry with
-    matched=True. Both conditions mean we know who they are."""
+    matched=True. Both conditions mean we know who they are.
+
+    Empty segments list is treated as 'matched' (vacuously true) — nothing
+    to resolve, refinement runs as today."""
     matches = job.auto_speaker_matches or {}
     for seg in (job.segments or []):
         label = seg.get("speaker")
         if not label:
             continue
-        # Already a real name (Sonnet didn't run yet, so these come from B5
-        # inline rename only).
         if not is_anonymous_label(label):
-            continue
-        # Anonymous label — must have a high-conf B5 voice match.
+            continue  # Real name — counts as known
         if not matches.get(label, {}).get("matched"):
             return False
     return True
 
-# In orchestrator main flow, after alignment:
+# In orchestrator main flow, REPLACING the prior single `_update_job(..., phase=None)`:
 if _all_labels_matched(job):
     job.speakers_resolved = True
-    _update_job(job, phase=None, status="completed")
+    _update_job(job, status="completed", phase=None, _clear_phase=True, ...)
     _dispatch_refinement_if_eligible(job)  # existing auto-refine path
 else:
     _update_job(
@@ -110,6 +112,8 @@ else:
     # Don't dispatch refinement. Frontend will surface the panel,
     # POST /job/{id}/confirm-speakers will dispatch it.
 ```
+
+**Critical: the prior unconditional `phase=None` clear at the existing line in orchestrator.py must be DELETED in the same edit** — leaving it intact would clobber the awaiting-speakers branch immediately. The implementation plan must call this out explicitly.
 
 ### New endpoint: `POST /job/{job_id}/confirm-speakers`
 
@@ -147,8 +151,11 @@ Failures:
 - `404` — job not found
 - `409` — `speakers_resolved=true` already (user submitted twice; idempotent error message tells them refinement is already in progress)
 - `409` — `status != "completed"` (transcription still in flight; can't resolve speakers yet)
-- `400` — label not in segments AND not in pyannote turns AND not retrievable by name (truly bogus)
 - `400` — `"new:name"` with malformed name
+
+**Label-existence tolerance**: do NOT 400 on labels that aren't in `job.segments` or `job.speakers` — match the pattern established by `/re-refine` (commits `0a45794` + `19f9450`). The downstream `_apply_speaker_assignments` helper handles stale labels gracefully via its name-based audio-window fallback. Bogus labels become silent no-ops in the embedding-save path, which is the right UX (the user's pending corrections were valid when they made them; we tolerate intervening state drift).
+
+**Empty assignments (`{}`)**: 400 with `"At least one speaker_assignments entry required"`. If the user wanted to "skip resolution and refine without speaker context," that's a separate explicit action — adding a `?force=true` query param to bypass the gate is out of scope for v1; the user can submit `{"SPEAKER_00": "ignore", ...}` for every unresolved label to express the same intent.
 
 ### Endpoint behavior
 
@@ -210,37 +217,59 @@ In practice Section B and C are similar — both show anonymous labels with a re
 
 **Polling hook** (`src/hooks/useJobAutoRefinePolling.ts`):
 - Terminal condition updated: poll while `(speakers_resolved && refinement_status !== "done") || phase != null`. Stop when `speakers_resolved && refinement_status === "done" && phase === null` OR `refinement_status === "failed"`.
+- The hook now polls during `awaiting_speakers` since the page needs to detect when the user (or another tab) submits `/confirm-speakers` and the phase flips to `refining`. This means the 5s tick fires for as long as the user dwells on the panel — acceptable per the "pause indefinitely" decision, and the request is cheap (one /job/{id} GET).
+- Future polish: pause polling when `document.hidden === true` to save battery during long pauses. Out of scope for v1.
 
 **API helpers** (`src/utils/api.ts`):
 - New `confirmSpeakers(jobId, assignments)` POSTing to `/job/{id}/confirm-speakers`. Same payload shape as `reRefineJob`. Same response shape (extended with `speakers_ignored`).
 - Extend `JobStatus` interface with `speakers_resolved?: boolean`.
 
-### Migration
+### Migration + persistence
 
-Existing jobs in the DB don't have `speakers_resolved`. On load (`_row_to_job`), default to `True` — they've already passed the gate (or never had one). This means:
-- Pre-Plan-7 completed jobs: refinement either ran or didn't; no blocking.
-- Pre-Plan-7 awaiting jobs (none expected since the gate didn't exist): wouldn't exist.
+`TranscriptionJob.__init__` defaults `speakers_resolved = False`. This is correct for newly-created jobs (they must pass the gate). But `_row_to_job` in `backend/job_models.py` reads only the fixed SQL columns and reconstructs the job with default Python-side state for fields not in the SELECT. So:
 
-In-memory new instances default to `False` via `__init__`.
+- **New jobs (Plan 7+)**: `__init__` sets `False`; orchestrator flips to `True` on auto-resolve OR `/confirm-speakers` flips it. The current value lives only in `job_store._cache` (in-memory). This is consistent with how other B2 fields like `refinement_status`, `auto_speaker_matches`, `learning_summary` are handled today (per `job_models.py:33-36` — all in-memory, no SQL persistence).
+
+- **Pre-Plan-7 jobs reloaded after restart**: `_row_to_job` constructs a `TranscriptionJob` via `__init__` (gets `False`) then sets fields from the SQL row. Without an explicit override, these jobs would look "unresolved" → the UI would erroneously show the speaker panel + block their refinement.
+
+  **Fix**: in `_row_to_job`, AFTER `__init__` + column reads, set `job.speakers_resolved = True` when the row's `status == "completed"`. Rationale: any job that was already completed before Plan 7 shipped has, by definition, passed (or skipped) the gate — there was no gate. New completed jobs only get marked resolved via the explicit code paths above, after restart they'd reload through this same migration default which is still correct because a completed job that's been written to the DB has either already triggered refinement (resolved) OR never needed it (also effectively resolved for our gate semantics).
+
+  For `status != "completed"` rows on reload (pending/processing/failed): the existing `_load_active_jobs` orphan-cleanup (hotfix `ac02292` + `aaf1727`) marks them failed; they never re-enter the awaiting flow, so `speakers_resolved` for them is moot.
+
+- **Backend restart with in-flight awaiting_speakers jobs**: the row in DB has `status="completed"` and `phase="awaiting_speakers"` (phase is in-memory only, lost on restart). After restart, `_row_to_job` rebuilds the job with `phase=None`, `speakers_resolved=True` (per migration above). The user will see a completed transcript without the panel — they'll need to re-trigger refinement via `/re-refine` if they wanted speaker resolution applied. Documented as acceptable: the new flow doesn't survive restarts cleanly, same as the existing in-flight refinement loss. A future enhancement could persist `speakers_resolved` to a new SQL column, but it's not blocking for v1.
+
+No SQL schema change. No column addition. The migration is pure Python — read-side default flip in `_row_to_job`.
 
 ## Files structure
 
 **Modify**:
-- `backend/job_models.py` — add `self.speakers_resolved = False` in `TranscriptionJob.__init__`
-- `backend/services/orchestrator.py` — split post-alignment logic: auto-resolve if all matched, else set phase=awaiting_speakers
-- `backend/routes/transcription.py` — add `POST /job/{job_id}/confirm-speakers` route; surface `speakers_resolved` in GET `/job/{id}` response
+- `backend/job_models.py` — add `self.speakers_resolved = False` in `TranscriptionJob.__init__`; in `_row_to_job` set `speakers_resolved=True` when reloaded row has `status="completed"` (migration default)
+- `backend/services/orchestrator.py` — split post-alignment logic: auto-resolve if all matched, else set phase=awaiting_speakers; **delete** the prior unconditional `_update_job(phase=None, _clear_phase=True)` line and move the clear into the auto-resolve branch only
+- `backend/routes/transcription.py` — add `POST /job/{job_id}/confirm-speakers` route; surface `speakers_resolved` in GET `/job/{id}` response; replace any remaining `_is_anonymous_label` direct usage with the shared module import
+- `backend/routes/transcription.py` (existing `_is_anonymous_label` at line ~801) — DELETE local copy after moving to the shared module
 - `src/components/SpeakerReviewPanel.tsx` — three sections; context-aware submit button; "Ignore" action for unknown speakers
 - `src/components/PhasePill.tsx` — add `awaiting_speakers` mapping
 - `src/utils/api.ts` — add `confirmSpeakers` helper; extend `JobStatus` with `speakers_resolved`
 - `src/hooks/useJobAutoRefinePolling.ts` — extend terminal condition + state shape
 
 **Create**:
-- `backend/tests/test_confirm_speakers.py` — integration tests: auto-resolve path, awaiting-speakers path, confirm dispatch, ignore handling, idempotency on duplicate confirm
+- `backend/services/labels.py` — new module hosting `is_anonymous_label` (promoted from `routes/transcription.py:_is_anonymous_label`). Same regex semantics. Importable from both routes/transcription.py and services/orchestrator.py without underscore-prefixed cross-module import.
+- `backend/tests/test_confirm_speakers.py` — integration tests: auto-resolve path, awaiting-speakers path, confirm dispatch, ignore handling, idempotency on duplicate confirm (409), 400 on empty assignments
 
 **Reference (read-only)**:
 - `backend/routes/transcription.py:_apply_speaker_assignments` — reused as-is from Plan 5A Task 3; the name-based fallback (commit `19f9450`) already handles the voice extraction edge cases
 - `backend/routes/refinement.py:_run_refinement_for_job` — reused as-is for the dispatch
 - `backend/services/learning.py:update_speaker_embeddings` — still runs post-refinement as B7
+
+## Edge cases addressed
+
+- **Empty registry** (first-run install, no speakers registered): B5 returns `auto_speaker_matches={}` regardless of voice match attempts. All labels are anonymous + unmatched → pause. Panel shows no Matched section, empty registry dropdown in Section B → only "Create new" / "Ignore" are usable. This is the expected first-run UX.
+
+- **Pre-Plan-7 jobs interrupted at deploy** (`status="processing"`, refinement was pending): the existing orphan-cleanup (`_load_active_jobs` per hotfix `aaf1727`) marks them `failed` on restart. They never enter the new gate flow. The user retries via the existing Retry button.
+
+- **User confirms then refinement fails**: refinement_status becomes `"failed"`, `speakers_resolved` stays `true`. Panel transforms to the post-refinement "Apply & re-refine" mode but with `refinement_status="failed"` surfaced via the existing RefinementBadge. User can re-trigger via Apply.
+
+- **Concurrent confirm** (user clicks Confirm twice in rapid succession before the first request returns): the second request hits `speakers_resolved=true` → 409 idempotent. UI debounces the Confirm button via the existing `submitting` state in the panel.
 
 ## Out of scope
 
@@ -260,7 +289,7 @@ When Plan 7 ships:
 4. A new transcription where ALL labels are B5-matched skips the pause entirely — `speakers_resolved=true` is set in the orchestrator, refinement dispatches immediately. Phase pill goes: aligning → refining → learning → None (no awaiting_speakers).
 5. After refinement completes, the panel transforms: "Confirm speakers" button becomes "Apply & re-refine" (existing Plan 5 flow). User can still post-edit.
 6. Pre-Plan-7 completed jobs in history are not affected — they show no panel (treated as resolved by migration default).
-7. Frontend `npx tsc --noEmit`: 0 errors. Backend suite: 374+ passed.
+7. Frontend `npx tsc --noEmit`: 0 errors. Backend suite: no regressions vs pre-Plan-7 baseline; new tests add ≥6 cases.
 8. New `test_confirm_speakers.py` adds ≥6 integration tests covering: auto-resolve path, awaiting path, confirm dispatch, ignore action, 409 when already resolved, 409 when not completed, name-based embedding extraction works.
 
 ## Sub-plan decomposition
