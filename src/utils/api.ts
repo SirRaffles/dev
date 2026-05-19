@@ -68,6 +68,13 @@ export interface JobStatus {
   // Sub-plan A: orchestrator's current pipeline phase
   // ("diarizing" | "transcribing" | "aligning" | "refining" | "learning" | null)
   phase?: string | null;
+  // Plan 7: pre-refinement speaker resolution gate. False when the
+  // orchestrator paused for user input (phase === 'awaiting_speakers'),
+  // true after the user submits via POST /job/{id}/confirm-speakers or
+  // when all labels were B5-matched (auto-resolve path). Pre-Plan-7
+  // backends omit this field; readers should default to `true` for
+  // backward compatibility (the legacy flow has no gate).
+  speakers_resolved?: boolean;
 }
 
 export async function fetchJobAutoRefineState(jobId: string): Promise<{
@@ -76,6 +83,7 @@ export async function fetchJobAutoRefineState(jobId: string): Promise<{
   learning_summary: LearningSummary | null;
   auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
   phase: string | null;
+  speakers_resolved: boolean;
 }> {
   const res = await fetchWithTimeout(`${API_URL}/job/${jobId}`);
   if (!res.ok) throw new Error(`fetchJobAutoRefineState failed: ${res.status}`);
@@ -86,6 +94,9 @@ export async function fetchJobAutoRefineState(jobId: string): Promise<{
     learning_summary: j.learning_summary ?? null,
     auto_speaker_matches: j.auto_speaker_matches ?? null,
     phase: j.phase ?? null,
+    // Default to true for backward compat with pre-Plan-7 backends that
+    // don't surface this field — those jobs never had a gate to pass.
+    speakers_resolved: j.speakers_resolved ?? true,
   };
 }
 
