@@ -459,6 +459,7 @@ function TranscriptView({
           segments={result.segments}
           autoMatches={autoMatches}
           currentPhase={refineState?.phase ?? null}
+          speakersResolved={refineState?.speakers_resolved ?? true}
           onReRefineStart={() => {
             // No-op for now — the polling hook re-derives segments + matches
             // once the backend completes. A future hook could clear manual

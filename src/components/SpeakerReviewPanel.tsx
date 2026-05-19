@@ -1,62 +1,77 @@
 import { useEffect, useMemo, useState } from 'react';
-import { UserCheck, UserX, UserPlus, Loader2, Sparkles } from 'lucide-react';
+import { UserCheck, UserX, UserPlus, Loader2, Sparkles, Ban } from 'lucide-react';
 import {
   AutoSpeakerMatch,
   Segment,
   Speaker,
   fetchSpeakers,
   reRefineJob,
+  confirmSpeakers,
 } from '../utils/api';
 import RejectMatchModal, { RejectTarget } from './RejectMatchModal';
-import { isAnonymousLabel } from './TranscriptView';  // exported in Task 5's Step 2
+import { isAnonymousLabel } from './TranscriptView';
 
 /**
- * Single source of truth for post-completion speaker review (Plan 5).
- * Replaces both:
- *   - the inline AutoMatchBadge per first-occurrence segment
- *   - the "Name the speakers" panel
+ * Speaker review surface — context-aware off `speakersResolved`:
  *
- * Owns a local `pendingCorrections` map; the user accumulates corrections
- * (confirm / reject / re-attribute / create) before clicking "Apply &
- * re-refine", which sends ONE POST /job/{id}/re-refine and shows a loading
- * state until the polling-driven `currentPhase` returns to null (signalling
- * the backend has finished both refinement + B7 learning).
+ *   - Pre-refinement (speakersResolved === false): the orchestrator
+ *     paused at the Plan 7 gate (phase === 'awaiting_speakers').
+ *     Renders 3 sections (Matched / Known profiles / Unknown). Submit
+ *     button is "Confirm speakers" → POST /job/{id}/confirm-speakers.
+ *     Unknown-section rows expose an "Ignore" action so the user can
+ *     leave the label anonymous without creating a duplicate profile.
+ *
+ *   - Post-refinement (speakersResolved === true OR undefined for
+ *     pre-Plan-7 backends): the existing Plan 5 flow. 2 sections
+ *     (Identified / Unknown). Submit button is "Apply & re-refine" →
+ *     POST /job/{id}/re-refine. Reject opens RejectMatchModal.
+ *
+ * `pendingCorrections` is shared by both modes. The submit handler picks
+ * the endpoint based on the current mode. New `{kind: 'ignore'}` action
+ * (pre-refinement only) serializes as the literal "ignore" string in
+ * the assignments payload.
  */
 interface Props {
   jobId: string;
-  segments: Segment[];                                  // result.segments
-  autoMatches: Record<string, AutoSpeakerMatch>;        // from useJobAutoRefinePolling
-  currentPhase?: string | null;                         // from useJobAutoRefinePolling
-  onReRefineStart?: () => void;                         // notify parent (clear local edits, etc.)
+  segments: Segment[];                            // result.segments
+  autoMatches: Record<string, AutoSpeakerMatch>;  // from useJobAutoRefinePolling
+  currentPhase?: string | null;                   // from useJobAutoRefinePolling
+  speakersResolved?: boolean;                     // Plan 7 — from useJobAutoRefinePolling
+  onReRefineStart?: () => void;                   // notify parent (clear local edits, etc.)
 }
 
 /**
  * Local per-label decision the user has made but not yet submitted.
- *   - confirm: keep the B5 match as-is (no backend op needed, but it
- *     becomes part of the assignments map so the re-refinement run sees
+ *   - confirm: keep the B5 match as-is (no backend re-attribution, but
+ *     it becomes part of the assignments map so the refinement run sees
  *     the speaker's profile in context).
  *   - existing: re-attribute to a different registry speaker.
  *   - new: create a new speaker (backend extracts voice embedding).
  *   - unknown: strip the auto-matched name back to the anonymous label.
+ *     Post-refinement only — for pre-refinement mode use 'ignore'.
+ *   - ignore: leave the label anonymous, no embedding extraction, no
+ *     profile change. Pre-refinement mode only.
  */
 type CorrectionAction =
   | { kind: 'confirm'; speakerId: string; name: string }
   | { kind: 'existing'; speakerId: string; name: string }
   | { kind: 'new'; name: string }
-  | { kind: 'unknown' };
-
-// Use `isAnonymousLabel` imported from TranscriptView — it matches all 3
-// shapes (SPEAKER_\d+, "Speaker N", literal "Unknown"). A narrower regex
-// here would misclassify "Speaker 1"-style and "Unknown" labels and break
-// today's behavior.
+  | { kind: 'unknown' }
+  | { kind: 'ignore' };
 
 export default function SpeakerReviewPanel({
   jobId,
   segments,
   autoMatches,
   currentPhase,
+  speakersResolved,
   onReRefineStart,
 }: Props) {
+  // Mode detection. Default `true` for backward compat with pre-Plan-7
+  // backends that don't surface speakers_resolved (legacy flow had no gate
+  // → all completed jobs are effectively "post-refinement" for this UI).
+  const preRefinementMode = speakersResolved === false;
+
   const [registry, setRegistry] = useState<Speaker[]>([]);
   const [pendingCorrections, setPendingCorrections] = useState<Map<string, CorrectionAction>>(
     new Map(),
@@ -75,24 +90,39 @@ export default function SpeakerReviewPanel({
     return Array.from(set).sort();
   }, [segments]);
 
-  const identifiedLabels = allLabels.filter((l) => !isAnonymousLabel(l) || autoMatches[l]?.matched);
-  const unknownLabels = allLabels.filter((l) => isAnonymousLabel(l) && !autoMatches[l]?.matched);
+  // Section classification:
+  //   Matched      = name resolved (non-anonymous label OR B5-matched)
+  //   KnownProfiles = anonymous + unmatched + registry has candidates
+  //   Unknown      = anonymous + unmatched + (registry empty OR user wants new/ignore)
+  //
+  // In post-refinement mode we keep the original 2-section split
+  // (matched → "Identified", everything else → "Unknown") for visual
+  // continuity with Plan 5. Pre-refinement renders all 3 sections.
+  const matchedLabels = allLabels.filter((l) => !isAnonymousLabel(l) || autoMatches[l]?.matched);
+  const unresolvedLabels = allLabels.filter((l) => isAnonymousLabel(l) && !autoMatches[l]?.matched);
 
-  // Load registry once (used for the modal picker + identified-name display).
+  // In pre-refinement mode, split unresolved into "Known profiles (no
+  // voice)" and "Unknown" based on registry availability. Per the spec,
+  // Section B and C are visually similar — both render the registry
+  // picker + create input. The split is a labeling nice-to-have. v1
+  // renders them as separate sections for clarity; the render path is
+  // identical except for the heading.
+  const knownProfileLabels = preRefinementMode && registry.length > 0 ? unresolvedLabels : [];
+  const unknownLabels = preRefinementMode && registry.length > 0 ? [] : unresolvedLabels;
+
+  // Load registry once (used for the picker + identified-name display).
   useEffect(() => {
     let cancelled = false;
     fetchSpeakers()
       .then((list) => { if (!cancelled) setRegistry(list); })
-      .catch(() => { /* silent — modal will show an empty picker */ });
+      .catch(() => { /* silent — picker will show as empty */ });
     return () => { cancelled = true; };
   }, []);
 
   // Reset per-job state when navigating between jobs. Without this, the
   // panel keeps pendingCorrections from a previous job because TranscriptView
   // re-uses the same SpeakerReviewPanel instance across jobId changes
-  // (React reconciliation). Symptom: user picks SPEAKER_00→David in job A,
-  // navigates to job B (no SPEAKER_00 in segments), clicks Apply → backend
-  // 400s because the leaked SPEAKER_00 key isn't in job B's segments.
+  // (React reconciliation).
   useEffect(() => {
     setPendingCorrections(new Map());
     setNewSpeakerDrafts({});
@@ -101,14 +131,11 @@ export default function SpeakerReviewPanel({
     setSubmitError(null);
   }, [jobId]);
 
-  // The panel is in "re-refining" mode while a re-refine POST is in flight
-  // OR the orchestrator is actively in the refining phase. We deliberately do
-  // NOT block on `currentPhase === 'learning'`: the B7 learning phase runs
-  // *after* refinement completes (refinement_status==='done') and is just
-  // post-hoc embedding/profile enrichment — it shouldn't lock the panel,
-  // otherwise the user sees a stuck "Re-fining…" spinner while the Refined
-  // badge is already green.
-  const reRefining = submitting || currentPhase === 'refining';
+  // The panel is "submitting" while a confirm/re-refine POST is in flight
+  // OR the orchestrator is actively in the refining phase. We deliberately
+  // do NOT block on `currentPhase === 'learning'`: the B7 learning phase
+  // runs *after* refinement completes and shouldn't lock the panel.
+  const inFlight = submitting || currentPhase === 'refining';
 
   const setAction = (label: string, action: CorrectionAction) => {
     setPendingCorrections((prev) => {
@@ -144,13 +171,21 @@ export default function SpeakerReviewPanel({
     setRejectModalLabel(null);
   };
 
-  const handleCreateForAnonymous = (label: string) => {
+  const handleCreateForUnresolved = (label: string) => {
     const name = (newSpeakerDrafts[label] || '').trim();
     if (name) setAction(label, { kind: 'new', name });
   };
 
-  const handleApply = async () => {
-    if (pendingCorrections.size === 0) return;
+  const handleIgnoreForUnresolved = (label: string) => {
+    setAction(label, { kind: 'ignore' });
+  };
+
+  // Build the assignments map for the submit. The serialization differs
+  // by mode: post-refinement maps 'unknown' → 'unknown'; pre-refinement
+  // doesn't expose 'unknown' (uses 'ignore' instead — slightly different
+  // semantics: 'unknown' strips an existing name, 'ignore' is a no-op
+  // because there was no name to strip yet).
+  const buildAssignments = (): Record<string, string> => {
     const assignments: Record<string, string> = {};
     for (const [label, action] of pendingCorrections.entries()) {
       switch (action.kind) {
@@ -162,21 +197,39 @@ export default function SpeakerReviewPanel({
           assignments[label] = `new:${action.name}`;
           break;
         case 'unknown':
-          assignments[label] = 'unknown';
+          // In post-refinement mode (`/re-refine`), 'unknown' is a legacy
+          // value that backend accepts. In pre-refinement mode
+          // (`/confirm-speakers`, Plan 7A), the endpoint only enumerates
+          // UUID / 'new:name' / 'ignore'. Map 'unknown' → 'ignore' when
+          // pre-refining so a RejectMatchModal "Mark as Unknown" choice
+          // doesn't 400. The semantics are equivalent in this mode (both
+          // = "don't attach this label to any profile").
+          assignments[label] = preRefinementMode ? 'ignore' : 'unknown';
+          break;
+        case 'ignore':
+          assignments[label] = 'ignore';
           break;
       }
     }
+    return assignments;
+  };
+
+  const handleApply = async () => {
+    if (pendingCorrections.size === 0) return;
+    const assignments = buildAssignments();
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await reRefineJob(jobId, assignments);
+      if (preRefinementMode) {
+        await confirmSpeakers(jobId, assignments);
+      } else {
+        await reRefineJob(jobId, assignments);
+      }
       onReRefineStart?.();
-      // Clear local corrections — the parent's polling will reflect the new
-      // segments once the re-refinement completes.
       setPendingCorrections(new Map());
       setNewSpeakerDrafts({});
     } catch (e: any) {
-      setSubmitError(e?.message || 'Re-refinement failed');
+      setSubmitError(e?.message || 'Submit failed');
     } finally {
       setSubmitting(false);
     }
@@ -188,16 +241,17 @@ export default function SpeakerReviewPanel({
     setSubmitError(null);
   };
 
-  // Render nothing when there are no labels at all (defensive — TranscriptView
-  // shouldn't mount the panel in that case anyway).
+  // Render nothing when there are no labels at all.
   if (allLabels.length === 0) return null;
 
   const renderAction = (label: string) => {
     const action = pendingCorrections.get(label);
     if (!action) return null;
-    const verb = action.kind === 'confirm' ? 'Confirmed'
+    const verb =
+      action.kind === 'confirm' ? 'Confirmed'
       : action.kind === 'existing' ? `→ ${action.name}`
       : action.kind === 'new' ? `+ New: ${action.name}`
+      : action.kind === 'ignore' ? '⊘ Ignored'
       : '→ Unknown';
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
@@ -214,21 +268,96 @@ export default function SpeakerReviewPanel({
     );
   };
 
+  // Render an unresolved-label row (used by both Known-profiles and
+  // Unknown sections — they share the same action row, only the section
+  // heading differs).
+  const renderUnresolvedRow = (label: string) => (
+    <li key={label} className="flex items-center gap-2 flex-wrap">
+      <span className="text-xs text-slate-400 font-mono">{label}</span>
+      {renderAction(label) ?? (
+        <>
+          <select
+            value=""
+            disabled={inFlight || registry.length === 0}
+            onChange={(e) => {
+              const sp = registry.find((r) => r.speaker_id === e.target.value);
+              if (sp) {
+                setAction(label, {
+                  kind: 'existing',
+                  speakerId: sp.speaker_id,
+                  name: sp.name,
+                });
+              }
+            }}
+            title={registry.length === 0 ? 'No existing speakers' : 'Assign to existing speaker'}
+            className="px-2 py-1 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white disabled:opacity-50"
+          >
+            <option value="">Assign to existing…</option>
+            {registry.map((sp) => (
+              <option key={sp.speaker_id} value={sp.speaker_id}>{sp.name}</option>
+            ))}
+          </select>
+          <span className="text-xs text-slate-500 dark:text-slate-400">or</span>
+          <input
+            type="text"
+            value={newSpeakerDrafts[label] || ''}
+            onChange={(e) =>
+              setNewSpeakerDrafts((prev) => ({ ...prev, [label]: e.target.value }))
+            }
+            placeholder="New speaker name"
+            disabled={inFlight}
+            className="flex-1 min-w-[160px] px-3 py-1 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
+            onKeyDown={(e) => e.key === 'Enter' && handleCreateForUnresolved(label)}
+          />
+          <button
+            type="button"
+            onClick={() => handleCreateForUnresolved(label)}
+            disabled={inFlight || !(newSpeakerDrafts[label] || '').trim()}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
+          >
+            <UserPlus className="w-3 h-3" aria-hidden="true" />
+            Create
+          </button>
+          {preRefinementMode && (
+            <button
+              type="button"
+              onClick={() => handleIgnoreForUnresolved(label)}
+              disabled={inFlight}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-slate-300 text-slate-700 hover:bg-slate-400 dark:bg-slate-600 dark:text-slate-200 dark:hover:bg-slate-500 disabled:opacity-50"
+              title="Leave this label anonymous; refinement will treat them as unknown"
+            >
+              <Ban className="w-3 h-3" aria-hidden="true" />
+              Ignore
+            </button>
+          )}
+        </>
+      )}
+    </li>
+  );
+
+  const submitLabel = preRefinementMode ? 'Confirm speakers' : 'Apply & re-refine';
+  const submitInFlightLabel = preRefinementMode ? 'Confirming…' : 'Re-refining…';
+
   return (
     <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl">
       <h3 className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-3 flex items-center gap-2">
         <Sparkles className="w-4 h-4" aria-hidden="true" />
         Speaker Review
+        {preRefinementMode && (
+          <span className="text-xs font-normal text-amber-700 dark:text-amber-300 ml-1">
+            — awaiting your input before refinement
+          </span>
+        )}
       </h3>
 
-      {/* Section A: Identified speakers (auto-matched or already named) */}
-      {identifiedLabels.length > 0 && (
+      {/* Section A: Matched (auto-confirmed by B5 or already named) */}
+      {matchedLabels.length > 0 && (
         <div className="mb-4">
           <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2 uppercase tracking-wide">
-            Identified
+            {preRefinementMode ? 'Matched (auto-confirmed)' : 'Identified'}
           </div>
           <ul className="space-y-2">
-            {identifiedLabels.map((label) => {
+            {matchedLabels.map((label) => {
               const match = autoMatches[label];
               const conf = match?.confidence != null ? Math.round(match.confidence * 100) : null;
               const displayName = match?.name ?? label;
@@ -245,19 +374,21 @@ export default function SpeakerReviewPanel({
                   <span className="text-xs text-slate-400 font-mono">{label}</span>
                   {renderAction(label) ?? (
                     <span className="ml-auto flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => handleConfirm(label)}
-                        disabled={reRefining || !match?.matched}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
-                      >
-                        <UserCheck className="w-3 h-3" aria-hidden="true" />
-                        Confirm
-                      </button>
+                      {!preRefinementMode && (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirm(label)}
+                          disabled={inFlight || !match?.matched}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
+                        >
+                          <UserCheck className="w-3 h-3" aria-hidden="true" />
+                          Confirm
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setRejectModalLabel(label)}
-                        disabled={reRefining || !match?.matched}
+                        disabled={inFlight || !match?.matched}
                         className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-rose-500 text-white hover:bg-rose-600 disabled:opacity-50"
                       >
                         <UserX className="w-3 h-3" aria-hidden="true" />
@@ -272,99 +403,54 @@ export default function SpeakerReviewPanel({
         </div>
       )}
 
-      {/* Section B: Unknown speakers (anonymous + no match) */}
+      {/* Section B: Known profiles, no voice yet (pre-refinement only) */}
+      {knownProfileLabels.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2 uppercase tracking-wide">
+            Known profiles (no voice yet)
+          </div>
+          <ul className="space-y-2">
+            {knownProfileLabels.map(renderUnresolvedRow)}
+          </ul>
+        </div>
+      )}
+
+      {/* Section C: Unknown */}
       {unknownLabels.length > 0 && (
         <div className="mb-4">
           <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2 uppercase tracking-wide">
             Unknown
           </div>
           <ul className="space-y-2">
-            {unknownLabels.map((label) => (
-              <li key={label} className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-slate-400 font-mono">{label}</span>
-                {renderAction(label) ?? (
-                  <>
-                    {/* Assign to an existing registry speaker. Sends the
-                        speaker_id as the assignment; backend's
-                        _apply_speaker_assignments will re-attribute the
-                        label and refresh the speaker's voice embedding
-                        (EMA) from this audio — so users with an existing
-                        profile that diarization missed can just pick the
-                        name instead of creating a duplicate. */}
-                    <select
-                      value=""
-                      disabled={reRefining || registry.length === 0}
-                      onChange={(e) => {
-                        const sp = registry.find((r) => r.speaker_id === e.target.value);
-                        if (sp) {
-                          setAction(label, {
-                            kind: 'existing',
-                            speakerId: sp.speaker_id,
-                            name: sp.name,
-                          });
-                        }
-                      }}
-                      title={registry.length === 0 ? 'No existing speakers' : 'Assign to existing speaker'}
-                      className="px-2 py-1 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white disabled:opacity-50"
-                    >
-                      <option value="">Assign to existing…</option>
-                      {registry.map((sp) => (
-                        <option key={sp.speaker_id} value={sp.speaker_id}>{sp.name}</option>
-                      ))}
-                    </select>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">or</span>
-                    <input
-                      type="text"
-                      value={newSpeakerDrafts[label] || ''}
-                      onChange={(e) =>
-                        setNewSpeakerDrafts((prev) => ({ ...prev, [label]: e.target.value }))
-                      }
-                      placeholder="New speaker name"
-                      disabled={reRefining}
-                      className="flex-1 min-w-[160px] px-3 py-1 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
-                      onKeyDown={(e) => e.key === 'Enter' && handleCreateForAnonymous(label)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleCreateForAnonymous(label)}
-                      disabled={reRefining || !(newSpeakerDrafts[label] || '').trim()}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
-                    >
-                      <UserPlus className="w-3 h-3" aria-hidden="true" />
-                      Create
-                    </button>
-                  </>
-                )}
-              </li>
-            ))}
+            {unknownLabels.map(renderUnresolvedRow)}
           </ul>
         </div>
       )}
 
-      {/* Apply / Discard footer */}
+      {/* Submit / Discard footer */}
       <div className="flex items-center gap-3 mt-4 flex-wrap">
         <button
           type="button"
           onClick={handleApply}
-          disabled={reRefining || pendingCorrections.size === 0}
+          disabled={inFlight || pendingCorrections.size === 0}
           className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
         >
-          {reRefining ? (
+          {inFlight ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-              Re-refining…
+              {submitInFlightLabel}
             </>
           ) : (
             <>
               <Sparkles className="w-4 h-4" aria-hidden="true" />
-              Apply & re-refine ({pendingCorrections.size})
+              {submitLabel} ({pendingCorrections.size})
             </>
           )}
         </button>
         <button
           type="button"
           onClick={handleDiscard}
-          disabled={reRefining || pendingCorrections.size === 0}
+          disabled={inFlight || pendingCorrections.size === 0}
           className="px-4 py-2 text-sm font-medium rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 disabled:opacity-50"
         >
           Discard changes
