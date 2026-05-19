@@ -793,15 +793,11 @@ async def update_segments(job_id: str, request: SegmentUpdate):
 #     appends them to the speaker's personality.md (requires the `claude` CLI)
 # ──────────────────────────────────────────────────────────────────────────
 
-import re as _re
-
-_ANONYMOUS_SPEAKER_RE = _re.compile(r"^(?:SPEAKER_\d+|Speaker\s*\d+|Unknown)$", _re.IGNORECASE)
-
-
-def _is_anonymous_label(name: Optional[str]) -> bool:
-    if not name:
-        return True
-    return bool(_ANONYMOUS_SPEAKER_RE.match(name.strip()))
+# Plan 7: anonymous-label helper moved to services.labels so the orchestrator
+# can import it too. We alias to the underscore-prefixed name to keep the
+# existing call sites (insights extraction, re-refine validation, etc.)
+# unchanged — they reference `_is_anonymous_label` directly.
+from services.labels import is_anonymous_label as _is_anonymous_label  # noqa: F401
 
 
 def _longest_turn_for_label(turns: list, label: str) -> Optional[dict]:
