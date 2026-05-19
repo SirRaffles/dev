@@ -31,6 +31,7 @@ from services.diarization import (
 )
 from services.postprocess import normalize_segments
 from services.audio import apply_noise_reduction
+from services.labels import is_anonymous_label
 import state
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,83 @@ class _TranscribeProgressTicker:
 
     def stop(self) -> None:
         self._stop.set()
+
+
+def _all_labels_matched(job) -> bool:
+    """True iff every distinct speaker label in segments is either a
+    non-anonymous name OR has an `auto_speaker_matches` entry with
+    matched=True. Both conditions mean we know who they are.
+
+    Empty segments list is treated as 'matched' (vacuously true) — nothing
+    to resolve, refinement runs as today.
+    """
+    matches = job.auto_speaker_matches or {}
+    for seg in (job.segments or []):
+        label = seg.get("speaker")
+        if not label:
+            continue
+        if not is_anonymous_label(label):
+            continue  # Real name — counts as known
+        if not matches.get(label, {}).get("matched"):
+            return False
+    return True
+
+
+def _finalize_after_alignment(job, settings, audio_path: str,
+                              mode: Literal["best", "quick"] = "best") -> None:
+    """Plan 7: gate finalization on speaker resolution.
+
+    Called once segments+turns are aligned and B5 auto-match has populated
+    `job.auto_speaker_matches`. Branches:
+      - All labels matched → set speakers_resolved=True, clear phase,
+        dispatch refinement (existing auto-refine path).
+      - Any anonymous-unmatched → set phase="awaiting_speakers", status=
+        "completed", return WITHOUT dispatching. Refinement waits for
+        POST /job/{id}/confirm-speakers.
+
+    The transcript is fully usable in both branches (verbatim is ready);
+    only Sonnet refinement is gated.
+    """
+    job_id = job.job_id
+    if _all_labels_matched(job):
+        job.speakers_resolved = True
+        _update_job(job, progress=100, message="Complete!", status="completed",
+                    phase=None, _clear_phase=True)
+        if _should_auto_refine(settings) and state.refinement_available:
+            try:
+                from routes.refinement import _run_refinement_for_job
+                job.refinement_status = "pending"
+                state.jobs.update(job)
+                state.refinement_store.create(job_id)
+                job._defer_audio_cleanup = True
+                state.transcription_executor.submit(
+                    _run_refinement_for_job,
+                    job_id,
+                    settings.speaker_ids,
+                    settings.context_path,
+                    audio_path,
+                )
+                logger.info("Orchestrator: auto-refine dispatched for %s (mode=%s)",
+                            job_id, mode)
+            except Exception:
+                logger.exception("Orchestrator: auto-refine dispatch failed for %s",
+                                 job_id)
+                try:
+                    job.refinement_status = "failed"
+                    state.jobs.update(job)
+                    state.refinement_store.update_status(job_id, "failed",
+                                                         "dispatch failed")
+                except Exception:
+                    logger.debug("Rollback after dispatch failure failed for %s",
+                                 job_id, exc_info=True)
+    else:
+        # Awaiting branch: don't clear phase, don't dispatch refinement.
+        # Transcript is still complete (the user can read it); only the
+        # post-refinement enrichment is held back until they click Confirm.
+        _update_job(job, progress=100,
+                    message="Waiting for speaker resolution",
+                    status="completed", phase="awaiting_speakers")
+        logger.info("Orchestrator: %s awaiting speaker resolution (gate)", job_id)
 
 
 def orchestrate_transcription(
@@ -272,37 +350,13 @@ def orchestrate_transcription(
         job.segments = transcription_segments
         job.result = full_text
 
-        # Clear phase as we transition to completed (verbatim ready).
-        _update_job(job, progress=100, message="Complete!", status="completed",
-                    phase=None, _clear_phase=True)
-
-        # Auto-refine dispatch (Best mode benefits most; Quick mode also runs
-        # so diarization polish + learning fire). Same dispatch as the legacy
-        # path - _run_refinement_for_job already chains learning workers.
-        if _should_auto_refine(settings) and state.refinement_available:
-            try:
-                from routes.refinement import _run_refinement_for_job
-                job.refinement_status = "pending"
-                state.jobs.update(job)
-                state.refinement_store.create(job_id)
-                job._defer_audio_cleanup = True
-                state.transcription_executor.submit(
-                    _run_refinement_for_job,
-                    job_id,
-                    settings.speaker_ids,
-                    settings.context_path,
-                    audio_path,
-                )
-                logger.info("Orchestrator: auto-refine dispatched for %s (mode=%s)", job_id, mode)
-            except Exception:
-                logger.exception("Orchestrator: auto-refine dispatch failed for %s", job_id)
-                try:
-                    job.refinement_status = "failed"
-                    state.jobs.update(job)
-                    state.refinement_store.update_status(job_id, "failed", "dispatch failed")
-                except Exception:
-                    logger.debug("Rollback after dispatch failure failed for %s",
-                                 job_id, exc_info=True)
+        # Plan 7: pre-refinement speaker gate. Delegated to a helper so it
+        # can be unit-tested without standing up the full transcribe path.
+        # CRITICAL: the prior unconditional `_update_job(phase=None,
+        # _clear_phase=True, status="completed", ...)` is GONE — the
+        # auto-resolve branch keeps the clear, the awaiting branch sets
+        # phase="awaiting_speakers" instead.
+        _finalize_after_alignment(job, settings, audio_path=audio_path, mode=mode)
     except Exception as e:
         job.status = "failed"
         job.error = str(e)

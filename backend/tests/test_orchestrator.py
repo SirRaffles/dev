@@ -282,10 +282,13 @@ def test_orchestrate_emits_phase_transitions(tmp_path, monkeypatch):
                         lambda *a, **k: {"segments": [{"start": 0, "end": 1, "text": "hi"}],
                                          "text": "hi", "language": "en"})
     # Return non-empty diarization so the `aligning` branch fires.
+    # Plan 7: orchestrator gates phase-clear on `_all_labels_matched`. Use a
+    # non-anonymous label so the auto-resolve branch fires (final phase=None).
+    # The awaiting_speakers branch is covered by tests/test_confirm_speakers.py.
     monkeypatch.setattr(orchestrator, "run_diarization",
-                        lambda *a, **k: [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}])
+                        lambda *a, **k: [{"start": 0.0, "end": 1.0, "speaker": "Pascal Weber"}])
     monkeypatch.setattr(orchestrator, "assign_speakers_to_segments",
-                        lambda segs, sp: [{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
+                        lambda segs, sp: [{"start": 0, "end": 1, "text": "hi", "speaker": "Pascal Weber"}])
     monkeypatch.setattr(orchestrator, "stitch_speaker_turns", lambda segs: segs)
     # B5 auto-match runs only if refinement_available — keep False to skip it here.
     monkeypatch.setenv("HF_TOKEN", "fake")
