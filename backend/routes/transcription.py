@@ -930,6 +930,12 @@ class ReRefineRequest(BaseModel):
     # value is one of: existing speaker_id, "unknown", or "new:<name>"
 
 
+class ConfirmSpeakersRequest(BaseModel):
+    speaker_assignments: dict[str, str]
+    # value is one of: existing speaker_id (UUID), "ignore", or "new:<name>".
+    # Plan 7 — pre-refinement speaker resolution gate.
+
+
 @router.get("/job/{job_id}/speakers/labels")
 async def list_job_speaker_labels(job_id: str):
     """List anonymous speaker labels + speaking time for a completed job.
@@ -1317,6 +1323,155 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
         "phase": "refining",
         "speakers_created": speakers_created,
         "speakers_assigned": len(req.speaker_assignments),
+    }
+
+
+@router.post("/job/{job_id}/confirm-speakers")
+async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
+    """Plan 7 — pre-refinement speaker resolution gate.
+
+    Called when the orchestrator paused at phase=awaiting_speakers because
+    one or more diarization labels weren't auto-matched by B5. The user
+    has reviewed the labels in the SpeakerReviewPanel and submits
+    assignments. Each value is one of:
+      - UUID string → assign to existing profile (extract voice + EMA-update)
+      - "new:<name>" → create new profile with this name + extract voice
+      - "ignore"     → leave the label anonymous in segments (no profile change)
+
+    Sets speakers_resolved=True, transitions phase to "refining", and
+    dispatches _run_refinement_for_job. Mirrors /re-refine's dispatch
+    pattern (routes/transcription.py:1290-1320).
+
+    Failures:
+      - 404 if job not found
+      - 409 if job.status != "completed" (gate is only reachable post-alignment)
+      - 409 if speakers_resolved already True (idempotent — refinement is
+        either in flight or has already run; user should use /re-refine)
+      - 400 if speaker_assignments is empty
+      - 400 if "new:name" name is malformed (anonymous-looking)
+
+    Label-existence tolerance: matches /re-refine's pattern from commits
+    0a45794 + 19f9450 — labels not in current job.segments are NOT 400'd;
+    _apply_speaker_assignments' name-based audio-window fallback handles
+    stale labels gracefully.
+    """
+    job = state.jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job must be completed (currently {job.status!r})",
+        )
+    if getattr(job, "speakers_resolved", False):
+        raise HTTPException(
+            status_code=409,
+            detail="Speakers already resolved for this job; "
+                   "use /re-refine to apply further corrections",
+        )
+    if not req.speaker_assignments:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one speaker_assignments entry required",
+        )
+
+    audio_path = _resolve_job_audio_path(job_id)
+
+    # Build SpeakerAssignment records, excluding "ignore" (those skip
+    # embedding extraction; their segments stay anonymous in job.segments).
+    ignored_labels: list[str] = []
+    new_names: set[str] = set()
+    helper_assignments: list[SpeakerAssignment] = []
+
+    for label, target in req.speaker_assignments.items():
+        if target == "ignore":
+            ignored_labels.append(label)
+            continue
+        if target.startswith("new:"):
+            new_name = target[4:].strip()
+            if not new_name or _is_anonymous_label(new_name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid new speaker name: {new_name!r}",
+                )
+            new_names.add(new_name)
+            helper_assignments.append(SpeakerAssignment(
+                label=label, speaker_name=new_name, create_new=True,
+            ))
+            continue
+        # Otherwise it's an existing speaker_id (UUID).
+        try:
+            sp = state.speaker_store.get(target)
+        except Exception:
+            sp = None
+        if not sp or not sp.get("name"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid speaker_id: {target!r}",
+            )
+        helper_assignments.append(SpeakerAssignment(
+            label=label, speaker_name=sp["name"], create_new=False,
+        ))
+
+    # Apply assignments via the shared helper (handles segment/turn rename
+    # + speaker creation + embedding registration + DB updates). The helper
+    # has a name-based fallback (commit 19f9450) for stale labels.
+    out = {"results": []}
+    if helper_assignments:
+        try:
+            out = _apply_speaker_assignments(
+                job, helper_assignments, audio_path=audio_path,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Speaker assignment failed during confirm-speakers")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Failed to apply speaker assignments: {e}",
+            )
+
+    # Build response.speakers_created from helper output.
+    speakers_created: list[dict] = [
+        {"speaker_id": r["speaker_id"], "name": r["speaker_name"]}
+        for r in out["results"]
+        if r.get("created") and r.get("speaker_name") in new_names
+    ]
+
+    # Flip the gate + transition phase. Refinement store row is created
+    # idempotently (INSERT OR REPLACE — see job_models.py).
+    state.refinement_store.create(job_id)
+
+    from routes.refinement import _set_refinement_status, _run_refinement_for_job
+    from services.transcription import _update_job
+
+    job.speakers_resolved = True
+    _set_refinement_status(job, "pending")
+    _update_job(job, phase="refining")
+    job._defer_audio_cleanup = True
+
+    # Source speaker_ids from helper output (NOT from req.speaker_assignments
+    # directly) so that newly-created profiles — whose UUIDs are minted inside
+    # _apply_speaker_assignments — are included in the refinement context.
+    # "ignore" assignments are absent from out["results"] (skipped in helper),
+    # so they're naturally excluded.
+    speaker_ids = list(dict.fromkeys(
+        r["speaker_id"] for r in out["results"] if r.get("speaker_id")
+    ))
+    context_path = (
+        job.settings.context_path if getattr(job, "settings", None) else None
+    )
+    state.transcription_executor.submit(
+        _run_refinement_for_job, job_id, speaker_ids, context_path, audio_path,
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "refining",
+        "phase": "refining",
+        "speakers_created": speakers_created,
+        "speakers_assigned": len(helper_assignments),
+        "speakers_ignored": len(ignored_labels),
     }
 
 

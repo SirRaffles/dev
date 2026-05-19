@@ -202,3 +202,203 @@ def test_orchestrator_awaiting_path_sets_phase_and_does_not_dispatch(monkeypatch
         submit_mock.assert_not_called()
     finally:
         state.job_store.delete("await-1")
+
+
+# ---------- Task 4: POST /job/{job_id}/confirm-speakers ----------
+
+async def test_confirm_speakers_happy_path(
+    icloud_base, sample_job, clean_speakers, client, monkeypatch
+):
+    """Happy path: assign an existing UUID + create a new speaker + ignore one.
+
+    Verifies:
+      - 200 + correct response shape
+      - speakers_resolved flips to True
+      - phase becomes "refining"
+      - refinement is dispatched (executor.submit called once)
+      - ignored labels do NOT appear in helper_assignments (segments stay anonymous)
+    """
+    import state
+    from unittest.mock import MagicMock
+    from job_models import TranscriptionJob
+
+    suffix = uuid.uuid4().hex[:8]
+    pascal_name = f"Pascal_T4cs_{suffix}"
+    fabrice_name = f"Fabrice_T4cs_{suffix}"
+
+    # Seed job state: completed, speakers_resolved=False (gate not yet passed)
+    job = state.job_store.get(sample_job)
+    job.segments = [
+        {"start": 0,  "end": 5,  "text": "hi",     "speaker": "SPEAKER_00"},
+        {"start": 5,  "end": 10, "text": "salut",  "speaker": "SPEAKER_01"},
+        {"start": 10, "end": 15, "text": "???",    "speaker": "SPEAKER_02"},
+    ]
+    job.speakers = [
+        {"start": 0, "end": 5,   "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10,  "speaker": "SPEAKER_01"},
+        {"start": 10, "end": 15, "speaker": "SPEAKER_02"},
+    ]
+    job.status = "completed"
+    job.speakers_resolved = False
+    state.job_store.update(job)
+
+    # Pre-seed Pascal so the UUID-assign path has something to find
+    pascal_id = str(uuid.uuid4())
+    state.speaker_store.create(pascal_id, pascal_name, f"speakers/{pascal_name}")
+    clean_speakers.append(pascal_id)
+
+    # Stub executor + embedding service so the test doesn't fire the worker
+    submit_mock = MagicMock()
+    monkeypatch.setattr(state, "transcription_executor",
+                        MagicMock(submit=submit_mock))
+    fake_emb = MagicMock()
+    monkeypatch.setattr(
+        state, "get_speaker_embedding_service",
+        lambda: MagicMock(
+            # _apply_speaker_assignments only calls extract_embedding +
+            # update_embedding (it uses state.speaker_store.create directly
+            # for new profiles, NOT embedding_service.register_speaker).
+            extract_embedding=MagicMock(return_value=fake_emb),
+            update_embedding=MagicMock(),
+        ),
+        raising=False,
+    )
+
+    body = {
+        "speaker_assignments": {
+            "SPEAKER_00": pascal_id,                # existing UUID
+            "SPEAKER_01": f"new:{fabrice_name}",    # create new
+            "SPEAKER_02": "ignore",                 # leave anonymous
+        }
+    }
+    resp = await client.post(f"/job/{sample_job}/confirm-speakers", json=body)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["job_id"] == sample_job
+    assert data["phase"] == "refining"
+    assert data["speakers_assigned"] == 2  # ignore doesn't count
+    assert data["speakers_ignored"] == 1
+    assert any(c["name"] == fabrice_name for c in data["speakers_created"])
+
+    # Cleanup the created Fabrice if it landed in the store
+    fab = state.speaker_store.get_by_name(fabrice_name)
+    if fab and fab.get("speaker_id"):
+        clean_speakers.append(fab["speaker_id"])
+
+    # Gate state flipped
+    job_after = state.job_store.get(sample_job)
+    assert job_after.speakers_resolved is True
+    assert job_after.phase == "refining"
+
+    # Refinement was dispatched
+    submit_mock.assert_called_once()
+
+
+async def test_confirm_speakers_409_when_already_resolved(
+    icloud_base, sample_job, client
+):
+    """If speakers_resolved is already True, return 409 (idempotent error)."""
+    import state
+    job = state.job_store.get(sample_job)
+    job.status = "completed"
+    job.speakers_resolved = True
+    state.job_store.update(job)
+
+    resp = await client.post(
+        f"/job/{sample_job}/confirm-speakers",
+        json={"speaker_assignments": {"SPEAKER_00": "ignore"}},
+    )
+    assert resp.status_code == 409
+    assert "resolved" in resp.text.lower() or "already" in resp.text.lower()
+
+
+async def test_confirm_speakers_409_when_job_not_completed(
+    icloud_base, sample_job, client
+):
+    """If status != 'completed', return 409."""
+    import state
+    job = state.job_store.get(sample_job)
+    job.status = "processing"
+    job.speakers_resolved = False
+    state.job_store.update(job)
+
+    resp = await client.post(
+        f"/job/{sample_job}/confirm-speakers",
+        json={"speaker_assignments": {"SPEAKER_00": "ignore"}},
+    )
+    assert resp.status_code == 409
+    assert "completed" in resp.text.lower()
+
+
+async def test_confirm_speakers_400_on_empty_assignments(
+    icloud_base, sample_job, client
+):
+    """Empty speaker_assignments map → 400."""
+    import state
+    job = state.job_store.get(sample_job)
+    job.status = "completed"
+    job.speakers_resolved = False
+    state.job_store.update(job)
+
+    resp = await client.post(
+        f"/job/{sample_job}/confirm-speakers",
+        json={"speaker_assignments": {}},
+    )
+    assert resp.status_code == 400
+
+
+async def test_confirm_speakers_404_when_job_not_found(client):
+    """Unknown job_id → 404."""
+    resp = await client.post(
+        "/job/does-not-exist/confirm-speakers",
+        json={"speaker_assignments": {"SPEAKER_00": "ignore"}},
+    )
+    assert resp.status_code == 404
+
+
+async def test_confirm_speakers_tolerates_stale_labels(
+    icloud_base, sample_job, clean_speakers, client, monkeypatch
+):
+    """Per re-refine pattern (commits 0a45794 + 19f9450): if a submitted
+    label is no longer in job.segments, the endpoint must NOT 400 — it
+    relies on _apply_speaker_assignments' name-based fallback. The helper
+    will record the assignment even if the original label is gone."""
+    import state
+    from unittest.mock import MagicMock
+
+    suffix = uuid.uuid4().hex[:8]
+    pascal_name = f"Pascal_T4stale_{suffix}"
+
+    job = state.job_store.get(sample_job)
+    # The submitted label "SPEAKER_99" doesn't appear in segments —
+    # mimics the post-overlay drift the spec describes.
+    job.segments = [
+        {"start": 0, "end": 5, "text": "hi", "speaker": pascal_name},
+    ]
+    job.speakers = []
+    job.status = "completed"
+    job.speakers_resolved = False
+    state.job_store.update(job)
+
+    pascal_id = str(uuid.uuid4())
+    state.speaker_store.create(pascal_id, pascal_name, f"speakers/{pascal_name}")
+    clean_speakers.append(pascal_id)
+
+    monkeypatch.setattr(state, "transcription_executor",
+                        MagicMock(submit=MagicMock()))
+    monkeypatch.setattr(
+        state, "get_speaker_embedding_service",
+        lambda: MagicMock(
+            extract_embedding=MagicMock(return_value=MagicMock()),
+            update_embedding=MagicMock(),
+        ),
+        raising=False,
+    )
+
+    resp = await client.post(
+        f"/job/{sample_job}/confirm-speakers",
+        json={"speaker_assignments": {"SPEAKER_99": pascal_id}},
+    )
+    # Must not 400 on the stale label — same contract as /re-refine.
+    assert resp.status_code == 200, resp.text
