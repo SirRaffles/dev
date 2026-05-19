@@ -38,6 +38,11 @@ class TranscriptionJob:
         # not persisted to SQL). Values: None | "diarizing" | "transcribing" |
         # "aligning" | "refining" | "learning". None = no active phase.
         self.phase = None
+        # Plan 7: speaker resolution gate. False until the orchestrator
+        # auto-resolves (all labels B5-matched or non-anonymous) or the
+        # user submits assignments via POST /job/{id}/confirm-speakers.
+        # Refinement is gated on this flag.
+        self.speakers_resolved = False
 
 
 class BatchJob:
@@ -176,6 +181,12 @@ class JobStore:
         job.language_probability = row[7]
         job.segments = json.loads(row[8]) if row[8] else []
         job.speakers = json.loads(row[9]) if row[9] else []
+        # Plan 7 migration: pre-gate completed jobs are by definition past
+        # the gate (no gate existed when they completed). Flip the default
+        # so they don't get blocked by a UI panel that would never have
+        # rendered for them.
+        if job.status == "completed":
+            job.speakers_resolved = True
         return job
 
     def _job_to_row(self, job: TranscriptionJob, file_path: str = None, settings: dict = None, youtube_url: str = None) -> tuple:

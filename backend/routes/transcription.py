@@ -527,6 +527,10 @@ async def get_job_status(job_id: str):
         "progress_message": job.progress_message,
         # Plan 4A: phase pill for phased progress bar
         "phase": getattr(job, "phase", None),
+        # Plan 7: pre-refinement speaker gate — frontend uses this to decide
+        # whether to render the SpeakerReviewPanel in pre-refinement mode
+        # ("Confirm speakers") vs post-refinement mode ("Apply & re-refine").
+        "speakers_resolved": getattr(job, "speakers_resolved", False),
         # B2: surface auto-refine indicators for UI polling (None when not applicable)
         "refinement_status": getattr(job, "refinement_status", None),
         "auto_speaker_matches": getattr(job, "auto_speaker_matches", None),
