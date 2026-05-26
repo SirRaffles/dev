@@ -12,23 +12,20 @@ import RejectMatchModal, { RejectTarget } from './RejectMatchModal';
 import { isAnonymousLabel } from './TranscriptView';
 
 /**
- * Speaker review surface — context-aware off `speakersResolved`:
+ * Speaker review surface — context-aware off `speakerReviewStatus`:
  *
- *   - Pre-refinement (speakersResolved === false): the orchestrator
- *     paused at the Plan 7 gate (phase === 'awaiting_speakers').
- *     Renders 3 sections (Matched / Known profiles / Unknown). Submit
- *     button is "Confirm speakers" → POST /job/{id}/confirm-speakers.
+ *   - Needs review: some labels are still anonymous. Refinement may already
+ *     have run; this panel lets the user apply speaker updates afterward.
  *     Unknown-section rows expose an "Ignore" action so the user can
  *     leave the label anonymous without creating a duplicate profile.
  *
- *   - Post-refinement (speakersResolved === true OR undefined for
- *     pre-Plan-7 backends): the existing Plan 5 flow. 2 sections
+ *   - Reviewed/not needed: the existing correction flow. 2 sections
  *     (Identified / Unknown). Submit button is "Apply & re-refine" →
  *     POST /job/{id}/re-refine. Reject opens RejectMatchModal.
  *
  * `pendingCorrections` is shared by both modes. The submit handler picks
  * the endpoint based on the current mode. New `{kind: 'ignore'}` action
- * (pre-refinement only) serializes as the literal "ignore" string in
+ * (needs-review only) serializes as the literal "ignore" string in
  * the assignments payload.
  */
 interface Props {
@@ -36,7 +33,8 @@ interface Props {
   segments: Segment[];                            // result.segments
   autoMatches: Record<string, AutoSpeakerMatch>;  // from useJobAutoRefinePolling
   currentPhase?: string | null;                   // from useJobAutoRefinePolling
-  speakersResolved?: boolean;                     // Plan 7 — from useJobAutoRefinePolling
+  speakersResolved?: boolean;                     // Backward-compatible alias
+  speakerReviewStatus?: 'not_needed' | 'needs_review' | 'reviewed';
   onReRefineStart?: () => void;                   // notify parent (clear local edits, etc.)
 }
 
@@ -48,9 +46,9 @@ interface Props {
  *   - existing: re-attribute to a different registry speaker.
  *   - new: create a new speaker (backend extracts voice embedding).
  *   - unknown: strip the auto-matched name back to the anonymous label.
- *     Post-refinement only — for pre-refinement mode use 'ignore'.
+ *     Post-refinement only — for needs-review mode use 'ignore'.
  *   - ignore: leave the label anonymous, no embedding extraction, no
- *     profile change. Pre-refinement mode only.
+ *     profile change. Needs-review mode only.
  */
 type CorrectionAction =
   | { kind: 'confirm'; speakerId: string; name: string }
@@ -65,12 +63,12 @@ export default function SpeakerReviewPanel({
   autoMatches,
   currentPhase,
   speakersResolved,
+  speakerReviewStatus,
   onReRefineStart,
 }: Props) {
-  // Mode detection. Default `true` for backward compat with pre-Plan-7
-  // backends that don't surface speakers_resolved (legacy flow had no gate
-  // → all completed jobs are effectively "post-refinement" for this UI).
-  const preRefinementMode = speakersResolved === false;
+  const needsReviewMode = speakerReviewStatus === 'needs_review' || (
+    speakerReviewStatus === undefined && speakersResolved === false
+  );
 
   const [registry, setRegistry] = useState<Speaker[]>([]);
   const [pendingCorrections, setPendingCorrections] = useState<Map<string, CorrectionAction>>(
@@ -97,18 +95,18 @@ export default function SpeakerReviewPanel({
   //
   // In post-refinement mode we keep the original 2-section split
   // (matched → "Identified", everything else → "Unknown") for visual
-  // continuity with Plan 5. Pre-refinement renders all 3 sections.
+  // continuity with Plan 5. Needs-review renders all 3 sections.
   const matchedLabels = allLabels.filter((l) => !isAnonymousLabel(l) || autoMatches[l]?.matched);
   const unresolvedLabels = allLabels.filter((l) => isAnonymousLabel(l) && !autoMatches[l]?.matched);
 
-  // In pre-refinement mode, split unresolved into "Known profiles (no
+  // In needs-review mode, split unresolved into "Known profiles (no
   // voice)" and "Unknown" based on registry availability. Per the spec,
   // Section B and C are visually similar — both render the registry
   // picker + create input. The split is a labeling nice-to-have. v1
   // renders them as separate sections for clarity; the render path is
   // identical except for the heading.
-  const knownProfileLabels = preRefinementMode && registry.length > 0 ? unresolvedLabels : [];
-  const unknownLabels = preRefinementMode && registry.length > 0 ? [] : unresolvedLabels;
+  const knownProfileLabels = needsReviewMode && registry.length > 0 ? unresolvedLabels : [];
+  const unknownLabels = needsReviewMode && registry.length > 0 ? [] : unresolvedLabels;
 
   // Load registry once (used for the picker + identified-name display).
   useEffect(() => {
@@ -169,7 +167,7 @@ export default function SpeakerReviewPanel({
       // "Mark as Unknown" semantics differ by mode. Storing the mode-correct
       // kind here (instead of remapping at submit) keeps renderAction's badge
       // consistent with what the user picked.
-      setAction(label, { kind: preRefinementMode ? 'ignore' : 'unknown' });
+      setAction(label, { kind: needsReviewMode ? 'ignore' : 'unknown' });
     }
     setRejectModalLabel(null);
   };
@@ -184,7 +182,7 @@ export default function SpeakerReviewPanel({
   };
 
   // Build the assignments map for the submit. The serialization differs
-  // by mode: post-refinement maps 'unknown' → 'unknown'; pre-refinement
+  // by mode: post-refinement maps 'unknown' → 'unknown'; needs-review
   // doesn't expose 'unknown' (uses 'ignore' instead — slightly different
   // semantics: 'unknown' strips an existing name, 'ignore' is a no-op
   // because there was no name to strip yet).
@@ -201,13 +199,13 @@ export default function SpeakerReviewPanel({
           break;
         case 'unknown':
           // In post-refinement mode (`/re-refine`), 'unknown' is a legacy
-          // value that backend accepts. In pre-refinement mode
+          // value that backend accepts. In needs-review mode
           // (`/confirm-speakers`, Plan 7A), the endpoint only enumerates
           // UUID / 'new:name' / 'ignore'. Map 'unknown' → 'ignore' when
           // pre-refining so a RejectMatchModal "Mark as Unknown" choice
           // doesn't 400. The semantics are equivalent in this mode (both
           // = "don't attach this label to any profile").
-          assignments[label] = preRefinementMode ? 'ignore' : 'unknown';
+          assignments[label] = needsReviewMode ? 'ignore' : 'unknown';
           break;
         case 'ignore':
           assignments[label] = 'ignore';
@@ -223,7 +221,7 @@ export default function SpeakerReviewPanel({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      if (preRefinementMode) {
+      if (needsReviewMode) {
         await confirmSpeakers(jobId, assignments);
       } else {
         await reRefineJob(jobId, assignments);
@@ -321,7 +319,7 @@ export default function SpeakerReviewPanel({
             <UserPlus className="w-3 h-3" aria-hidden="true" />
             Create
           </button>
-          {preRefinementMode && (
+          {needsReviewMode && (
             <button
               type="button"
               onClick={() => handleIgnoreForUnresolved(label)}
@@ -338,17 +336,17 @@ export default function SpeakerReviewPanel({
     </li>
   );
 
-  const submitLabel = preRefinementMode ? 'Confirm speakers' : 'Apply & re-refine';
-  const submitInFlightLabel = preRefinementMode ? 'Confirming…' : 'Re-refining…';
+  const submitLabel = needsReviewMode ? 'Apply speaker updates' : 'Apply & re-refine';
+  const submitInFlightLabel = needsReviewMode ? 'Applying…' : 'Re-refining…';
 
   return (
     <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl">
       <h3 className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-3 flex items-center gap-2">
         <Sparkles className="w-4 h-4" aria-hidden="true" />
         Speaker Review
-        {preRefinementMode && (
+        {needsReviewMode && (
           <span className="text-xs font-normal text-amber-700 dark:text-amber-300 ml-1">
-            — awaiting your input before refinement
+            — speakers to verify
           </span>
         )}
       </h3>
@@ -357,7 +355,7 @@ export default function SpeakerReviewPanel({
       {matchedLabels.length > 0 && (
         <div className="mb-4">
           <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2 uppercase tracking-wide">
-            {preRefinementMode ? 'Matched (auto-confirmed)' : 'Identified'}
+            {needsReviewMode ? 'Matched (auto-confirmed)' : 'Identified'}
           </div>
           <ul className="space-y-2">
             {matchedLabels.map((label) => {
@@ -377,7 +375,7 @@ export default function SpeakerReviewPanel({
                   <span className="text-xs text-slate-400 font-mono">{label}</span>
                   {renderAction(label) ?? (
                     <span className="ml-auto flex items-center gap-1">
-                      {!preRefinementMode && (
+                      {!needsReviewMode && (
                         <button
                           type="button"
                           onClick={() => handleConfirm(label)}
@@ -406,7 +404,7 @@ export default function SpeakerReviewPanel({
         </div>
       )}
 
-      {/* Section B: Known profiles, no voice yet (pre-refinement only) */}
+      {/* Section B: Known profiles, no voice yet (needs-review only) */}
       {knownProfileLabels.length > 0 && (
         <div className="mb-4">
           <div className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2 uppercase tracking-wide">

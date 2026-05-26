@@ -14,10 +14,15 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+SPEAKER_REVIEW_NOT_NEEDED = "not_needed"
+SPEAKER_REVIEW_NEEDS_REVIEW = "needs_review"
+SPEAKER_REVIEW_REVIEWED = "reviewed"
+
 
 class TranscriptionJob:
     def __init__(self, job_id: str):
         self.job_id = job_id
+        self.created_at = None
         self.status = "pending"  # pending, processing, completed, failed
         self.progress = 0
         self.progress_message = ""
@@ -29,20 +34,40 @@ class TranscriptionJob:
         self.speakers = []  # Speaker diarization results
         self.is_generated = False  # True when transcript came from auto-generated YT captions
         self._from_captions = False  # True when the job used the YouTube captions fast-path
-        # B2 (in-memory only — not persisted to SQL):
+        # B2 lifecycle fields.
         self.refinement_status = None       # None | "pending" | "processing" | "done" | "failed"
         self.auto_speaker_matches = None    # Dict[str, Dict] from B5
         self.learning_summary = None        # Dict[str, int] populated by Plan 2
         self.learning_status = None         # "ok" | "partial" | "failed" — populated by Plan 2
-        # Plan 4A: phase pill for the UI's phased progress bar (in-memory only,
-        # not persisted to SQL). Values: None | "diarizing" | "transcribing" |
+        # Plan 4A: phase pill for the UI's phased progress bar. Values:
+        # None | "diarizing" | "transcribing" |
         # "aligning" | "refining" | "learning". None = no active phase.
         self.phase = None
-        # Plan 7: speaker resolution gate. False until the orchestrator
-        # auto-resolves (all labels B5-matched or non-anonymous) or the
-        # user submits assignments via POST /job/{id}/confirm-speakers.
-        # Refinement is gated on this flag.
+        # Speaker review is a UX signal, not a refinement gate.
+        self.speaker_review_status = SPEAKER_REVIEW_NEEDS_REVIEW
+        # Compatibility alias for older frontend/backend code.
         self.speakers_resolved = False
+
+
+def _review_status_from_resolved(resolved: bool) -> str:
+    return SPEAKER_REVIEW_NOT_NEEDED if resolved else SPEAKER_REVIEW_NEEDS_REVIEW
+
+
+def _resolved_from_review_status(status: Optional[str]) -> bool:
+    return status != SPEAKER_REVIEW_NEEDS_REVIEW
+
+
+def _job_review_status(job) -> str:
+    status = getattr(job, "speaker_review_status", None)
+    if getattr(job, "speakers_resolved", False) and status == SPEAKER_REVIEW_NEEDS_REVIEW:
+        return SPEAKER_REVIEW_NOT_NEEDED
+    if status in (
+        SPEAKER_REVIEW_NOT_NEEDED,
+        SPEAKER_REVIEW_NEEDS_REVIEW,
+        SPEAKER_REVIEW_REVIEWED,
+    ):
+        return status
+    return _review_status_from_resolved(getattr(job, "speakers_resolved", False))
 
 
 class BatchJob:
@@ -123,6 +148,16 @@ class JobStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN settings TEXT")
             if 'youtube_url' not in existing:
                 conn.execute("ALTER TABLE jobs ADD COLUMN youtube_url TEXT")
+            for column, ddl_type in (
+                ("phase", "TEXT"),
+                ("refinement_status", "TEXT"),
+                ("speaker_review_status", "TEXT"),
+                ("auto_speaker_matches", "TEXT"),
+                ("learning_status", "TEXT"),
+                ("learning_summary", "TEXT"),
+            ):
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl_type}")
             conn.commit()
         logger.info(f"Job store initialized at {self.db_path}")
 
@@ -170,23 +205,63 @@ class JobStore:
             except Exception as exc:
                 logger.warning("Periodic prune_completed failed: %s", exc)
 
-    def _row_to_job(self, row) -> TranscriptionJob:
-        job = TranscriptionJob(row[0])
-        job.status = row[1]
-        job.progress = row[2] or 0
-        job.progress_message = row[3] or ""
-        job.result = json.loads(row[4]) if row[4] else None
-        job.error = row[5]
-        job.language = row[6]
-        job.language_probability = row[7]
-        job.segments = json.loads(row[8]) if row[8] else []
-        job.speakers = json.loads(row[9]) if row[9] else []
-        # Plan 7 migration: pre-gate completed jobs are by definition past
-        # the gate (no gate existed when they completed). Flip the default
-        # so they don't get blocked by a UI panel that would never have
-        # rendered for them.
-        if job.status == "completed":
-            job.speakers_resolved = True
+    @staticmethod
+    def _loads_json(value, default=None):
+        if not value:
+            return default
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return default
+
+    def _row_to_job(self, row, description=None) -> TranscriptionJob:
+        columns = [col[0] for col in description] if description else []
+
+        def by_name(name: str, fallback_index: int = None, default=None):
+            if name in columns:
+                return row[columns.index(name)]
+            if fallback_index is not None and fallback_index < len(row):
+                return row[fallback_index]
+            return default
+
+        job = TranscriptionJob(by_name("job_id", 0))
+        job.status = by_name("status", 1)
+        job.progress = by_name("progress", 2) or 0
+        job.progress_message = by_name("progress_message", 3) or ""
+        job.result = self._loads_json(by_name("result", 4), None)
+        job.error = by_name("error", 5)
+        job.language = by_name("language", 6)
+        job.language_probability = by_name("language_probability", 7)
+        job.segments = self._loads_json(by_name("segments", 8), []) or []
+        job.speakers = self._loads_json(by_name("speakers", 9), []) or []
+        job.phase = by_name("phase")
+        job.refinement_status = by_name("refinement_status")
+        job.auto_speaker_matches = self._loads_json(by_name("auto_speaker_matches"), None)
+        job.learning_status = by_name("learning_status")
+        job.learning_summary = self._loads_json(by_name("learning_summary"), None)
+        job.created_at = by_name("created_at")
+
+        review_status = by_name("speaker_review_status")
+        if review_status in (
+            SPEAKER_REVIEW_NOT_NEEDED,
+            SPEAKER_REVIEW_NEEDS_REVIEW,
+            SPEAKER_REVIEW_REVIEWED,
+        ):
+            job.speaker_review_status = review_status
+        elif job.status == "completed":
+            # Completed rows created before speaker review existed should not
+            # render as needing action after reload.
+            job.speaker_review_status = SPEAKER_REVIEW_NOT_NEEDED
+        else:
+            job.speaker_review_status = SPEAKER_REVIEW_NEEDS_REVIEW
+        job.speakers_resolved = _resolved_from_review_status(job.speaker_review_status)
+
+        settings_raw = self._loads_json(by_name("settings"), None)
+        if settings_raw:
+            try:
+                job.settings = TranscriptionSettings(**settings_raw)
+            except Exception:
+                job.settings = settings_raw
         return job
 
     def _job_to_row(self, job: TranscriptionJob, file_path: str = None, settings: dict = None, youtube_url: str = None) -> tuple:
@@ -204,6 +279,12 @@ class JobStore:
             file_path,
             json.dumps(settings) if settings else None,
             youtube_url,
+            job.phase,
+            job.refinement_status,
+            _job_review_status(job),
+            json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
+            job.learning_status,
+            json.dumps(job.learning_summary) if job.learning_summary else None,
         )
 
     def prune_completed(self, max_age_hours: int = 720):
@@ -238,8 +319,10 @@ class JobStore:
                 conn.execute('''
                     INSERT INTO jobs (job_id, status, progress, progress_message,
                                      result, error, language, language_probability,
-                                     segments, speakers, file_path, settings, youtube_url)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     segments, speakers, file_path, settings, youtube_url,
+                                     phase, refinement_status, speaker_review_status,
+                                     auto_speaker_matches, learning_status, learning_summary)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', self._job_to_row(job, file_path, settings, youtube_url))
                 conn.commit()
 
@@ -253,7 +336,7 @@ class JobStore:
                 )
                 row = cursor.fetchone()
                 if row:
-                    job = self._row_to_job(row)
+                    job = self._row_to_job(row, cursor.description)
                     self._cache[job_id] = job
                     return job
             return None
@@ -276,12 +359,17 @@ class JobStore:
 
     def update(self, job: TranscriptionJob):
         with self._lock:
+            job.speaker_review_status = _job_review_status(job)
+            job.speakers_resolved = _resolved_from_review_status(job.speaker_review_status)
             self._cache[job.job_id] = job
             with self._get_connection() as conn:
                 conn.execute('''
                     UPDATE jobs SET status=?, progress=?, progress_message=?,
                                    result=?, error=?, language=?, language_probability=?,
-                                   segments=?, speakers=?, updated_at=CURRENT_TIMESTAMP
+                                   segments=?, speakers=?,
+                                   phase=?, refinement_status=?, speaker_review_status=?,
+                                   auto_speaker_matches=?, learning_status=?, learning_summary=?,
+                                   updated_at=CURRENT_TIMESTAMP
                     WHERE job_id=?
                 ''', (
                     job.status, job.progress, job.progress_message,
@@ -289,6 +377,12 @@ class JobStore:
                     job.error, job.language, job.language_probability,
                     json.dumps(job.segments) if job.segments else None,
                     json.dumps(job.speakers) if job.speakers else None,
+                    job.phase,
+                    job.refinement_status,
+                    _job_review_status(job),
+                    json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
+                    job.learning_status,
+                    json.dumps(job.learning_summary) if job.learning_summary else None,
                     job.job_id
                 ))
                 conn.commit()
@@ -431,7 +525,9 @@ class TranscriptionSettings(BaseModel):
     # so the recording row can show "Processing" while transcription runs.
     original_filename: Optional[str] = None
     two_pass: bool = False
-    # B2: tri-state — None = auto-on if speaker_ids or context_path set; True/False = explicit
+    refinement_mode: Optional[Literal["auto", "always", "off"]] = None
+    # B2: tri-state — None = Auto, True = Always, False = Off.
+    # Auto refines when context_path, speaker_ids, or B5 auto-matched speakers exist.
     auto_refine: Optional[bool] = None
 
 

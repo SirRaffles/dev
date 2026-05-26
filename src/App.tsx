@@ -80,6 +80,7 @@ function App() {
     engine: 'auto-best',
     contextPath: '',
     speakerIds: [] as string[],
+    refinementMode: 'auto',
   });
 
   const [viewMode, setViewMode] = useState<string>(ViewMode.TRANSCRIPT);
@@ -201,6 +202,7 @@ function App() {
       engine: settings.engine,
       contextPath: settings.contextPath,
       speakerIds: settings.speakerIds,
+      refinementMode: settings.refinementMode,
     };
 
     if (files.length > 1) {

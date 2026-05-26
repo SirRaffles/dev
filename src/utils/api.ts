@@ -18,6 +18,8 @@ export interface WakeStatus {
 
 export type RefinementStatus = "pending" | "processing" | "done" | "failed" | null;
 export type LearningStatus = "ok" | "partial" | "failed" | null;
+export type RefinementMode = "auto" | "always" | "off";
+export type SpeakerReviewStatus = "not_needed" | "needs_review" | "reviewed";
 
 export interface LearningSummary {
   embeddings_updated: number;
@@ -62,34 +64,37 @@ export interface JobStatus {
   source?: string;
   // B2 auto-refine fields (populated post-completion by the refinement pipeline).
   refinement_status?: RefinementStatus;
+  refinement_mode?: RefinementMode | null;
+  refinement_reason?: string | null;
   auto_speaker_matches?: Record<string, AutoSpeakerMatch> | null;
   learning_summary?: LearningSummary | null;
   learning_status?: LearningStatus;
   // Sub-plan A: orchestrator's current pipeline phase
   // ("diarizing" | "transcribing" | "aligning" | "refining" | "learning" | null)
   phase?: string | null;
-  // Plan 7: pre-refinement speaker resolution gate. False when the
-  // orchestrator paused for user input (phase === 'awaiting_speakers'),
-  // true after the user submits via POST /job/{id}/confirm-speakers or
-  // when all labels were B5-matched (auto-resolve path). Pre-Plan-7
-  // backends omit this field; readers should default to `true` for
-  // backward compatibility (the legacy flow has no gate).
+  // Compatibility alias. Prefer speaker_review_status for new code.
   speakers_resolved?: boolean;
+  speaker_review_status?: SpeakerReviewStatus;
 }
 
 export async function fetchJobAutoRefineState(jobId: string): Promise<{
   refinement_status: RefinementStatus;
+  refinement_mode: RefinementMode | null;
+  refinement_reason: string | null;
   learning_status: LearningStatus;
   learning_summary: LearningSummary | null;
   auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
   phase: string | null;
   speakers_resolved: boolean;
+  speaker_review_status: SpeakerReviewStatus;
 }> {
   const res = await fetchWithTimeout(`${API_URL}/job/${jobId}`);
   if (!res.ok) throw new Error(`fetchJobAutoRefineState failed: ${res.status}`);
   const j = await res.json();
   return {
     refinement_status: j.refinement_status ?? null,
+    refinement_mode: j.refinement_mode ?? null,
+    refinement_reason: j.refinement_reason ?? null,
     learning_status: j.learning_status ?? null,
     learning_summary: j.learning_summary ?? null,
     auto_speaker_matches: j.auto_speaker_matches ?? null,
@@ -97,6 +102,7 @@ export async function fetchJobAutoRefineState(jobId: string): Promise<{
     // Default to true for backward compat with pre-Plan-7 backends that
     // don't surface this field — those jobs never had a gate to pass.
     speakers_resolved: j.speakers_resolved ?? true,
+    speaker_review_status: j.speaker_review_status ?? (j.speakers_resolved === false ? "needs_review" : "not_needed"),
   };
 }
 
@@ -130,6 +136,8 @@ export interface TranscriptionOptions {
   numSpeakers?: number;
   contextPath?: string;   // Relative path under CONTEXTS_DIR to a .md context document
   speakerIds?: string[];  // Expected speakers — their personality.md is merged into the prompt
+  refinementMode?: RefinementMode;
+  autoRefine?: boolean | null; // undefined/null=Auto, true=Always, false=Off
 }
 
 export interface ExportFormatInfo {
@@ -215,6 +223,14 @@ export function isMediaFile(filename: string): boolean {
   return type === 'audio' || type === 'video';
 }
 
+function appendRefinementMode(params: URLSearchParams, options: TranscriptionOptions) {
+  if (options.refinementMode) {
+    params.append('refinement_mode', options.refinementMode);
+  } else if (options.autoRefine !== undefined && options.autoRefine !== null) {
+    params.append('auto_refine', String(options.autoRefine));
+  }
+}
+
 // API helper functions
 export async function fetchJobStatus(jobId: string, isMultiModal = false): Promise<JobStatus> {
   const endpoint = isMultiModal
@@ -251,6 +267,7 @@ export async function submitTranscription(file: File, options: TranscriptionOpti
   if (options.speakerIds && options.speakerIds.length > 0) {
     params.append('speaker_ids', options.speakerIds.join(','));
   }
+  appendRefinementMode(params, options);
 
   const response = await fetchWithTimeout(`${API_URL}/transcribe/file?${params}`, {
     method: 'POST',
@@ -299,6 +316,7 @@ export async function submitYouTubeTranscription(url: string, options: Transcrip
   if (options.speakerIds && options.speakerIds.length > 0) {
     params.append('speaker_ids', options.speakerIds.join(','));
   }
+  appendRefinementMode(params, options);
 
   // Body contains YouTubeRequest fields
   const response = await fetchWithTimeout(`${API_URL}/transcribe/youtube?${params}`, {
@@ -422,6 +440,7 @@ export async function submitBatchTranscription(files: File[], options: Transcrip
   if (options.speakerIds && options.speakerIds.length > 0) {
     params.append('speaker_ids', options.speakerIds.join(','));
   }
+  appendRefinementMode(params, options);
 
   const response = await fetchWithTimeout(`${API_URL}/transcribe/batch?${params}`, {
     method: 'POST',
@@ -1101,8 +1120,8 @@ export interface ConfirmSpeakersResponse {
 }
 
 /**
- * Plan 7: pre-refinement gate — submit the user's speaker resolution
- * decisions. Same assignment shape as reRefineJob, with one new action
+ * Submit speaker review decisions for labels that still need verification.
+ * Same assignment shape as reRefineJob, with one action
  * value: the literal string "ignore" (leave the label anonymous, no
  * embedding extraction, no profile change; refinement still runs but
  * treats this label as unknown).
@@ -1115,14 +1134,11 @@ export interface ConfirmSpeakersResponse {
  *     embedding)
  *   - "ignore" (no profile change, segments stay anonymous)
  *
- * Backend dispatches a single Sonnet refinement call on success after
- * flipping job.speakers_resolved=true, transitioning job.phase from
- * 'awaiting_speakers' → 'refining' → 'learning' → null.
+ * Backend dispatches a single Sonnet refinement call on success.
  *
  * Failures:
  *   - 404 — job not found
- *   - 409 — speakers_resolved already true (idempotent error: refinement is
- *     either already in progress or done)
+ *   - 409 — speaker review is not pending
  *   - 409 — job status !== 'completed' (transcription still in flight)
  *   - 400 — empty assignments map, or malformed "new:" name
  */

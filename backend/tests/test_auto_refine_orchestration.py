@@ -15,6 +15,15 @@ def test_auto_refine_accepts_explicit_bool():
     assert TranscriptionSettings(auto_refine=False).auto_refine is False
 
 
+def test_refinement_mode_takes_precedence_over_legacy_auto_refine():
+    from job_models import TranscriptionSettings
+    from services.refinement_policy import build_refinement_policy
+    s = TranscriptionSettings(refinement_mode="off", auto_refine=True)
+    policy = build_refinement_policy(s)
+    assert policy.mode == "off"
+    assert policy.should_refine is False
+
+
 def test_transcription_job_has_b2_fields():
     from job_models import TranscriptionJob
     j = TranscriptionJob("test-job")
@@ -163,6 +172,16 @@ def test_auto_refine_decision_default_with_neither():
     from job_models import TranscriptionSettings
     from services.transcription import _should_auto_refine
     assert _should_auto_refine(TranscriptionSettings()) is False
+
+
+def test_auto_refine_decision_default_with_auto_match():
+    from job_models import TranscriptionJob, TranscriptionSettings
+    from services.transcription import _should_auto_refine
+    job = TranscriptionJob("job-auto-match")
+    job.auto_speaker_matches = {
+        "SPEAKER_00": {"matched": True, "speaker_id": "sp-1", "name": "Pascal"},
+    }
+    assert _should_auto_refine(TranscriptionSettings(), job) is True
 
 
 def test_dispatch_submits_to_executor_when_conditions_met(tmp_path, monkeypatch):

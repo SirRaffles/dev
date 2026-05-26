@@ -164,10 +164,15 @@ class TranscriptionClient:
         try:
             with open(file_path, "rb") as f:
                 files = {"file": (file_path.name, f, "audio/mp4")}
+                params = {
+                    key: value
+                    for key, value in TRANSCRIPTION_SETTINGS.items()
+                    if value is not None
+                }
                 response = self.session.post(
                     f"{self.base_url}/transcribe/file",
                     files=files,
-                    params=TRANSCRIPTION_SETTINGS,
+                    params=params,
                     timeout=API_TIMEOUT,
                 )
 

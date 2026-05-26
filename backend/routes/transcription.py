@@ -3,7 +3,6 @@ Transcription API routes: file upload, YouTube, batch, job management, export.
 """
 
 import io
-import json
 import os
 import uuid
 import shutil
@@ -23,10 +22,13 @@ from config import (
 from job_models import (
     TranscriptionJob, BatchJob, TranscriptionSettings,
     YouTubeRequest, SpeakerRenameRequest, SegmentUpdate,
+    SPEAKER_REVIEW_NEEDS_REVIEW, SPEAKER_REVIEW_NOT_NEEDED,
+    SPEAKER_REVIEW_REVIEWED,
 )
 from services.audio import extract_audio
 from services.youtube import download_youtube_audio, extract_video_id, get_youtube_transcript
 from services.transcription import transcribe_audio
+from services.refinement_policy import build_refinement_policy, normalize_refinement_mode
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import state
 
@@ -126,6 +128,8 @@ async def transcribe_file(
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description="Path under CONTEXTS_DIR to a .md context document"),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated speaker UUIDs — their personality.md is fed to the model"),
+    refinement_mode: Optional[Literal["auto", "always", "off"]] = Query(None, description="Refinement mode: auto, always, off"),
+    auto_refine: Optional[bool] = Query(None, description="Refinement mode: omitted=Auto, true=Always, false=Off"),
 ):
     """Upload and transcribe an audio/video file with speaker diarization."""
     _validate_engine_or_400(engine)
@@ -196,7 +200,10 @@ async def transcribe_file(
             context_path=context_path,
             speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
             original_filename=_orig_filename,
+            refinement_mode=normalize_refinement_mode(refinement_mode, auto_refine),
+            auto_refine=auto_refine,
         )
+        job.settings = settings
 
         state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
         background_tasks.add_task(
@@ -226,6 +233,8 @@ async def transcribe_youtube(
     context_terms: Optional[str] = Query(None, description="Comma-separated context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
+    refinement_mode: Optional[Literal["auto", "always", "off"]] = Query(None, description="Refinement mode: auto, always, off"),
+    auto_refine: Optional[bool] = Query(None, description="Refinement mode: omitted=Auto, true=Always, false=Off"),
 ):
     """Download and transcribe audio from a YouTube URL."""
     # Fail fast with 400 (not 500) on malformed URLs — checks the canonical
@@ -239,9 +248,31 @@ async def transcribe_youtube(
     if request.language not in SUPPORTED_LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Use: {list(SUPPORTED_LANGUAGES.keys())}")
 
+    parsed_context_terms = None
+    if context_terms:
+        parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
+
+    settings = TranscriptionSettings(
+        vad_filter=False,
+        word_timestamps=word_timestamps,
+        language=request.language,
+        enable_diarization=request.enable_diarization,
+        num_speakers=num_speakers,
+        enable_noise_reduction=request.enable_noise_reduction,
+        translate_to_english=request.translate_to_english,
+        engine=engine,
+        context_terms=parsed_context_terms,
+        context_path=context_path,
+        speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
+        original_filename=None,
+        refinement_mode=normalize_refinement_mode(refinement_mode, auto_refine),
+        auto_refine=auto_refine,
+    )
+
     job_id = str(uuid.uuid4())
     job = TranscriptionJob(job_id)
-    state.jobs.create(job, youtube_url=request.url)
+    job.settings = settings
+    state.jobs.create(job, youtube_url=request.url, settings=settings.model_dump())
 
     video_id = extract_video_id(request.url)
 
@@ -265,7 +296,25 @@ async def transcribe_youtube(
             # whether these are human-authored or auto-generated captions.
             job.is_generated = bool(transcript.get("is_generated", False))
             job._from_captions = True
+            job.speakers_resolved = True
+            job.speaker_review_status = SPEAKER_REVIEW_NOT_NEEDED
             state.jobs.update(job)
+
+            policy = build_refinement_policy(settings, job)
+            if policy.should_refine and state.refinement_available:
+                try:
+                    from routes.refinement import dispatch_refinement_for_job
+                    dispatch_refinement_for_job(
+                        job,
+                        speaker_ids=policy.speaker_ids,
+                        context_path=settings.context_path,
+                        audio_path=None,
+                    )
+                except Exception:
+                    logger.exception("Captions auto-refine dispatch failed for %s", job_id)
+                    job.refinement_status = "failed"
+                    state.jobs.update(job)
+                    state.refinement_store.update_status(job_id, "failed", "dispatch failed")
 
             return {
                 "job_id": job_id,
@@ -290,38 +339,6 @@ async def transcribe_youtube(
             request.url,
             temp_dir
         )
-
-        parsed_context_terms = None
-        if context_terms:
-            parsed_context_terms = [t.strip() for t in context_terms.split(",") if t.strip()][:100]
-
-        # YouTube route has no uploaded file; carry the URL as a label so
-        # /jpr/recordings can't false-match it, and future debugging has
-        # a stable handle for this job.
-        _orig_filename = None
-        settings = TranscriptionSettings(
-            vad_filter=False,
-            word_timestamps=word_timestamps,
-            language=request.language,
-            enable_diarization=request.enable_diarization,
-            num_speakers=num_speakers,
-            enable_noise_reduction=request.enable_noise_reduction,
-            translate_to_english=request.translate_to_english,
-            engine=engine,
-            context_terms=parsed_context_terms,
-            context_path=context_path,
-            speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
-            original_filename=_orig_filename,
-        )
-
-        # Persist settings for retry capability
-        with state.jobs._lock:
-            with state.jobs._get_connection() as conn:
-                conn.execute(
-                    "UPDATE jobs SET settings=? WHERE job_id=?",
-                    (json.dumps(settings.model_dump()), job_id)
-                )
-                conn.commit()
 
         background_tasks.add_task(transcribe_audio, job_id, audio_path, settings)
 
@@ -349,6 +366,8 @@ async def transcribe_batch(
     context_terms: Optional[str] = Query(None, description="Context terms (advisory)"),
     context_path: Optional[str] = Query(None, description='Path under CONTEXTS_DIR to a .md context document'),
     speaker_ids: Optional[str] = Query(None, description="Comma-separated expected speaker UUIDs"),
+    refinement_mode: Optional[Literal["auto", "always", "off"]] = Query(None, description="Refinement mode: auto, always, off"),
+    auto_refine: Optional[bool] = Query(None, description="Refinement mode: omitted=Auto, true=Always, false=Off"),
 ):
     """Upload and transcribe multiple audio/video files in batch."""
     _validate_engine_or_400(engine)
@@ -388,7 +407,10 @@ async def transcribe_batch(
             context_path=context_path,
             speaker_ids=[s for s in (speaker_ids or "").split(",") if s.strip()] or None,
             original_filename=_orig_filename,
+            refinement_mode=normalize_refinement_mode(refinement_mode, auto_refine),
+            auto_refine=auto_refine,
         )
+        job.settings = settings
 
         # Audit #6: persist via JobStore.create() BEFORE upload so an oversize
         # failure can persist job.status="failed" properly.
@@ -520,6 +542,21 @@ async def get_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    review_status = getattr(job, "speaker_review_status", None)
+    if review_status not in (
+        SPEAKER_REVIEW_NOT_NEEDED,
+        SPEAKER_REVIEW_NEEDS_REVIEW,
+        SPEAKER_REVIEW_REVIEWED,
+    ):
+        review_status = (
+            SPEAKER_REVIEW_NOT_NEEDED
+            if getattr(job, "speakers_resolved", False)
+            else SPEAKER_REVIEW_NEEDS_REVIEW
+        )
+
+    settings = getattr(job, "settings", None)
+    policy = build_refinement_policy(settings, job) if isinstance(settings, TranscriptionSettings) else None
+
     response = {
         "job_id": job.job_id,
         "status": job.status,
@@ -527,10 +564,11 @@ async def get_job_status(job_id: str):
         "progress_message": job.progress_message,
         # Plan 4A: phase pill for phased progress bar
         "phase": getattr(job, "phase", None),
-        # Plan 7: pre-refinement speaker gate — frontend uses this to decide
-        # whether to render the SpeakerReviewPanel in pre-refinement mode
-        # ("Confirm speakers") vs post-refinement mode ("Apply & re-refine").
-        "speakers_resolved": getattr(job, "speakers_resolved", False),
+        "speaker_review_status": review_status,
+        # Compatibility alias for older frontend code.
+        "speakers_resolved": review_status != SPEAKER_REVIEW_NEEDS_REVIEW,
+        "refinement_mode": policy.mode if policy else None,
+        "refinement_reason": policy.reason if policy else None,
         # B2: surface auto-refine indicators for UI polling (None when not applicable)
         "refinement_status": getattr(job, "refinement_status", None),
         "auto_speaker_matches": getattr(job, "auto_speaker_matches", None),
@@ -669,6 +707,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
     settings = TranscriptionSettings(**stored_settings)
     new_job_id = str(uuid.uuid4())
     new_job = TranscriptionJob(new_job_id)
+    new_job.settings = settings
 
     if youtube_url:
         # Re-download and transcribe YouTube
@@ -933,7 +972,7 @@ class ReRefineRequest(BaseModel):
 class ConfirmSpeakersRequest(BaseModel):
     speaker_assignments: dict[str, str]
     # value is one of: existing speaker_id (UUID), "ignore", or "new:<name>".
-    # Plan 7 — pre-refinement speaker resolution gate.
+# Speaker-review assignment endpoint.
 
 
 @router.get("/job/{job_id}/speakers/labels")
@@ -1084,9 +1123,17 @@ def _apply_speaker_assignments(
                 speaker_id = str(_uuid.uuid4())
                 folder = _SPEAKERS_DIR / name
                 folder.mkdir(parents=True, exist_ok=True)
-                (folder / "personality.md").write_text(
-                    f"# {name}\n\n*No personality insights yet.*\n", encoding="utf-8",
-                )
+
+                # Initialize profile artifacts
+                for filename, default_content in (
+                    ("profile.md", f"# Profile: {name}\n\n*Add a factual bio.*\n"),
+                    ("explicit_insights.md", f"# Explicit insights\n\n*Concrete observations will land here.*\n"),
+                    ("implicit_insights.md", f"# Implicit insights\n\n*Inferred personality will land here.*\n"),
+                ):
+                    p = folder / filename
+                    if not p.exists():
+                        p.write_text(default_content, encoding="utf-8")
+
                 state.speaker_store.create(
                     speaker_id, name,
                     str(folder.relative_to(_SPEAKERS_DIR.parent)),
@@ -1298,24 +1345,13 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     # exists. RefinementStore.create() is idempotent (INSERT OR REPLACE — see
     # backend/job_models.py:470) and conveniently resets status='pending'
     # which is exactly what we want here. Mirrors orchestrator.py:191.
-    state.refinement_store.create(job_id)
-
-    from routes.refinement import _set_refinement_status, _run_refinement_for_job
-    from services.transcription import _update_job
-    _set_refinement_status(job, "pending")
-    _update_job(job, phase="refining")
-
-    # Mirror the orchestrator's pattern (services/orchestrator.py:192): mark
-    # the audio file as deferred so the refinement worker — not the original
-    # transcription cleanup path — controls when the temp audio is unlinked.
-    # Without this, a stale cleanup task could yank the file mid-refinement.
-    job._defer_audio_cleanup = True
+    from routes.refinement import dispatch_refinement_for_job
 
     # Dispatch refinement on the same executor pool the orchestrator uses.
     context_path = (job.settings.context_path if getattr(job, "settings", None) else None)
-    state.transcription_executor.submit(
-        _run_refinement_for_job, job_id, speaker_ids, context_path, audio_path,
-    )
+    job.speaker_review_status = SPEAKER_REVIEW_REVIEWED
+    job.speakers_resolved = True
+    dispatch_refinement_for_job(job, speaker_ids, context_path, audio_path)
 
     return {
         "job_id": job_id,
@@ -1328,25 +1364,22 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
 
 @router.post("/job/{job_id}/confirm-speakers")
 async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
-    """Plan 7 — pre-refinement speaker resolution gate.
+    """Apply speaker-review decisions for labels that need verification.
 
-    Called when the orchestrator paused at phase=awaiting_speakers because
-    one or more diarization labels weren't auto-matched by B5. The user
-    has reviewed the labels in the SpeakerReviewPanel and submits
-    assignments. Each value is one of:
+    Called when one or more diarization labels weren't auto-matched by B5.
+    The raw transcript and any allowed first-pass refinement may already be
+    done; the user can still review the labels in the SpeakerReviewPanel and
+    submit assignments. Each value is one of:
       - UUID string → assign to existing profile (extract voice + EMA-update)
       - "new:<name>" → create new profile with this name + extract voice
       - "ignore"     → leave the label anonymous in segments (no profile change)
 
-    Sets speakers_resolved=True, transitions phase to "refining", and
-    dispatches _run_refinement_for_job. Mirrors /re-refine's dispatch
-    pattern (routes/transcription.py:1290-1320).
+    Sets speaker_review_status="reviewed" and dispatches _run_refinement_for_job.
 
     Failures:
       - 404 if job not found
       - 409 if job.status != "completed" (gate is only reachable post-alignment)
-      - 409 if speakers_resolved already True (idempotent — refinement is
-        either in flight or has already run; user should use /re-refine)
+      - 409 if speaker review is not pending
       - 400 if speaker_assignments is empty
       - 400 if "new:name" name is malformed (anonymous-looking)
 
@@ -1363,10 +1396,10 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
             status_code=409,
             detail=f"Job must be completed (currently {job.status!r})",
         )
-    if getattr(job, "speakers_resolved", False):
+    if getattr(job, "speaker_review_status", None) != SPEAKER_REVIEW_NEEDS_REVIEW:
         raise HTTPException(
             status_code=409,
-            detail="Speakers already resolved for this job; "
+            detail="Speaker review is not pending or already applied for this job; "
                    "use /re-refine to apply further corrections",
         )
     if not req.speaker_assignments:
@@ -1438,17 +1471,9 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
         if r.get("created") and r.get("speaker_name") in new_names
     ]
 
-    # Flip the gate + transition phase. Refinement store row is created
-    # idempotently (INSERT OR REPLACE — see job_models.py).
-    state.refinement_store.create(job_id)
-
-    from routes.refinement import _set_refinement_status, _run_refinement_for_job
-    from services.transcription import _update_job
-
+    from routes.refinement import dispatch_refinement_for_job
     job.speakers_resolved = True
-    _set_refinement_status(job, "pending")
-    _update_job(job, phase="refining")
-    job._defer_audio_cleanup = True
+    job.speaker_review_status = SPEAKER_REVIEW_REVIEWED
 
     # Source speaker_ids from helper output (NOT from req.speaker_assignments
     # directly) so that newly-created profiles — whose UUIDs are minted inside
@@ -1461,9 +1486,7 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
     context_path = (
         job.settings.context_path if getattr(job, "settings", None) else None
     )
-    state.transcription_executor.submit(
-        _run_refinement_for_job, job_id, speaker_ids, context_path, audio_path,
-    )
+    dispatch_refinement_for_job(job, speaker_ids, context_path, audio_path)
 
     return {
         "job_id": job_id,

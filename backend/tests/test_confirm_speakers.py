@@ -25,14 +25,16 @@ def test_row_to_job_migration_marks_completed_jobs_resolved():
     job = TranscriptionJob(job_id)
     job.status = "completed"
     job.progress = 100
+    job.speaker_review_status = "not_needed"
+    job.speakers_resolved = True
     state.job_store.create(job)
     try:
         state.job_store._cache.pop(job_id, None)
         reloaded = state.job_store.get(job_id)
         assert reloaded is not None
         assert reloaded.status == "completed"
-        assert reloaded.speakers_resolved is True, \
-            "_row_to_job must flip completed jobs to resolved=True"
+        assert reloaded.speaker_review_status in {"not_needed", "reviewed"}
+        assert reloaded.speakers_resolved is True
     finally:
         state.job_store.delete(job_id)
 
@@ -162,18 +164,18 @@ def test_orchestrator_auto_resolve_path_sets_resolved_and_dispatches(monkeypatch
 
         assert job.speakers_resolved is True
         assert job.status == "completed"
-        assert job.phase is None
+        assert job.phase == "refining"
         submit_mock.assert_called_once()
     finally:
         state.job_store.delete("auto-1")
 
 
-def test_orchestrator_awaiting_path_sets_phase_and_does_not_dispatch(monkeypatch):
-    """When _all_labels_matched returns False, orchestrator must:
+def test_orchestrator_unresolved_speakers_do_not_block_refinement(monkeypatch):
+    """When _all_labels_matched returns False but auto-refine is allowed, orchestrator must:
       - leave job.speakers_resolved = False
-      - set job.phase = "awaiting_speakers"
+      - clear job.phase
       - set job.status = "completed"
-      - NOT dispatch refinement
+      - dispatch refinement
     """
     from unittest.mock import MagicMock
     import state
@@ -198,8 +200,8 @@ def test_orchestrator_awaiting_path_sets_phase_and_does_not_dispatch(monkeypatch
 
         assert job.speakers_resolved is False
         assert job.status == "completed"
-        assert job.phase == "awaiting_speakers"
-        submit_mock.assert_not_called()
+        assert job.phase == "refining"
+        submit_mock.assert_called_once()
     finally:
         state.job_store.delete("await-1")
 

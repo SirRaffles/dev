@@ -1,13 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
-import { fetchJobAutoRefineState, RefinementStatus, LearningStatus, LearningSummary, AutoSpeakerMatch } from '../utils/api';
+import { fetchJobAutoRefineState, RefinementStatus, LearningStatus, LearningSummary, AutoSpeakerMatch, RefinementMode, SpeakerReviewStatus } from '../utils/api';
 
 interface AutoRefineState {
   refinement_status: RefinementStatus;
+  refinement_mode: RefinementMode | null;
+  refinement_reason: string | null;
   learning_status: LearningStatus;
   learning_summary: LearningSummary | null;
   auto_speaker_matches: Record<string, AutoSpeakerMatch> | null;
   phase: string | null;
   speakers_resolved: boolean;
+  speaker_review_status: SpeakerReviewStatus;
 }
 
 const TERMINAL_REFINEMENT = new Set<string>(['done', 'failed']);
@@ -18,23 +21,19 @@ const POLL_INTERVAL_MS = 5000;  // Per user decision Q6: 5s constant, no backoff
  * Active only when the transcription job is `completed` (so the parent
  * transcription poller has already stopped).
  *
- * Stop condition: we need ALL THREE of:
- *   - speakers_resolved === true   (user passed the Plan 7 gate, or it auto-resolved)
- *   - refinement_status === 'done' (Sonnet refinement finished)
- *   - phase === null               (B7 learning phase also finished)
+ * Stop condition: if no refinement is planned, stop once phase is clear. If
+ * refinement runs, stop after refinement+learning are done.
  *
- * The backend's lifecycle is:
- *   awaiting_speakers (speakers_resolved=false, phase='awaiting_speakers')
- *     → user confirms →
- *   refining (speakers_resolved=true, refinement_status='processing', phase='refining')
+ * The backend's refinement lifecycle is:
+ *   raw transcript completed (speakers_resolved may still be false)
+ *     → refining (refinement_status='processing', phase='refining')
  *     → refinement_status='done', phase='learning'   (post-refinement workers)
  *     → refinement_status='done', phase=null         (everything finished)
  *
  * Stopping at refinement_status='done' alone would park the UI on
  * phase='learning' forever (the user sees "Learning…" stuck because the
- * later phase=null update is never fetched). Stopping when
- * speakers_resolved is still false would freeze the panel before the
- * user has clicked Confirm.
+ * later phase=null update is never fetched). speakers_resolved=false is now
+ * a review signal, not a polling blocker.
  *
  * `failed` is a hard terminal: phase / speakers_resolved may or may not
  * change, but no more meaningful transitions happen, so stop immediately.
@@ -61,7 +60,11 @@ export function useJobAutoRefinePolling(jobId: string | null, jobCompleted: bool
           stopRef.current = true;
           return;
         }
-        if (next.speakers_resolved && ref === 'done' && next.phase === null) {
+        if (ref === null && next.phase === null) {
+          stopRef.current = true;
+          return;
+        }
+        if (ref === 'done' && next.phase === null) {
           stopRef.current = true;
           return;
         }

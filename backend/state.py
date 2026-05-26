@@ -9,7 +9,15 @@ import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
+from migrations import run_migrations
 from job_models import JobStore, RefinementStore, SpeakerStore, CallSpeakerStore, CallMetadataStore
+
+
+DB_PATH = os.path.expanduser("~/.whisper_transcription_jobs.db")
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
+run_migrations(DB_PATH)
 
 
 class BoundedDict:
@@ -103,22 +111,22 @@ _claude_path = _shutil.which("claude")
 if _claude_path:
     from services.refinement import RefinementService
     refinement_service = RefinementService(_claude_path)
-    refinement_store = RefinementStore()
+    refinement_store = RefinementStore(DB_PATH)
     refinement_available = True
 
 # Application startup time for uptime tracking
 startup_time = None
 
 # Job stores
-job_store = JobStore()
+job_store = JobStore(DB_PATH)
 batch_jobs = BoundedDict(max_size=500)
 multimodal_jobs = BoundedDict(max_size=500)
 jobs = job_store  # Legacy compatibility alias
 
 # Call intelligence stores
-speaker_store = SpeakerStore()
-call_speaker_store = CallSpeakerStore()
-call_metadata_store = CallMetadataStore()
+speaker_store = SpeakerStore(DB_PATH)
+call_speaker_store = CallSpeakerStore(DB_PATH)
+call_metadata_store = CallMetadataStore(DB_PATH)
 
 # Speaker embedding service (lazy-loaded, uses pyannote)
 _speaker_embedding_service = None

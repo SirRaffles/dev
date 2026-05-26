@@ -8,14 +8,13 @@ const PHASE_LABELS: Record<string, string> = {
   diarizing: 'Diarizing…',
   transcribing: 'Transcribing…',
   aligning: 'Aligning…',
-  awaiting_speakers: 'Awaiting speakers',
+  awaiting_speakers: 'Speakers to verify',
   refining: 'Refining…',
   learning: 'Learning…',
 };
 
 // Per-phase color overrides. Default = blue (active processing). The
-// `awaiting_speakers` phase is a user-action signal — amber/yellow matches
-// the "needs attention" semantics used elsewhere in the app.
+// Legacy `awaiting_speakers` phase is a user-action signal.
 const PHASE_COLORS: Record<string, { pill: string; dot: string }> = {
   awaiting_speakers: {
     pill: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',

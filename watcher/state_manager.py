@@ -151,6 +151,17 @@ class StateManager:
         self._save_state()
         logger.info(f"Marked as completed: {file_path.name}")
 
+    def mark_refinement(self, file_path: Path, status: str, refined_path: Optional[Path] = None) -> None:
+        """Record refinement outcome independently of base transcription."""
+        key = str(file_path.resolve())
+        entry = self.state["processed_files"].get(key, {})
+        entry["refinement_status"] = status
+        entry["refinement_updated_at"] = datetime.now().isoformat()
+        if refined_path is not None:
+            entry["refined_transcript_path"] = str(refined_path.resolve())
+        self.state["processed_files"][key] = entry
+        self._save_state()
+
     def mark_permanently_failed(self, file_path: Path, error: str) -> None:
         """Mark a file as permanently failed (will not be retried)."""
         key = str(file_path.resolve())

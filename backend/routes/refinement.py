@@ -34,6 +34,29 @@ def _set_refinement_status(job, status: str) -> None:
         logger.debug("jobs.update mirror failed for job %s", job.job_id, exc_info=True)
 
 
+def dispatch_refinement_for_job(
+    job,
+    speaker_ids: Optional[List[str]] = None,
+    context_path: Optional[str] = None,
+    audio_path: Optional[str] = None,
+) -> None:
+    """Create/reset refinement state and submit the worker once."""
+    if not job:
+        raise ValueError("job is required")
+    state.refinement_store.create(job.job_id)
+    _set_refinement_status(job, "pending")
+    from services.transcription import _update_job
+    _update_job(job, phase="refining")
+    job._defer_audio_cleanup = True
+    state.transcription_executor.submit(
+        _run_refinement_for_job,
+        job.job_id,
+        speaker_ids,
+        context_path,
+        audio_path,
+    )
+
+
 def _cleanup_deferred_audio(audio_path: Optional[str]) -> None:
     """Delete the tmp audio file (and its tmp parent dir) that
     _run_transcription_sync deferred to us. No-op when audio_path is None,
@@ -42,10 +65,16 @@ def _cleanup_deferred_audio(audio_path: Optional[str]) -> None:
         return
     try:
         parent_dir = os.path.dirname(audio_path)
+        # Audit #24: ONLY delete if the file is in a temporary directory.
+        # Simple os.remove(audio_path) was deleting original JPR files
+        # when resolved via the rglob fallback.
         if parent_dir and os.path.isdir(parent_dir) and parent_dir.startswith(tempfile.gettempdir()):
-            shutil.rmtree(parent_dir, ignore_errors=True)
-        elif os.path.exists(audio_path):
-            os.remove(audio_path)
+            if os.path.isdir(parent_dir):
+                shutil.rmtree(parent_dir, ignore_errors=True)
+            elif os.path.exists(audio_path):
+                os.remove(audio_path)
+        else:
+            logger.debug("Skipping cleanup for non-tmp audio path: %s", audio_path)
     except Exception:
         logger.debug("B7 audio cleanup failed for %s", audio_path, exc_info=True)
 
@@ -337,11 +366,16 @@ async def start_refinement(job_id: str, background_tasks: BackgroundTasks):
     if existing and existing["status"] == "processing":
         return {"job_id": job_id, "status": "processing", "message": "Refinement already in progress"}
 
-    # Create refinement entry
-    state.refinement_store.create(job_id)
-
-    # Start background task
-    background_tasks.add_task(_run_refinement, job_id)
+    try:
+        from routes.transcription import _resolve_job_audio_path
+        audio_path = _resolve_job_audio_path(job_id)
+    except Exception:
+        audio_path = None
+    try:
+        dispatch_refinement_for_job(job, speaker_ids=None, context_path=None, audio_path=audio_path)
+    except Exception as exc:
+        logger.exception("Manual refinement dispatch failed for %s", job_id)
+        raise HTTPException(status_code=500, detail=f"Failed to start refinement: {exc}")
 
     return {"job_id": job_id, "status": "pending", "message": "Refinement started"}
 

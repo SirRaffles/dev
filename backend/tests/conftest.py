@@ -2,12 +2,28 @@
 
 import json
 import os
+import sys
 import tempfile
+import types
 import uuid
 
 import pytest
 import pytest_asyncio
 import httpx
+
+_TEST_HOME = os.path.join(tempfile.gettempdir(), "whisper_test_home")
+os.makedirs(_TEST_HOME, exist_ok=True)
+os.environ["HOME"] = _TEST_HOME
+os.environ.setdefault("LOG_FILE", os.path.join(tempfile.gettempdir(), "whisper_test.log"))
+
+if "mlx_whisper" not in sys.modules:
+    mlx_whisper = types.ModuleType("mlx_whisper")
+    mlx_whisper.transcribe = lambda *args, **kwargs: {
+        "segments": [],
+        "text": "",
+        "language": "unknown",
+    }
+    sys.modules["mlx_whisper"] = mlx_whisper
 
 
 @pytest.fixture(scope="session", autouse=True)

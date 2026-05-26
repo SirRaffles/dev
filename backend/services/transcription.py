@@ -389,14 +389,10 @@ def transcribe_with_whisper(audio_path: str, settings: TranscriptionSettings, jo
     }
 
 
-def _should_auto_refine(settings: TranscriptionSettings) -> bool:
-    """B2 trigger rule. Tri-state auto_refine: explicit True/False overrides;
-    None means auto-on iff speaker_ids or context_path is set."""
-    if settings.auto_refine is True:
-        return True
-    if settings.auto_refine is False:
-        return False
-    return bool(settings.speaker_ids or settings.context_path)
+def _should_auto_refine(settings: TranscriptionSettings, job=None) -> bool:
+    """Compatibility wrapper around the explicit refinement policy."""
+    from services.refinement_policy import build_refinement_policy
+    return build_refinement_policy(settings, job).should_refine
 
 
 _PHASE_UNSET = object()  # sentinel — distinguishes "not provided" from explicit None
@@ -472,10 +468,16 @@ def _run_transcription_sync(job_id: str, audio_path: str, settings: Transcriptio
             return
         try:
             parent_dir = os.path.dirname(audio_path)
+            # Audit #24: ONLY delete if the file is in a temporary directory.
+            # Simple os.remove(audio_path) was deleting original JPR files
+            # when resolved via the rglob fallback.
             if parent_dir and os.path.isdir(parent_dir) and parent_dir.startswith(tempfile.gettempdir()):
-                shutil.rmtree(parent_dir, ignore_errors=True)
-            elif os.path.exists(audio_path):
-                os.remove(audio_path)
+                if os.path.isdir(parent_dir):
+                    shutil.rmtree(parent_dir, ignore_errors=True)
+                elif os.path.exists(audio_path):
+                    os.remove(audio_path)
+            else:
+                logger.debug("Skipping cleanup for non-tmp audio path: %s", audio_path)
         except Exception:
             pass
 

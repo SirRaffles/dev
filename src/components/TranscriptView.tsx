@@ -412,6 +412,15 @@ function TranscriptView({
         {refineState?.refinement_status && (
           <RefinementBadge status={refineState.refinement_status} />
         )}
+        {refineState?.refinement_reason && refineState.refinement_status == null && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+            {refineState.refinement_reason === 'no_context_or_speakers'
+              ? 'Skipped refinement: no context or recognized speakers'
+              : refineState.refinement_reason === 'off'
+                ? 'Refinement off'
+                : `Refinement: ${refineState.refinement_reason.replace(/_/g, ' ')}`}
+          </span>
+        )}
         {displayFilename && (
           <button
             type="button"
@@ -460,6 +469,7 @@ function TranscriptView({
           autoMatches={autoMatches}
           currentPhase={refineState?.phase ?? null}
           speakersResolved={refineState?.speakers_resolved ?? true}
+          speakerReviewStatus={refineState?.speaker_review_status}
           onReRefineStart={() => {
             // No-op for now — the polling hook re-derives segments + matches
             // once the backend completes. A future hook could clear manual

@@ -20,6 +20,10 @@ MAX_POLL_TIME = 3600  # 1 hour max transcription time (for long recordings)
 # Transcription settings
 # Using Whisper for watcher (reliable for long recordings, ~10% WER)
 # Voxtral Local has better accuracy but OOM issues on 80+ min files on 24GB M3
+WATCHER_REFINEMENT_MODE = os.environ.get("WATCHER_REFINEMENT_MODE", "auto").lower()
+if WATCHER_REFINEMENT_MODE not in {"auto", "always", "off"}:
+    WATCHER_REFINEMENT_MODE = "auto"
+
 TRANSCRIPTION_SETTINGS = {
     "language": "auto",
     "enable_diarization": True,
@@ -27,6 +31,7 @@ TRANSCRIPTION_SETTINGS = {
     "word_timestamps": False,
     "translate_to_english": False,
     "engine": "auto-best",
+    "refinement_mode": WATCHER_REFINEMENT_MODE,
 }
 
 # Call intelligence: auto-register calls and identify speakers after transcription

@@ -42,10 +42,10 @@ from config import (
     LOG_FILE,
     LOG_LEVEL,
     LOG_MAX_BYTES,
-    REFINEMENT_TIMEOUT,
     SYNC_CHECK_INTERVAL,
     SYNC_STABILITY_DELAY,
     SYNC_TIMEOUT,
+    TRANSCRIPTION_SETTINGS,
     WATCH_EXTENSIONS,
 )
 from notifier import (
@@ -283,7 +283,7 @@ def process_file(
             logger.debug(f"  {filename}: {progress}% - {message}")
 
         # Poll until complete
-        client.poll_until_complete(job_id, progress_callback=on_progress)
+        completed_status = client.poll_until_complete(job_id, progress_callback=on_progress)
 
         # Download transcript
         transcript_text = client.get_transcript_text(job_id)
@@ -292,28 +292,54 @@ def process_file(
         transcript_path.write_text(transcript_text, encoding="utf-8")
         logger.info(f"Saved transcript: {transcript_path.name}")
 
-        # Auto-refine if enabled (non-blocking — failures never prevent base pipeline)
+        # Export backend-launched auto-refinement if present. The backend owns
+        # the Auto/Always/Off decision; the watcher must not blindly submit a
+        # second /refine request after transcription completes.
         if ENABLE_REFINEMENT:
             try:
                 refined_path = file_path.with_suffix(".refined.txt")
-                logger.info(f"Starting refinement for: {filename}")
 
-                # Submit refinement
-                if client.submit_refinement(job_id):
-                    # Poll until complete
-                    refinement_result = client.poll_refinement(job_id)
+                latest_status = completed_status
+                # The backend marks the job completed just before creating the
+                # refinement row. Allow a brief grace window for that dispatch.
+                for _ in range(3):
+                    if latest_status.get("refinement_status") is not None:
+                        break
+                    latest_status = client.get_job_status(job_id)
+                    if latest_status.get("refinement_status") is not None:
+                        break
+                    time.sleep(2)
+
+                refinement_status = latest_status.get("refinement_status")
+                if refinement_status in {"pending", "processing", "done"}:
+                    logger.info(f"Waiting for backend refinement for: {filename}")
+                    refinement_result = (
+                        {"status": "completed"}
+                        if refinement_status == "done"
+                        else client.poll_refinement(job_id)
+                    )
                     if refinement_result:
-                        # Download refined text
                         refined_text = client.get_refined_transcript_text(job_id)
                         if refined_text:
                             refined_path.write_text(refined_text, encoding="utf-8")
+                            state.mark_refinement(file_path, "completed", refined_path)
                             logger.info(f"Saved refined transcript: {refined_path.name}")
                         else:
+                            state.mark_refinement(file_path, "failed")
                             logger.warning(f"Refinement completed but could not download text for: {filename}")
                     else:
+                        state.mark_refinement(file_path, "failed")
                         logger.warning(f"Refinement did not complete for: {filename}")
+                elif refinement_status == "failed":
+                    state.mark_refinement(file_path, "failed")
+                    logger.warning(f"Backend refinement failed for: {filename}")
                 else:
-                    logger.info(f"Refinement not available, skipping for: {filename}")
+                    state.mark_refinement(file_path, "not_planned")
+                    logger.info(
+                        "No backend refinement planned for %s (refinement_mode=%r)",
+                        filename,
+                        TRANSCRIPTION_SETTINGS.get("refinement_mode"),
+                    )
             except Exception as e:
                 logger.warning(f"Refinement failed for {filename} (non-blocking): {e}")
 

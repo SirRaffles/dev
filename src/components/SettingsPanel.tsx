@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Languages, Globe, Users, Volume2, VolumeX, FolderOpen } from 'lucide-react';
+import { Languages, Globe, Users, Volume2, VolumeX, FolderOpen, Shield, Sparkles } from 'lucide-react';
 import { LANGUAGES, fetchContextTree, ContextTree, fetchSpeakers, createSpeaker, Speaker } from '../utils/api';
 import QualityDial, { QualityMode } from './QualityDial';
 
@@ -12,6 +12,8 @@ interface Settings {
   engine?: QualityMode;          // 'auto-best' | 'auto-quick'
   contextPath?: string;          // path under CONTEXTS_DIR to a .md file or folder
   speakerIds?: string[];         // expected speakers — their personality.md feeds the prompt
+  refinementMode?: 'auto' | 'always' | 'off';
+  autoRefine?: boolean | null;   // null/undefined = Auto, true = Always, false = Off
   [key: string]: any;
 }
 
@@ -37,6 +39,8 @@ function SettingsPanel({
     engine = 'auto-best',
     contextPath = '',
     speakerIds = [] as string[],
+    autoRefine = null,
+    refinementMode = autoRefine === true ? 'always' : autoRefine === false ? 'off' : 'auto',
   } = settings;
 
   const handleChange = (key: string, value: any) => {
@@ -164,6 +168,21 @@ function SettingsPanel({
         disabled={disabled}
       />
 
+      {/* Privacy Notice for Refinement */}
+      {safeEngine === 'auto-best' && (
+        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800/30 flex gap-3">
+          <Shield className="w-5 h-5 text-blue-500 flex-shrink-0" />
+          <div className="text-xs text-blue-700 dark:text-blue-300">
+            <p className="font-semibold mb-1">Privacy Notice: Transcript Refinement</p>
+            <p>
+              The 'Best' pipeline uses Claude Sonnet to identify speakers and correct technical terms.
+              If enabled by your administrator, uncertain terms may be verified via DuckDuckGo search
+              to ensure spelling accuracy. No audio data or PII is sent to external search engines.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Settings Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Language Selection */}
@@ -283,6 +302,39 @@ function SettingsPanel({
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Attach a context document (glossary, acronyms, background) from your Contexts library to bias transcription. Optional.
           </p>
+        </div>
+
+        {/* Refinement Mode */}
+        <div>
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
+            <Sparkles className="w-4 h-4" />
+            Refinement
+          </label>
+          <div className="grid grid-cols-3 rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden">
+            {[
+              { label: 'Auto', value: null },
+              { label: 'Always', value: true },
+              { label: 'Off', value: false },
+            ].map((option) => {
+              const mode = option.value === true ? 'always' : option.value === false ? 'off' : 'auto';
+              const active = refinementMode === mode;
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => handleChange('refinementMode', mode)}
+                  disabled={disabled}
+                  className={`px-2 py-3 text-sm font-medium transition-colors disabled:opacity-50 ${
+                    active
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Noise Reduction (migrated out of removed Advanced block) */}
