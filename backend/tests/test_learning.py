@@ -223,7 +223,7 @@ def test_extract_insights_auto_returns_count_and_logs_events(icloud_base, monkey
     }
     # Patch the existing extraction function in its real module
     monkeypatch.setattr(
-        "routes.transcription._extract_speaker_insights_sync",
+        "services.learning._extract_speaker_insights_sync",
         lambda job_id: fake_result,
     )
 
@@ -242,7 +242,7 @@ def test_extract_insights_auto_returns_count_and_logs_events(icloud_base, monkey
 def test_extract_insights_auto_returns_zero_on_no_updates(icloud_base, monkeypatch):
     learning = _reload_learning()
     monkeypatch.setattr(
-        "routes.transcription._extract_speaker_insights_sync",
+        "services.learning._extract_speaker_insights_sync",
         lambda job_id: {"updated": [], "skipped": [{"speaker": "X", "reason": "no lines"}],
                          "errors": []},
     )
@@ -255,7 +255,7 @@ def test_extract_insights_auto_handles_helper_exception(icloud_base, monkeypatch
     learning = _reload_learning()
     def boom(job_id):
         raise RuntimeError("claude unreachable")
-    monkeypatch.setattr("routes.transcription._extract_speaker_insights_sync", boom)
+    monkeypatch.setattr("services.learning._extract_speaker_insights_sync", boom)
 
     n = learning.extract_insights_auto(job_id="j-ins-boom")
     assert n == 0
@@ -277,7 +277,7 @@ def test_extract_insights_auto_emits_insight_failed_for_per_speaker_errors(iclou
         ],
     }
     monkeypatch.setattr(
-        "routes.transcription._extract_speaker_insights_sync",
+        "services.learning._extract_speaker_insights_sync",
         lambda job_id: fake_result,
     )
 
