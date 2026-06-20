@@ -14,47 +14,18 @@ from fastapi.responses import PlainTextResponse
 import state
 from utils.export import format_timestamp
 
+# dispatch_refinement_for_job + its shared _set_refinement_status helper now live
+# in the service layer (S5) so the orchestrator can dispatch without importing a
+# route. Re-exported here so existing in-route and cross-route callers keep
+# working via `from routes.refinement import dispatch_refinement_for_job`.
+from services.refinement_dispatch import (  # noqa: F401
+    dispatch_refinement_for_job,
+    _set_refinement_status,
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/refine", tags=["refinement"])
-
-
-def _set_refinement_status(job, status: str) -> None:
-    """Mirror refinement_status onto the in-memory job and persist via state.jobs.update.
-
-    Logs (debug) and swallows on persistence failure -- the in-memory attribute
-    is what UI polls.
-    """
-    if job is None:
-        return
-    job.refinement_status = status
-    try:
-        state.jobs.update(job)
-    except Exception:
-        logger.debug("jobs.update mirror failed for job %s", job.job_id, exc_info=True)
-
-
-def dispatch_refinement_for_job(
-    job,
-    speaker_ids: Optional[List[str]] = None,
-    context_path: Optional[str] = None,
-    audio_path: Optional[str] = None,
-) -> None:
-    """Create/reset refinement state and submit the worker once."""
-    if not job:
-        raise ValueError("job is required")
-    state.refinement_store.create(job.job_id)
-    _set_refinement_status(job, "pending")
-    from services.transcription import _update_job
-    _update_job(job, phase="refining")
-    job._defer_audio_cleanup = True
-    state.transcription_executor.submit(
-        _run_refinement_for_job,
-        job.job_id,
-        speaker_ids,
-        context_path,
-        audio_path,
-    )
 
 
 def _cleanup_deferred_audio(audio_path: Optional[str]) -> None:
