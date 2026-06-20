@@ -11,7 +11,8 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-import state
+import app_state
+import state  # noqa: F401 — re-exported so tests can monkeypatch refmod.state.* (reach-through to the real state module read live by app_state)
 from utils.export import format_timestamp
 
 # dispatch_refinement_for_job + its shared _set_refinement_status helper now live
@@ -60,7 +61,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
     """
     # Plan 4A: phase pill — learning is now active.
     from services.transcription import _update_job
-    _job = state.jobs.get(job_id)
+    _job = app_state.jobs().get(job_id)
     if _job is not None:
         _update_job(_job, phase="learning")
 
@@ -83,7 +84,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
     # timings, then mutate job.segments in place.
     # Use state.jobs (alias of state.job_store) for consistency with the
     # surrounding orchestrator body (lines below).
-    job_for_overlay = state.jobs.get(job_id)
+    job_for_overlay = app_state.jobs().get(job_id)
     if job_for_overlay is not None and job_for_overlay.segments and segments:
         refined_by_span = {
             (round(float(s.get("start", 0)), 2),
@@ -100,7 +101,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
                 overlaid = True
         if overlaid:
             try:
-                state.jobs.update(job_for_overlay)
+                app_state.jobs().update(job_for_overlay)
             except Exception:
                 logger.debug("jobs.update after overlay failed for %s",
                              job_id, exc_info=True)
@@ -110,7 +111,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
     # diarization step populate job.speakers with pyannote-shaped turns; fall
     # back to synthesizing from refined segments only if job.speakers is empty.
     # Use state.jobs (NOT state.job_store) — convention matches _run_transcription_sync.
-    job_for_turns = state.jobs.get(job_id)
+    job_for_turns = app_state.jobs().get(job_id)
     raw_turns = (job_for_turns.speakers if job_for_turns is not None else None) or []
     if raw_turns:
         speaker_turns = [
@@ -158,7 +159,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
     # Use state.jobs (same convention as _run_transcription_sync). state.job_store
     # is an alias bound at module load, but monkeypatching one in tests does NOT
     # update the other — so be consistent with the writer-side convention.
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if job is not None:
         job.learning_summary = {
             "embeddings_updated": emb_count,
@@ -172,7 +173,7 @@ def _run_post_refinement_learning(job_id: str, audio_path: Optional[str],
         else:
             job.learning_status = "failed"
         try:
-            state.jobs.update(job)
+            app_state.jobs().update(job)
         except Exception:
             logger.debug("jobs.update mirror failed for job %s", job_id, exc_info=True)
 
@@ -200,13 +201,13 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
     )
     from services.glossary import load_global_glossary, load_global_glossary_terms
 
-    job = state.job_store.get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
-        state.refinement_store.update_status(job_id, "failed", "Job not found")
+        app_state.refinement_store().update_status(job_id, "failed", "Job not found")
         return
 
     try:
-        state.refinement_store.update_status(job_id, "processing")
+        app_state.refinement_store().update_status(job_id, "processing")
         _set_refinement_status(job, "processing")
 
         # Plan 4A: phase pill — refinement is now active.
@@ -214,14 +215,14 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
         _update_job(job, phase="refining")
 
         if job.status != "completed":
-            state.refinement_store.update_status(
+            app_state.refinement_store().update_status(
                 job_id, "failed", f"Job status is '{job.status}', not 'completed'"
             )
             _set_refinement_status(job, "failed")
             return
 
         if not job.segments:
-            state.refinement_store.update_status(job_id, "failed", "Job has no segments")
+            app_state.refinement_store().update_status(job_id, "failed", "Job has no segments")
             _set_refinement_status(job, "failed")
             return
 
@@ -269,13 +270,13 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
                 if (seg.get("speaker") or "").strip()
             ]
 
-        result = state.refinement_service.refine(
+        result = app_state.refinement_service().refine(
             job.segments,
             context_text=context_text,
             glossary_terms=glossary_terms,
             speaker_turns=speaker_turns or None,
         )
-        state.refinement_store.save_result(job_id, result)
+        app_state.refinement_store().save_result(job_id, result)
         _set_refinement_status(job, "done")
         logger.info("Refinement complete for job %s", job_id)
 
@@ -292,7 +293,7 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
 
     except Exception as e:
         logger.exception("Refinement failed for job %s", job_id)
-        state.refinement_store.update_status(job_id, "failed", str(e))
+        app_state.refinement_store().update_status(job_id, "failed", str(e))
         _set_refinement_status(job, "failed")
     finally:
         # B7 deferred cleanup: _run_transcription_sync skipped tmp-audio cleanup
@@ -318,11 +319,11 @@ def _run_refinement(job_id: str):
 @router.post("/job/{job_id}")
 async def start_refinement(job_id: str, background_tasks: BackgroundTasks):
     """Start transcript refinement for a completed transcription job."""
-    if not state.refinement_available:
+    if not app_state.refinement_available():
         raise HTTPException(status_code=503, detail="Refinement not available (claude CLI not found)")
 
     # Check job exists
-    job = state.job_store.get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -333,7 +334,7 @@ async def start_refinement(job_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Job has no segments to refine")
 
     # Check if refinement already exists
-    existing = state.refinement_store.get(job_id)
+    existing = app_state.refinement_store().get(job_id)
     if existing and existing["status"] == "processing":
         return {"job_id": job_id, "status": "processing", "message": "Refinement already in progress"}
 
@@ -354,10 +355,10 @@ async def start_refinement(job_id: str, background_tasks: BackgroundTasks):
 @router.get("/job/{job_id}")
 async def get_refinement_status(job_id: str):
     """Get refinement status and results."""
-    if not state.refinement_available:
+    if not app_state.refinement_available():
         raise HTTPException(status_code=503, detail="Refinement not available")
 
-    refinement = state.refinement_store.get(job_id)
+    refinement = app_state.refinement_store().get(job_id)
     if not refinement:
         raise HTTPException(status_code=404, detail="No refinement found for this job")
 
@@ -370,10 +371,10 @@ async def export_refined_transcript(
     format: str = Query("txt", description="Export format (txt)"),
 ):
     """Export the refined transcript as plain text."""
-    if not state.refinement_available:
+    if not app_state.refinement_available():
         raise HTTPException(status_code=503, detail="Refinement not available")
 
-    refinement = state.refinement_store.get(job_id)
+    refinement = app_state.refinement_store().get(job_id)
     if not refinement:
         raise HTTPException(status_code=404, detail="No refinement found for this job")
 
@@ -407,12 +408,12 @@ async def batch_refine(
     background_tasks: BackgroundTasks,
 ):
     """Start refinement for multiple completed jobs."""
-    if not state.refinement_available:
+    if not app_state.refinement_available():
         raise HTTPException(status_code=503, detail="Refinement not available")
 
     results = []
     for job_id in job_ids:
-        job = state.job_store.get(job_id)
+        job = app_state.job_store().get(job_id)
         if not job:
             results.append({"job_id": job_id, "status": "error", "message": "Job not found"})
             continue
@@ -424,12 +425,12 @@ async def batch_refine(
             continue
 
         # Check if already refined
-        existing = state.refinement_store.get(job_id)
+        existing = app_state.refinement_store().get(job_id)
         if existing and existing["status"] == "completed":
             results.append({"job_id": job_id, "status": "already_completed"})
             continue
 
-        state.refinement_store.create(job_id)
+        app_state.refinement_store().create(job_id)
         background_tasks.add_task(_run_refinement, job_id)
         results.append({"job_id": job_id, "status": "started"})
 

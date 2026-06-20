@@ -31,7 +31,8 @@ from services.transcription import transcribe_audio
 from services.refinement_policy import build_refinement_policy, normalize_refinement_mode
 from services.speaker_match_scope import resolve_match_scope
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
-import state
+import app_state
+import state  # noqa: F401 — re-exported so tests can monkeypatch transcription.state.* (reach-through to the real state module read live by app_state)
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +107,11 @@ async def _extract_audio_then_transcribe(
                 pass
     except Exception as exc:
         logger.error("extract_audio failed for job %s", job_id, exc_info=True)
-        job = state.jobs.get(job_id)
+        job = app_state.jobs().get(job_id)
         if job is not None:
             job.status = "failed"
             job.error = f"Audio extraction failed: {exc}"
-            state.jobs.update(job)
+            app_state.jobs().update(job)
         return
     await transcribe_audio(job_id, audio_path, settings)
 
@@ -206,7 +207,7 @@ async def transcribe_file(
         )
         job.settings = settings
 
-        state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
+        app_state.jobs().create(job, file_path=audio_path, settings=settings.model_dump())
         background_tasks.add_task(
             _extract_audio_then_transcribe,
             job_id, input_path, audio_path, remove_input_after, settings,
@@ -273,7 +274,7 @@ async def transcribe_youtube(
     job_id = str(uuid.uuid4())
     job = TranscriptionJob(job_id)
     job.settings = settings
-    state.jobs.create(job, youtube_url=request.url, settings=settings.model_dump())
+    app_state.jobs().create(job, youtube_url=request.url, settings=settings.model_dump())
 
     video_id = extract_video_id(request.url)
 
@@ -299,10 +300,10 @@ async def transcribe_youtube(
             job._from_captions = True
             job.speakers_resolved = True
             job.speaker_review_status = SPEAKER_REVIEW_NOT_NEEDED
-            state.jobs.update(job)
+            app_state.jobs().update(job)
 
             policy = build_refinement_policy(settings, job)
-            if policy.should_refine and state.refinement_available:
+            if policy.should_refine and app_state.refinement_available():
                 try:
                     from routes.refinement import dispatch_refinement_for_job
                     dispatch_refinement_for_job(
@@ -314,8 +315,8 @@ async def transcribe_youtube(
                 except Exception:
                     logger.exception("Captions auto-refine dispatch failed for %s", job_id)
                     job.refinement_status = "failed"
-                    state.jobs.update(job)
-                    state.refinement_store.update_status(job_id, "failed", "dispatch failed")
+                    app_state.jobs().update(job)
+                    app_state.refinement_store().update_status(job_id, "failed", "dispatch failed")
 
             return {
                 "job_id": job_id,
@@ -331,7 +332,7 @@ async def transcribe_youtube(
     try:
         job.status = "processing"
         job.progress_message = "Downloading audio from YouTube..."
-        state.jobs.update(job)
+        app_state.jobs().update(job)
 
         loop = asyncio.get_event_loop()
         audio_path = await loop.run_in_executor(
@@ -349,7 +350,7 @@ async def transcribe_youtube(
         shutil.rmtree(temp_dir, ignore_errors=True)
         job.status = "failed"
         job.error = "YouTube transcription failed"
-        state.jobs.update(job)
+        app_state.jobs().update(job)
         logger.error(f"YouTube transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="YouTube transcription failed. The video may be unavailable or an internal error occurred.")
 
@@ -415,7 +416,7 @@ async def transcribe_batch(
 
         # Audit #6: persist via JobStore.create() BEFORE upload so an oversize
         # failure can persist job.status="failed" properly.
-        state.jobs.create(job, file_path=audio_path, settings=settings.model_dump())
+        app_state.jobs().create(job, file_path=audio_path, settings=settings.model_dump())
         job_ids.append(job_id)
 
         max_size = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024
@@ -431,7 +432,7 @@ async def transcribe_batch(
                         shutil.rmtree(temp_dir, ignore_errors=True)
                         job.status = "failed"
                         job.error = f"File too large. Maximum size is {max_size // (1024 * 1024)}MB."
-                        state.jobs.update(job)
+                        app_state.jobs().update(job)
                         oversize = True
                         break
                     f.write(chunk)
@@ -451,10 +452,10 @@ async def transcribe_batch(
             shutil.rmtree(temp_dir, ignore_errors=True)
             job.status = "failed"
             job.error = str(e)
-            state.jobs.update(job)
+            app_state.jobs().update(job)
 
     batch = BatchJob(batch_id, job_ids)
-    state.batch_jobs[batch_id] = batch
+    app_state.batch_jobs()[batch_id] = batch
 
     return {
         "batch_id": batch_id,
@@ -466,7 +467,7 @@ async def transcribe_batch(
 @router.get("/batch/{batch_id}")
 async def get_batch_status(batch_id: str):
     """Get the status of a batch transcription job."""
-    batch = state.batch_jobs.get(batch_id)
+    batch = app_state.batch_jobs().get(batch_id)
 
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
@@ -478,7 +479,7 @@ async def get_batch_status(batch_id: str):
     pending_count = 0
 
     for job_id in batch.job_ids:
-        job = state.jobs.get(job_id)
+        job = app_state.jobs().get(job_id)
         if job:
             job_status = {
                 "job_id": job.job_id,
@@ -498,7 +499,7 @@ async def get_batch_status(batch_id: str):
 
             job_statuses.append(job_status)
 
-    total_progress = sum(state.jobs.get(jid).progress for jid in batch.job_ids if state.jobs.get(jid))
+    total_progress = sum(app_state.jobs().get(jid).progress for jid in batch.job_ids if app_state.jobs().get(jid))
     overall_progress = int(total_progress / batch.total) if batch.total > 0 else 0
 
     if completed_count == batch.total:
@@ -530,15 +531,15 @@ async def list_jobs(
     status: Optional[str] = Query(None, description="Filter by status: pending, processing, completed, failed"),
 ):
     """List recent transcription jobs with lightweight summaries."""
-    jobs = state.jobs.list_recent(limit=limit, offset=offset, status=status)
-    total = state.jobs.count(status=status)
+    jobs = app_state.jobs().list_recent(limit=limit, offset=offset, status=status)
+    total = app_state.jobs().count(status=status)
     return {"jobs": jobs, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/job/{job_id}")
 async def get_job_status(job_id: str):
     """Get the status and result of a transcription job."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -607,7 +608,7 @@ async def export_transcript(
     format: Literal["txt", "md", "srt", "vtt", "json", "pdf", "docx"] = Query(..., description="Export format"),
 ):
     """Export transcript in various formats."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -677,21 +678,21 @@ async def export_transcript(
 @router.delete("/job/{job_id}")
 async def delete_job(job_id: str):
     """Delete a transcription job."""
-    if job_id not in state.jobs:
+    if job_id not in app_state.jobs():
         raise HTTPException(status_code=404, detail="Job not found")
 
-    del state.jobs[job_id]
+    del app_state.jobs()[job_id]
     return {"status": "deleted"}
 
 
 @router.post("/job/{job_id}/retry")
 async def retry_job(job_id: str, background_tasks: BackgroundTasks):
     """Retry a failed transcription job with the same settings."""
-    meta = state.jobs.get_job_meta(job_id)
+    meta = app_state.jobs().get_job_meta(job_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    original_job = state.jobs.get(job_id)
+    original_job = app_state.jobs().get(job_id)
     if original_job and original_job.status not in ("failed",):
         raise HTTPException(status_code=400, detail="Only failed jobs can be retried")
 
@@ -715,7 +716,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
         temp_dir = tempfile.mkdtemp(prefix="whisper-yt-retry-")
         new_job.status = "downloading"
         new_job.progress_message = "Downloading audio from YouTube..."
-        state.jobs.create(new_job, youtube_url=youtube_url, settings=stored_settings)
+        app_state.jobs().create(new_job, youtube_url=youtube_url, settings=stored_settings)
         try:
             loop = asyncio.get_event_loop()
             audio_path = await loop.run_in_executor(
@@ -730,7 +731,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
             shutil.rmtree(temp_dir, ignore_errors=True)
             new_job.status = "failed"
             new_job.error = str(e)
-            state.jobs.update(new_job)
+            app_state.jobs().update(new_job)
             logger.error(f"Retry YouTube error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Retry failed. The video may be unavailable or an internal error occurred.")
     else:
@@ -746,7 +747,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=410, detail="original upload no longer available")
         if not os.path.exists(file_path):
             raise HTTPException(status_code=410, detail="original upload no longer available")
-        state.jobs.create(new_job, file_path=file_path, settings=stored_settings)
+        app_state.jobs().create(new_job, file_path=file_path, settings=stored_settings)
         # Audit #16: mark job as a retry so the worker's cleanup guard can skip rmtree.
         setattr(new_job, "_retry_of", job_id)
         background_tasks.add_task(transcribe_audio, new_job_id, file_path, settings)
@@ -756,7 +757,7 @@ async def retry_job(job_id: str, background_tasks: BackgroundTasks):
 @router.put("/job/{job_id}/speakers")
 async def rename_speakers(job_id: str, request: SpeakerRenameRequest):
     """Update speaker names in a transcription job."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -789,7 +790,7 @@ async def rename_speakers(job_id: str, request: SpeakerRenameRequest):
 @router.put("/job/{job_id}/segments")
 async def update_segments(job_id: str, request: SegmentUpdate):
     """Update transcript segments with inline edits."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -862,7 +863,7 @@ def _resolve_job_audio_path(job_id: str) -> Optional[str]:
          user uploaded from their Just Press Record folder even after the
          tmp has been cleaned, so voice-embedding backfill can still run.
     """
-    meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+    meta = app_state.jobs().get_job_meta(job_id) if hasattr(app_state.jobs(), "get_job_meta") else None
     if meta and meta.get("file_path"):
         p = Path(meta["file_path"])
         if p.exists():
@@ -898,11 +899,11 @@ def _extract_speaker_insights_sync(job_id: str) -> dict:
     }"""
     result = {"updated": [], "skipped": [], "errors": []}
 
-    if not state.deliverable_available or state.deliverable_service is None:
+    if not app_state.deliverable_available() or app_state.deliverable_service() is None:
         result["errors"].append("claude CLI not available — insights skipped")
         return result
 
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job or not job.segments:
         result["errors"].append("job has no segments")
         return result
@@ -943,7 +944,7 @@ def _extract_speaker_insights_sync(job_id: str) -> dict:
                 path = speaker_folder / filename
                 existing = path.read_text(encoding="utf-8") if path.exists() else ""
                 logger.info("Updating %s for %s from job %s", tag, name, job_id)
-                method = getattr(state.deliverable_service, method_name)
+                method = getattr(app_state.deliverable_service(), method_name)
                 updated = method(name, speaker_transcript, existing)
                 path.write_text(updated, encoding="utf-8")
                 result["updated"].append(f"{name}:{tag}")
@@ -984,7 +985,7 @@ async def list_job_speaker_labels(job_id: str):
     flagging whether it still needs naming and whether we have enough audio
     to extract a voice embedding for it.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -1011,7 +1012,7 @@ async def list_job_speaker_labels(job_id: str):
     labels = []
     for label, s in stats.items():
         anon = _is_anonymous_label(label)
-        existing = None if anon else state.speaker_store.get_by_name(label)
+        existing = None if anon else app_state.speaker_store().get_by_name(label)
         longest = _longest_turn_for_label(job.speakers or [], label)
         labels.append({
             **s,
@@ -1060,7 +1061,7 @@ def _apply_speaker_assignments(
     legacy route raised.
     """
     from services.speaker_embedding import SPEAKERS_DIR as _SPEAKERS_DIR
-    embedding_service = state.get_speaker_embedding_service()
+    embedding_service = app_state.speaker_embedding_service()
 
     mapping: dict[str, str] = {}  # old label → new name
     results = []
@@ -1075,7 +1076,7 @@ def _apply_speaker_assignments(
                 detail=f"'{name}' looks like an anonymous diarization label; pick a real speaker name",
             )
 
-        existing = state.speaker_store.get_by_name(name)
+        existing = app_state.speaker_store().get_by_name(name)
         # Find audio for the embedding. Try the original pyannote turn first
         # (label-based lookup); fall back to scanning segments for the target
         # speaker's NAME. The fallback is what unblocks the user's flow when
@@ -1135,11 +1136,11 @@ def _apply_speaker_assignments(
                     if not p.exists():
                         p.write_text(default_content, encoding="utf-8")
 
-                state.speaker_store.create(
+                app_state.speaker_store().create(
                     speaker_id, name,
                     str(folder.relative_to(_SPEAKERS_DIR.parent)),
                 )
-            speaker = state.speaker_store.get(speaker_id)
+            speaker = app_state.speaker_store().get(speaker_id)
         else:
             speaker = existing
             speaker_id = speaker["speaker_id"]
@@ -1158,7 +1159,7 @@ def _apply_speaker_assignments(
             if s.get("speaker") == a.label
         )
         try:
-            state.speaker_store.increment_call_count(speaker_id, speaking_time)
+            app_state.speaker_store().increment_call_count(speaker_id, speaking_time)
         except Exception:  # non-fatal
             logger.warning("increment_call_count failed for %s", name, exc_info=True)
 
@@ -1180,7 +1181,7 @@ def _apply_speaker_assignments(
             if turn.get("speaker") in mapping:
                 turn["speaker"] = mapping[turn["speaker"]]
         try:
-            state.jobs.update(job)
+            app_state.jobs().update(job)
         except Exception:
             logger.warning("Failed to persist job after speaker rename", exc_info=True)
 
@@ -1202,7 +1203,7 @@ async def assign_job_speakers(
     After all assignments land, asynchronously extract personality insights
     from the transcript and append to each affected speaker's personality.md.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -1216,7 +1217,7 @@ async def assign_job_speakers(
     # Kick off insight extraction in the background so the HTTP response is
     # fast. The user sees an "Extracting insights…" state in the UI.
     insight_scheduled = False
-    if req.extract_insights and state.deliverable_available:
+    if req.extract_insights and app_state.deliverable_available():
         background_tasks.add_task(_extract_speaker_insights_sync, job_id)
         insight_scheduled = True
 
@@ -1243,7 +1244,7 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
     unavailable for a "new:" entry), 400 if a target speaker_id is
     invalid / a "new:" name is malformed / a label is not in segments.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -1286,7 +1287,7 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
             continue
         # Otherwise it's an existing speaker_id — validate + look up the name.
         try:
-            sp = state.speaker_store.get(target)
+            sp = app_state.speaker_store().get(target)
         except Exception:
             sp = None
         if not sp or not sp.get("name"):
@@ -1330,7 +1331,7 @@ async def re_refine_job(job_id: str, req: ReRefineRequest):
             if turn.get("speaker") in anon_map:
                 turn["speaker"] = anon_map[turn["speaker"]]
         try:
-            state.jobs.update(job)
+            app_state.jobs().update(job)
         except Exception:
             logger.warning("Failed to persist job after unknown-label strip", exc_info=True)
 
@@ -1389,7 +1390,7 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
     _apply_speaker_assignments' name-based audio-window fallback handles
     stale labels gracefully.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -1435,7 +1436,7 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
             continue
         # Otherwise it's an existing speaker_id (UUID).
         try:
-            sp = state.speaker_store.get(target)
+            sp = app_state.speaker_store().get(target)
         except Exception:
             sp = None
         if not sp or not sp.get("name"):
@@ -1512,7 +1513,7 @@ async def auto_match_job_speakers(job_id: str):
     panel with these suggestions; the user still reviews and saves via the
     existing /job/{id}/speakers/assign endpoint.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -1527,12 +1528,12 @@ async def auto_match_job_speakers(job_id: str):
             detail="Audio file unavailable — needed to extract voice embeddings",
         )
 
-    meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+    meta = app_state.jobs().get_job_meta(job_id) if hasattr(app_state.jobs(), "get_job_meta") else None
     settings = (meta or {}).get("settings") or {}
     restrict, prefer, mode = resolve_match_scope(settings)
 
     try:
-        embedding_service = state.get_speaker_embedding_service()
+        embedding_service = app_state.speaker_embedding_service()
         ident = embedding_service.auto_identify_speakers(
             audio_path, job.speakers, job_id,
             restrict_to_ids=restrict,
@@ -1578,7 +1579,7 @@ async def refresh_job_speaker_embeddings(job_id: str):
     speaker was created without a voice sample. Uses the same extractor
     as the Calls flow, so the embedding format matches everywhere.
     """
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if not job.speakers:
@@ -1591,7 +1592,7 @@ async def refresh_job_speaker_embeddings(job_id: str):
             detail="Source audio not found — tmp was GC'd and no original_filename/JPR match.",
         )
 
-    embedding_service = state.get_speaker_embedding_service()
+    embedding_service = app_state.speaker_embedding_service()
 
     # Group diarization turns by speaker label; skip anonymous labels.
     from collections import defaultdict
@@ -1624,7 +1625,7 @@ async def refresh_job_speaker_embeddings(job_id: str):
         # write the .npy AND flip embedding_path in the speaker_store (see
         # SpeakerEmbeddingService.update_embedding).
         try:
-            existing = state.speaker_store.get_by_name(name)
+            existing = app_state.speaker_store().get_by_name(name)
             if existing:
                 await asyncio.to_thread(embedding_service.update_embedding, name, emb)
             else:
@@ -1640,12 +1641,12 @@ async def refresh_job_speaker_embeddings(job_id: str):
 @router.post("/job/{job_id}/speakers/extract-insights")
 async def extract_job_speaker_insights(job_id: str):
     """Manually trigger insight extraction for already-named speakers."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
         raise HTTPException(status_code=400, detail="Job must be completed first")
-    if not state.deliverable_available:
+    if not app_state.deliverable_available():
         raise HTTPException(status_code=503, detail="Insights require the `claude` CLI")
 
     return _extract_speaker_insights_sync(job_id)
@@ -1658,7 +1659,7 @@ async def search_transcript(
     case_sensitive: bool = Query(False, description="Case sensitive search"),
 ):
     """Search for text within a transcript."""
-    job = state.jobs.get(job_id)
+    job = app_state.jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

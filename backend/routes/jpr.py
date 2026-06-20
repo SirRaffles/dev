@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
 from config import JPR_WATCH_PATH, JPR_STATE_FILE
-import state
+import app_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["jpr"])
@@ -140,7 +140,7 @@ def _job_speakers(job_id: Optional[str]) -> list:
     if not job_id:
         return []
     try:
-        job = state.jobs.get(job_id)
+        job = app_state.jobs().get(job_id)
         if not job:
             return []
         seen = set()
@@ -320,7 +320,7 @@ async def get_recording_transcript(path: str):
     job_id = file_status.get("job_id")
     if job_id:
         try:
-            job = state.jobs.get(job_id)
+            job = app_state.jobs().get(job_id)
             if job and getattr(job, "segments", None):
                 segments = job.segments
                 speakers = _job_speakers(job_id)
@@ -475,7 +475,8 @@ async def rename_job_source(job_id: str, req: RenameSourceRequest):
     (~/.jpr_watcher_state.json). The watcher re-discovers renames on its own
     next scan.
     """
-    meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+    _jobs = app_state.jobs()
+    meta = _jobs.get_job_meta(job_id) if hasattr(_jobs, "get_job_meta") else None
     settings = (meta or {}).get("settings") or {}
     original_filename = settings.get("original_filename")
     if not original_filename:
@@ -516,7 +517,7 @@ async def rename_job_source(job_id: str, req: RenameSourceRequest):
     new_settings = dict(settings)
     new_settings["original_filename"] = dest.name
     try:
-        state.jobs.update_settings(job_id, new_settings)
+        app_state.jobs().update_settings(job_id, new_settings)
     except Exception:
         logger.warning("Failed to persist updated original_filename for %s", job_id, exc_info=True)
 
