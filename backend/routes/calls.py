@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
-import state
+import app_state
 from config import ICLOUD_BASE_PATH, JPR_WATCH_PATH
 
 logger = logging.getLogger(__name__)
@@ -78,22 +78,22 @@ async def list_calls(
     status: Optional[str] = None,
 ):
     """List calls with their lifecycle status."""
-    calls = state.call_metadata_store.list_recent(limit, offset, status)
+    calls = app_state.call_metadata_store().list_recent(limit, offset, status)
     # Enrich with speaker info
     for call in calls:
-        speakers = state.call_speaker_store.get_for_call(call["job_id"])
+        speakers = app_state.call_speaker_store().get_for_call(call["job_id"])
         call["speakers"] = speakers
-    return {"calls": calls, "total": state.call_metadata_store.count(status)}
+    return {"calls": calls, "total": app_state.call_metadata_store().count(status)}
 
 
 @router.get("/calls/{job_id}")
 async def get_call(job_id: str):
     """Get full call detail including speakers, context, deliverables."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    speakers = state.call_speaker_store.get_for_call(job_id)
+    speakers = app_state.call_speaker_store().get_for_call(job_id)
 
     # Check readiness
     missing = []
@@ -116,16 +116,16 @@ async def get_call(job_id: str):
 async def register_call(job_id: str, req: RegisterCallRequest):
     """Register a completed transcription as a call."""
     # Verify job exists
-    job = state.job_store.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Create or get existing call metadata
-    existing = state.call_metadata_store.get(job_id)
+    existing = app_state.call_metadata_store().get(job_id)
     if existing:
         return existing
 
-    result = state.call_metadata_store.create(
+    result = app_state.call_metadata_store().create(
         job_id=job_id,
         source_type=req.source_type,
         source_path=req.source_path,
@@ -137,22 +137,22 @@ async def register_call(job_id: str, req: RegisterCallRequest):
 @router.put("/calls/{job_id}/title")
 async def set_call_title(job_id: str, req: CallTitleRequest):
     """Set or update a call's title."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    state.call_metadata_store.update(job_id, title=req.title)
+    app_state.call_metadata_store().update(job_id, title=req.title)
     return {"status": "updated", "title": req.title}
 
 
 @router.put("/calls/{job_id}/context")
 async def assign_context(job_id: str, req: AssignContextRequest):
     """Assign a context folder to a call."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    state.call_metadata_store.update(
+    app_state.call_metadata_store().update(
         job_id,
         context_path=req.context_path,
         context_assigned=1,
@@ -168,12 +168,12 @@ async def assign_context(job_id: str, req: AssignContextRequest):
 @router.post("/calls/{job_id}/identify-speakers")
 async def identify_speakers(job_id: str):
     """Trigger automatic speaker identification via voice embeddings."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
     # Get the job's diarization results
-    job = state.job_store.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Transcription job not found")
     if job.status != "completed":
@@ -184,7 +184,7 @@ async def identify_speakers(job_id: str):
     # Get audio path — check job metadata for file_path or source_path
     audio_path = call.get("source_path")
     if not audio_path:
-        meta = state.job_store.get_job_meta(job_id)
+        meta = app_state.jobs().get_job_meta(job_id)
         audio_path = meta.get("file_path") if meta else None
     if not audio_path:
         raise HTTPException(
@@ -196,16 +196,16 @@ async def identify_speakers(job_id: str):
     audio_path = _validate_source_path(audio_path)
 
     try:
-        embedding_service = state.get_speaker_embedding_service()
+        embedding_service = app_state.speaker_embedding_service()
         identifications = embedding_service.auto_identify_speakers(
             audio_path, job.speakers, job_id
         )
 
         # Save results to call_speakers table
-        state.call_speaker_store.delete_for_call(job_id)  # Clear previous
+        app_state.call_speaker_store().delete_for_call(job_id)  # Clear previous
         for label, ident in identifications.items():
             if ident.get("speaker_id"):
-                state.call_speaker_store.add(
+                app_state.call_speaker_store().add(
                     call_id=job_id,
                     speaker_id=ident["speaker_id"],
                     speaker_label=label,
@@ -215,7 +215,7 @@ async def identify_speakers(job_id: str):
         # Check if all speakers are auto-matched
         all_matched = all(i.get("matched") for i in identifications.values())
         if all_matched:
-            state.call_metadata_store.update(job_id, speakers_identified=1)
+            app_state.call_metadata_store().update(job_id, speakers_identified=1)
 
         return {"identifications": identifications, "all_matched": all_matched}
 
@@ -227,11 +227,11 @@ async def identify_speakers(job_id: str):
 @router.post("/calls/{job_id}/confirm-speaker")
 async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
     """Confirm or correct a speaker identification."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    job = state.job_store.get(job_id)
+    job = app_state.jobs().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -239,10 +239,10 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
     if not speaker_name:
         raise HTTPException(status_code=400, detail="Speaker name is required")
 
-    embedding_service = state.get_speaker_embedding_service()
+    embedding_service = app_state.speaker_embedding_service()
 
     # Find or create the speaker
-    speaker = state.speaker_store.get_by_name(speaker_name)
+    speaker = app_state.speaker_store().get_by_name(speaker_name)
     if not speaker and req.create_new:
         # Try to get the unknown embedding for this label
         unknown_emb = embedding_service.get_unknown_embedding(req.speaker_label, job_id)
@@ -260,8 +260,8 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
                 f"# {speaker_name}\n\n*No personality insights yet.*\n",
                 encoding="utf-8",
             )
-            state.speaker_store.create(speaker_id, speaker_name, folder_path)
-        speaker = state.speaker_store.get_by_name(speaker_name)
+            app_state.speaker_store().create(speaker_id, speaker_name, folder_path)
+        speaker = app_state.speaker_store().get_by_name(speaker_name)
     elif not speaker:
         raise HTTPException(
             status_code=404,
@@ -269,13 +269,13 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
         )
 
     # Update the call-speaker association
-    state.call_speaker_store.add(
+    app_state.call_speaker_store().add(
         call_id=job_id,
         speaker_id=speaker["speaker_id"],
         speaker_label=req.speaker_label,
         confidence=1.0,  # User-confirmed = 100%
     )
-    state.call_speaker_store.confirm(job_id, speaker["speaker_id"])
+    app_state.call_speaker_store().confirm(job_id, speaker["speaker_id"])
 
     # Update the speaker's embedding with the new sample (if available)
     unknown_emb = embedding_service.get_unknown_embedding(req.speaker_label, job_id)
@@ -289,34 +289,34 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
         for t in (job.speakers or [])
         if t.get("speaker") == req.speaker_label
     )
-    state.speaker_store.increment_call_count(speaker["speaker_id"], speaking_time)
+    app_state.speaker_store().increment_call_count(speaker["speaker_id"], speaking_time)
 
     # Also rename the speaker in the transcript segments
     if job.segments:
         for seg in job.segments:
             if seg.get("speaker") == req.speaker_label:
                 seg["speaker"] = speaker_name
-        state.job_store.update(job)
+        app_state.jobs().update(job)
 
     # Check if all speakers are now confirmed
-    if state.call_speaker_store.all_confirmed(job_id):
-        state.call_metadata_store.update(job_id, speakers_identified=1)
+    if app_state.call_speaker_store().all_confirmed(job_id):
+        app_state.call_metadata_store().update(job_id, speakers_identified=1)
 
     return {
         "speaker_id": speaker["speaker_id"],
         "name": speaker_name,
         "confirmed": True,
-        "all_speakers_confirmed": state.call_speaker_store.all_confirmed(job_id),
+        "all_speakers_confirmed": app_state.call_speaker_store().all_confirmed(job_id),
     }
 
 
 @router.post("/calls/{job_id}/generate-deliverables")
 async def generate_deliverables(job_id: str):
     """Generate summary and analysis deliverables for a call."""
-    if not state.deliverable_available:
+    if not app_state.deliverable_available():
         raise HTTPException(status_code=503, detail="Deliverable generation not available (claude CLI not found)")
 
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
@@ -326,7 +326,7 @@ async def generate_deliverables(job_id: str):
         raise HTTPException(status_code=400, detail="Context must be assigned first")
 
     try:
-        results = state.deliverable_service.generate_deliverables(job_id)
+        results = app_state.deliverable_service().generate_deliverables(job_id)
         return {
             "status": "generated",
             "call_folder": results.get("call_folder"),
@@ -343,7 +343,7 @@ async def generate_deliverables(job_id: str):
 @router.get("/calls/{job_id}/deliverables")
 async def get_deliverables(job_id: str):
     """Read generated deliverables for a call."""
-    call = state.call_metadata_store.get(job_id)
+    call = app_state.call_metadata_store().get(job_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
