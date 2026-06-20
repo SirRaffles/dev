@@ -18,7 +18,6 @@ from config import (
     VISION_MODEL_PATH,
 )
 from services.model_manager import get_model_manager, ModelName
-import state
 import app_state
 
 router = APIRouter()
@@ -29,9 +28,9 @@ async def root():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "model_loaded": state.whisper_model_ready,
+        "model_loaded": app_state.whisper_model_ready(),
         "model_type": "MLX-Whisper (GPU-accelerated)",
-        "model_path": state.whisper_model_path,
+        "model_path": app_state.whisper_model_path(),
         "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
         "supported_languages": SUPPORTED_LANGUAGES,
         "message": "Transcription API is running with MLX-Whisper"
@@ -45,7 +44,7 @@ async def health(request: Request):
     Returns minimal info when unauthenticated (API_KEY is set but not provided).
     Full details are returned when authenticated or when API_KEY is not configured.
     """
-    is_ready = state.whisper_model_ready
+    is_ready = app_state.whisper_model_ready()
     status = "healthy" if is_ready else "degraded"
 
     # If API_KEY is configured but request is unauthenticated, return minimal info
@@ -67,14 +66,14 @@ async def health(request: Request):
 
     return {
         "status": status,
-        "model_loaded": state.whisper_model_ready,
+        "model_loaded": app_state.whisper_model_ready(),
         "model_functional": is_ready,
         "model_type": "MLX-Whisper",
-        "model_path": state.whisper_model_path,
+        "model_path": app_state.whisper_model_path(),
         "gpu_available": gpu_available,
         "diarization_available": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
         "engines": {
-            "whisper": {"available": state.whisper_model_ready, "type": "local"},
+            "whisper": {"available": app_state.whisper_model_ready(), "type": "local"},
         },
         "refinement_available": app_state.refinement_available(),
         "refinement_provider": REFINEMENT_PROVIDER,
@@ -96,7 +95,7 @@ async def list_models():
         for key, val in MLX_MODELS.items()
     ]
 
-    if state._parakeet_available:
+    if app_state.parakeet_available():
         # Surface every Parakeet variant. "parakeet" is kept as a legacy alias
         # for the English v2 model (handled by the transcription service).
         for key, val in PARAKEET_MODELS.items():
@@ -112,7 +111,7 @@ async def list_models():
     return {
         "models": models,
         "default": "large-v3-turbo",
-        "parakeet_available": state._parakeet_available,
+        "parakeet_available": app_state.parakeet_available(),
         "engine_capabilities": {
             "whisper": {
                 "context_bias": False,
