@@ -84,4 +84,4 @@ export function useJobAutoRefinePolling(jobId: string | null, jobCompleted: bool
 }
 
 // Re-exported for tests; not part of the public hook API.
-export const __TEST_TERMINAL_REFINEMENT = TERMINAL_REFINEMENT;
+const __TEST_TERMINAL_REFINEMENT = TERMINAL_REFINEMENT;

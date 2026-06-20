@@ -32,6 +32,7 @@ from services.diarization import (
 from services.postprocess import normalize_segments
 from services.audio import apply_noise_reduction
 from services.labels import is_anonymous_label
+from services.speaker_match_scope import resolve_match_scope
 from job_models import (
     SPEAKER_REVIEW_NEEDS_REVIEW,
     SPEAKER_REVIEW_NOT_NEEDED,
@@ -311,8 +312,7 @@ def orchestrate_transcription(
         if speakers and state.refinement_available:
             _update_job(job, progress=68, message="Matching voices to registered speakers...")
             try:
-                from routes.transcription import _resolve_match_scope
-                restrict_ids, prefer_ids, scope_mode = _resolve_match_scope({
+                restrict_ids, prefer_ids, scope_mode = resolve_match_scope({
                     "speaker_ids": settings.speaker_ids,
                     "num_speakers": settings.num_speakers,
                 })

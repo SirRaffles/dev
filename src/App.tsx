@@ -19,6 +19,7 @@ import useAudioPlayback from './hooks/useAudioPlayback';
 import useWakeOnLan from './hooks/useWakeOnLan';
 import useTheme from './hooks/useTheme';
 import useGlobalKeyboard from './hooks/useGlobalKeyboard';
+import useTranscriptionSession from './hooks/useTranscriptionSession';
 
 // Utils
 import { API_URL, JobStatus, cancelJob } from './utils/api';
@@ -134,14 +135,6 @@ function App() {
     detectProxy();
   }, [detectProxy]);
 
-  // Auto-submit when Mac wakes with pending request
-  const startProcessingRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    if (macState === 'awake' && hasPendingSubmit()) {
-      startProcessingRef.current?.();
-    }
-  }, [macState, hasPendingSubmit]);
-
   // Handlers
   const handleFileSelect = (selectedFile: File) => {
     setFile(selectedFile);
@@ -181,46 +174,20 @@ function App() {
     }
   };
 
-  const startProcessing = async () => {
-    // Auto-wake: if Mac is sleeping, trigger wake and queue the submit
-    if (macState === 'sleeping') {
-      triggerWake(API_URL);
-      return;
-    }
-    // Don't submit if still waking (will auto-submit when awake)
-    if (macState === 'waking') {
-      queueSubmit();
-      return;
-    }
-
-    const options = {
-      language: settings.language,
-      enableDiarization: settings.enableDiarization,
-      enableNoiseReduction: settings.enableNoiseReduction,
-      numSpeakers: settings.numSpeakers,
-      translateToEnglish: settings.translateToEnglish,
-      engine: settings.engine,
-      contextPath: settings.contextPath,
-      speakerIds: settings.speakerIds,
-      refinementMode: settings.refinementMode,
-    };
-
-    if (files.length > 1) {
-      await transcription.transcribeBatch(files, options);
-    } else if (isDocumentMode) {
-      await multiModal.processDocument(file);
-    } else if (inputMode === InputMode.FILE && file) {
-      await transcription.transcribeFile(file, options);
-    } else if (inputMode === InputMode.YOUTUBE && youtubeUrl.trim()) {
-      await transcription.transcribeYouTube(youtubeUrl, options);
-    }
-  };
-
-  // Keep ref in sync so the auto-submit effect always calls the latest version
-  startProcessingRef.current = startProcessing;
-
-  const canStart = (inputMode === InputMode.FILE && (file || files.length > 0)) ||
-                   (inputMode === InputMode.YOUTUBE && youtubeUrl.trim());
+  const { canStart, startProcessing } = useTranscriptionSession({
+    inputMode,
+    file,
+    files,
+    youtubeUrl,
+    settings,
+    isDocumentMode: Boolean(isDocumentMode),
+    macState,
+    triggerWake,
+    queueSubmit,
+    hasPendingSubmit,
+    transcription,
+    multiModal,
+  });
 
   // Available view modes based on result type
   const availableViewModes = useMemo(() => {

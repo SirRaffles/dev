@@ -236,29 +236,103 @@ Return ONLY the markdown content, no code fences or preamble."""
         transcript: str,
         existing_personality: str,
     ) -> str:
-        """Update a speaker's personality.md with new observations."""
-        profile = existing_personality or f"# {speaker_name}\n\n*No personality insights yet.*"
-        prompt = f"""You are maintaining a personality profile for "{speaker_name}" based on their appearances in recorded calls.
+        """Legacy — kept so existing callers stay intact. Delegates to
+        `update_implicit_insights` since the old prompt produced inferred
+        traits, which is what the new "implicit" section represents."""
+        return self.update_implicit_insights(speaker_name, transcript, existing_personality)
 
-## Existing Profile
-{profile}
+    def update_explicit_insights(
+        self,
+        speaker_name: str,
+        transcript: str,
+        existing_explicit: str,
+    ) -> str:
+        """Refresh the EXPLICIT-insights markdown for a speaker.
 
-## New Call Transcript (relevant segments)
+        Explicit = things the speaker said OUTRIGHT in the transcript:
+        concrete decisions, named preferences, stated facts (job, family,
+        projects), announced hobbies, commitments made. High-confidence,
+        verifiable, dated entries. Builds up across calls — we keep priors
+        untouched unless a new call contradicts them.
+        """
+        existing = existing_explicit or (
+            f"# Explicit insights\n\n*Concrete observations captured from transcripts will land here.*\n"
+        )
+        prompt = f"""You maintain the EXPLICIT-insights dossier for "{speaker_name}". Only record things the speaker said OUTRIGHT in the transcript — no inference, no guessing.
+
+## Existing dossier (keep, don't duplicate)
+{existing}
+
+## New call transcript (their lines only)
 {transcript[:20000]}
 
 ---
 
-Update the personality profile. Keep the existing structure and content, adding new observations. The profile should capture:
+Add ONLY new, concrete, verifiable items that were spoken aloud. Organize under these buckets (omit any bucket with no new info):
 
-- **Communication Style**: How they speak, their tone, verbosity, formality
-- **Priorities & Interests**: What they focus on, what matters to them
-- **Decision-Making**: How they approach decisions, risk tolerance
-- **Interpersonal Style**: How they interact with others
-- **Notable Patterns**: Recurring themes, phrases, or behaviors
+- **Decisions & commitments** — e.g. "Will deliver proposal by March 10", "Chose Supabase for backend"
+- **Professional** — employer, role, current projects, responsibilities, tools they use
+- **Family & personal** — spouse / children / origin / location explicitly mentioned
+- **Hobbies & interests** — things they said they do / enjoy
+- **Stated preferences** — "I prefer X over Y", "I hate when …"
+- **Named opinions** — direct opinions on companies/products/people
 
-Merge new observations with existing ones. Don't repeat what's already captured unless it's been reinforced. Keep the profile concise (under 500 words).
+Rules:
+- Each item must quote or closely paraphrase something actually said. No embellishment.
+- Append to the existing dossier; DO NOT duplicate items already present. If a new detail contradicts an old one, keep the newer item and strike the old with `~~like this~~`.
+- Keep the whole dossier under 600 words. Trim vague/old items first if needed.
+- Date new items inline with today's date in ISO format (e.g. `· 2026-04-19`).
 
-Start with `# {speaker_name}` as the header.
+Start the document with `# Explicit insights` as the header.
+
+Return ONLY the markdown content, no code fences or preamble."""
+
+        return _run_claude_text(prompt, self.claude_path, model="sonnet", timeout=120)
+
+    def update_implicit_insights(
+        self,
+        speaker_name: str,
+        transcript: str,
+        existing_implicit: str,
+    ) -> str:
+        """Refresh the IMPLICIT-insights markdown for a speaker.
+
+        Implicit = traits INFERRED from how they speak, not what they said
+        outright: communication style, values, taste, likes/dislikes that
+        you pick up between the lines. Lower-confidence, qualitative. Prior
+        inferences are refined rather than duplicated.
+        """
+        existing = existing_implicit or (
+            f"# Implicit insights\n\n*Inferred personality, style, and preferences will land here.*\n"
+        )
+        prompt = f"""You maintain the IMPLICIT-insights dossier for "{speaker_name}" — the inferred personality/style you pick up from how they speak (not what they say outright).
+
+## Existing dossier
+{existing}
+
+## New call transcript (their lines only)
+{transcript[:20000]}
+
+---
+
+Refine the dossier based on the new transcript. Capture inferences — you're reading between the lines.
+
+Organize under these buckets (omit any with nothing new):
+
+- **Communication style** — tone, verbosity, formality, humor, directness
+- **Values & priorities** — what they seem to care about, what lights them up, what drains them
+- **Personality traits** — curious / cautious / decisive / reflective / etc. Use short descriptors
+- **Likes & affinities** — inferred taste in topics, tools, people, aesthetics
+- **Dislikes / friction points** — what visibly frustrates or bores them
+- **Notable patterns** — recurring phrases, pet peeves, characteristic turns
+
+Rules:
+- These are INFERENCES, not quotes. Frame with verbs like "seems to", "tends to", "likely values".
+- Refine prior inferences when new data reinforces or contradicts them. Don't repeat unchanged items — let the prior dossier stand.
+- Keep under 500 words total.
+- If confidence is low, say so inline (e.g. "— tentative, 1 call").
+
+Start with `# Implicit insights` as the header.
 
 Return ONLY the markdown content, no code fences or preamble."""
 
@@ -340,13 +414,32 @@ Return ONLY the bullet points, no headers or preamble."""
             speaker = state.speaker_store.get(cs["speaker_id"])
             if speaker:
                 name = speaker["name"]
-                personality_path = SPEAKERS_DIR / name / "personality.md"
-                personality = ""
-                if personality_path.exists():
-                    personality = personality_path.read_text(encoding="utf-8")
+                speaker_dir = SPEAKERS_DIR / name
+                
+                # Consolidate all 3 sections for the LLM prompt context
+                context_parts = []
+                for fname in ("profile.md", "explicit_insights.md", "implicit_insights.md"):
+                    fpath = speaker_dir / fname
+                    if fpath.exists():
+                        try:
+                            content = fpath.read_text(encoding="utf-8").strip()
+                            if content and "will land here" not in content:
+                                context_parts.append(content)
+                        except OSError:
+                            pass
+                
+                # Fallback to legacy if no new sections have content
+                if not context_parts:
+                    legacy_path = speaker_dir / "personality.md"
+                    if legacy_path.exists():
+                        try:
+                            context_parts.append(legacy_path.read_text(encoding="utf-8"))
+                        except OSError:
+                            pass
+
                 speaker_profiles[name] = {
                     "role": "participant",
-                    "personality": personality,
+                    "personality": "\n\n".join(context_parts),
                     "call_count": speaker.get("call_count", 0),
                 }
 
@@ -421,31 +514,6 @@ Return ONLY the bullet points, no headers or preamble."""
         except Exception as e:
             logger.error("Failed to generate analysis for %s: %s", job_id, e)
             results["errors"].append(f"analysis: {e}")
-
-        # Update personality.md for each speaker
-        for name, profile in speaker_profiles.items():
-            try:
-                # Filter transcript to just this speaker's segments
-                speaker_lines = [
-                    line for line in transcript_text.split("\n")
-                    if f"] {name}:" in line
-                ]
-                if not speaker_lines:
-                    continue
-
-                speaker_transcript = "\n".join(speaker_lines[:100])  # Cap at 100 lines
-                existing_personality = profile.get("personality", "")
-
-                logger.info("Updating personality for speaker: %s", name)
-                updated = self.update_personality(name, speaker_transcript, existing_personality)
-
-                personality_path = SPEAKERS_DIR / name / "personality.md"
-                if personality_path.parent.exists():
-                    personality_path.write_text(updated, encoding="utf-8")
-                    results["generated"].append(f"personality:{name}")
-            except Exception as e:
-                logger.error("Failed to update personality for %s: %s", name, e)
-                results["errors"].append(f"personality:{name}: {e}")
 
         # Append insights to context's insights.md
         if context_path:

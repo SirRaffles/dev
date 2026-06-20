@@ -21,8 +21,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Check if running as launchd service
-if launchctl list | grep -q "com.whisper.jpr-watcher"; then
+# Check if running as launchd service during manual/interactive use.
+# When launchd itself starts this script, the service is necessarily listed;
+# exiting there prevents the watcher process from ever starting.
+if [ -t 1 ] && launchctl list | grep -q "com.whisper.jpr-watcher"; then
     echo -e "${GREEN}Watcher is running as a launchd service${NC}"
     echo ""
     echo "To stop:  launchctl unload $LAUNCH_AGENTS_DIR/$PLIST_NAME"

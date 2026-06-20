@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchContextFolders, fetchContextTree, createContextFolder, ContextFolder, ContextTree } from '../utils/api';
+import {
+  fetchContextFolders, fetchContextTree, createContextFolder,
+  deleteContextFolder, deleteContextFile, updateContextFile, uploadContextFile,
+  ContextFolder, ContextTree,
+} from '../utils/api';
 
 export default function useContexts() {
   const [folders, setFolders] = useState<ContextFolder[]>([]);
@@ -36,5 +40,30 @@ export default function useContexts() {
     await refreshTree();
   }, [refreshTree]);
 
-  return { folders, tree, loading, error, refreshTree, loadFolder, addFolder };
+  const removeFolder = useCallback(async (path: string) => {
+    await deleteContextFolder(path);
+    await refreshTree();
+  }, [refreshTree]);
+
+  const removeFile = useCallback(async (folderPath: string, filename: string) => {
+    await deleteContextFile(folderPath, filename);
+    await refreshTree();
+  }, [refreshTree]);
+
+  const uploadFile = useCallback(async (folderPath: string, file: File) => {
+    const name = await uploadContextFile(folderPath, file);
+    await refreshTree();
+    return name;
+  }, [refreshTree]);
+
+  const createFile = useCallback(async (folderPath: string, filename: string, content = '') => {
+    await updateContextFile(folderPath, filename, content);
+    await refreshTree();
+  }, [refreshTree]);
+
+  return {
+    folders, tree, loading, error,
+    refreshTree, loadFolder, addFolder,
+    removeFolder, removeFile, uploadFile, createFile,
+  };
 }

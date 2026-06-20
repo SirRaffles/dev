@@ -23,11 +23,13 @@ async def test_create_speaker(client, icloud_base, clean_speakers):
     assert "speaker_id" in data
     clean_speakers.append(data["speaker_id"])
 
-    # Verify folder was created on iCloud
+    # Verify folder was scaffolded on iCloud with the 4-part profile.
     speaker_dir = icloud_base / "speakers" / "Alice Test"
     assert speaker_dir.exists()
-    assert (speaker_dir / "personality.md").exists()
-    assert (speaker_dir / "profile.json").exists()
+    assert (speaker_dir / "profile.json").exists()         # metadata
+    assert (speaker_dir / "profile.md").exists()           # bio (human-edited)
+    assert (speaker_dir / "explicit_insights.md").exists() # LLM-generated
+    assert (speaker_dir / "implicit_insights.md").exists() # LLM-generated
 
 
 @pytest.mark.asyncio
@@ -118,7 +120,8 @@ async def test_delete_speaker_not_found(client):
 
 @pytest.mark.asyncio
 async def test_get_personality(client, icloud_base, clean_speakers):
-    """GET /speakers/{id}/personality returns personality content."""
+    """GET /speakers/{id}/personality is a legacy alias returning the
+    implicit-insights section content."""
     create = await client.post("/speakers", json={"name": "PersonalityGet"})
     sid = create.json()["speaker_id"]
     clean_speakers.append(sid)
@@ -127,7 +130,8 @@ async def test_get_personality(client, icloud_base, clean_speakers):
     assert resp.status_code == 200
     data = resp.json()
     assert "content" in data
-    assert "PersonalityGet" in data["content"]  # Template includes name
+    # Default scaffold for a fresh speaker surfaces the "Implicit insights" header.
+    assert "Implicit insights" in data["content"]
 
 
 @pytest.mark.asyncio

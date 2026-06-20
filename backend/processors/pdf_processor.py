@@ -173,7 +173,7 @@ class PDFProcessor(BaseProcessor):
                 message=f"Extracted {len(images)} images",
             )
 
-        # Step 3: Describe images/charts with VLM (GLM-4.6V-Flash)
+        # Step 3: Describe images/charts with the configured VLM
         if self.settings.describe_charts and self.job.visual_elements:
             self.update_progress(
                 "visual_analysis",
@@ -182,7 +182,7 @@ class PDFProcessor(BaseProcessor):
                 message="Loading vision model...",
             )
 
-            # Load GLM-4.6V-Flash vision model if not already loaded
+            # Load the configured vision model if not already loaded
             if not self._vision_loaded:
                 try:
                     await self.model_manager.load_vision()

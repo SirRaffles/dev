@@ -1,15 +1,26 @@
 """Scope-resolution tests for the pre-pick aware voice auto-match.
 
-Covers the decision logic in routes.transcription._resolve_match_scope and
+Covers the decision logic in services.speaker_match_scope.resolve_match_scope and
 the pool-filtering in SpeakerEmbeddingService.match_speaker. The actual
 pyannote embedding extraction is NOT exercised here (requires a GPU + an
 audio file); we feed synthetic 512-dim unit vectors to the matcher instead.
 """
 
+import sys
+import types
+
 import numpy as np
 import pytest
 
-from routes.transcription import _resolve_match_scope
+from services.speaker_match_scope import resolve_match_scope
+
+sys.modules.setdefault(
+    "state",
+    types.SimpleNamespace(
+        speaker_store=types.SimpleNamespace(get_by_name=lambda _name: None),
+    ),
+)
+
 from services.speaker_embedding import SpeakerEmbeddingService
 
 
@@ -23,7 +34,7 @@ def _unit(vec):
 
 def test_scope_exact_count_returns_scoped():
     settings = {"speaker_ids": ["a", "b"], "num_speakers": 2}
-    restrict, prefer, mode = _resolve_match_scope(settings)
+    restrict, prefer, mode = resolve_match_scope(settings)
     assert restrict == ["a", "b"]
     assert prefer is None
     assert mode == "scoped"
@@ -31,7 +42,7 @@ def test_scope_exact_count_returns_scoped():
 
 def test_scope_partial_picks_returns_global_prefer():
     settings = {"speaker_ids": ["a"], "num_speakers": 3}
-    restrict, prefer, mode = _resolve_match_scope(settings)
+    restrict, prefer, mode = resolve_match_scope(settings)
     assert restrict is None
     assert prefer == ["a"]
     assert mode == "global-prefer"
@@ -39,7 +50,7 @@ def test_scope_partial_picks_returns_global_prefer():
 
 def test_scope_no_picks_returns_global():
     settings = {"speaker_ids": [], "num_speakers": 2}
-    restrict, prefer, mode = _resolve_match_scope(settings)
+    restrict, prefer, mode = resolve_match_scope(settings)
     assert restrict is None
     assert prefer is None
     assert mode == "global"
@@ -47,7 +58,7 @@ def test_scope_no_picks_returns_global():
 
 def test_scope_auto_detect_with_picks_is_global_prefer():
     settings = {"speaker_ids": ["a", "b"], "num_speakers": None}
-    restrict, prefer, mode = _resolve_match_scope(settings)
+    restrict, prefer, mode = resolve_match_scope(settings)
     assert restrict is None
     assert prefer == ["a", "b"]
     assert mode == "global-prefer"
@@ -55,12 +66,12 @@ def test_scope_auto_detect_with_picks_is_global_prefer():
 
 def test_scope_auto_detect_string_is_handled():
     settings = {"speaker_ids": ["a"], "num_speakers": "auto"}
-    _, _, mode = _resolve_match_scope(settings)
+    _, _, mode = resolve_match_scope(settings)
     assert mode == "global-prefer"
 
 
 def test_scope_missing_settings_is_global():
-    restrict, prefer, mode = _resolve_match_scope(None)
+    restrict, prefer, mode = resolve_match_scope(None)
     assert restrict is None and prefer is None and mode == "global"
 
 

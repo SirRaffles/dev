@@ -93,24 +93,43 @@ _parakeet_model = None
 _parakeet_model_path = None
 
 # Check if Parakeet is available
-try:
-    import parakeet_mlx
-    if hasattr(parakeet_mlx, 'from_pretrained'):
-        _parakeet_available = True
-except ImportError:
-    pass
+if os.environ.get("DISABLE_PARAKEET_PROBE", "false").lower() != "true":
+    try:
+        import parakeet_mlx
+        if hasattr(parakeet_mlx, 'from_pretrained'):
+            _parakeet_available = True
+    except ImportError:
+        pass
 
 # Refinement state
 refinement_available = False
 refinement_service = None
 refinement_store = None
 
-# Check if claude CLI is available for refinement
+# Configure refinement service
 import shutil as _shutil
+from config import REFINEMENT_MODEL, REFINEMENT_PROVIDER, OLLAMA_HOST
+
 _claude_path = _shutil.which("claude")
-if _claude_path:
+
+if REFINEMENT_PROVIDER == "disabled":
+    refinement_available = False
+elif REFINEMENT_PROVIDER == "ollama":
     from services.refinement import RefinementService
-    refinement_service = RefinementService(_claude_path)
+    refinement_service = RefinementService(
+        provider="ollama",
+        model=REFINEMENT_MODEL,
+        ollama_host=OLLAMA_HOST,
+    )
+    refinement_store = RefinementStore(DB_PATH)
+    refinement_available = True
+elif _claude_path:
+    from services.refinement import RefinementService
+    refinement_service = RefinementService(
+        claude_path=_claude_path,
+        provider="claude",
+        model=REFINEMENT_MODEL,
+    )
     refinement_store = RefinementStore(DB_PATH)
     refinement_available = True
 

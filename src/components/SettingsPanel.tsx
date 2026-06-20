@@ -151,7 +151,7 @@ function SettingsPanel({
           Document processing will extract text, images, and visual content.
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Charts and diagrams will be analyzed using GLM-4.6V vision model.
+          Charts and diagrams will be analyzed using the configured MLX-VLM vision model.
         </p>
       </div>
     );

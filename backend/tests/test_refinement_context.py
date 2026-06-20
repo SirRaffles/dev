@@ -112,6 +112,68 @@ def test_run_claude_uses_sonnet_and_300s_timeout(monkeypatch):
     assert captured["timeout"] == 300
 
 
+def test_run_claude_uses_configured_model(monkeypatch):
+    """The Claude refinement model must be configurable instead of hardcoded."""
+    import subprocess
+    from services import refinement
+
+    captured = {}
+
+    class _Result:
+        returncode = 0
+        stdout = '{"language": "en", "domain": "", "summary": "", "speakers": [], "corrections": [], "uncertain_terms": []}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    refinement._run_claude("hi", "{}", "/fake/claude", timeout=300, model="opus")
+
+    cmd = captured["cmd"]
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "opus"
+
+
+def test_ollama_provider_parses_structured_json(monkeypatch):
+    """Local refinement should be able to use Ollama as a structured JSON provider."""
+    import json
+    import urllib.request
+    from services.refinement import RefinementService
+
+    captured = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({
+                "response": '{"language":"en","domain":"test","summary":"","speakers":[],"corrections":[],"uncertain_terms":[]}'
+            }).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    svc = RefinementService(provider="ollama", model="qwen3.5:27b", ollama_host="http://127.0.0.1:11434")
+    result = svc.analyze([{"start": 0, "end": 1, "text": "hi", "speaker": "SPEAKER_00"}])
+
+    assert captured["url"] == "http://127.0.0.1:11434/api/generate"
+    assert captured["payload"]["model"] == "qwen3.5:27b"
+    assert captured["payload"]["format"] == "json"
+    assert result["language"] == "en"
+
+
 def test_analyze_passes_600s_timeout_to_run_claude():
     """analyze() requests a 600s budget for Sonnet on full transcripts.
 

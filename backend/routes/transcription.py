@@ -29,6 +29,7 @@ from services.audio import extract_audio
 from services.youtube import download_youtube_audio, extract_video_id, get_youtube_transcript
 from services.transcription import transcribe_audio
 from services.refinement_policy import build_refinement_policy, normalize_refinement_mode
+from services.speaker_match_scope import resolve_match_scope
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import state
 
@@ -1498,29 +1499,6 @@ async def confirm_speakers(job_id: str, req: ConfirmSpeakersRequest):
     }
 
 
-def _resolve_match_scope(settings: Optional[dict]) -> tuple[Optional[list], Optional[list], str]:
-    """Decide how auto-match should scope its candidate pool based on the
-    job's pre-transcription picks vs the declared speaker count.
-
-    Returns (restrict_to_ids, prefer_ids, mode) where mode is one of:
-      "scoped"          — picks.length == num_speakers > 0
-      "global-prefer"   — picks present but fewer than num_speakers (or auto)
-      "global"          — no picks at all
-    """
-    picks = (settings or {}).get("speaker_ids") or []
-    num_raw = (settings or {}).get("num_speakers")
-    try:
-        num = int(num_raw) if num_raw not in (None, "", "auto") else None
-    except (TypeError, ValueError):
-        num = None
-
-    if num is not None and num > 0 and len(picks) == num:
-        return picks, None, "scoped"
-    if picks:
-        return None, picks, "global-prefer"
-    return None, None, "global"
-
-
 @router.post("/job/{job_id}/speakers/auto-match")
 async def auto_match_job_speakers(job_id: str):
     """Voice-embedding match diarization labels to speakers in the registry.
@@ -1551,7 +1529,7 @@ async def auto_match_job_speakers(job_id: str):
 
     meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
     settings = (meta or {}).get("settings") or {}
-    restrict, prefer, mode = _resolve_match_scope(settings)
+    restrict, prefer, mode = resolve_match_scope(settings)
 
     try:
         embedding_service = state.get_speaker_embedding_service()

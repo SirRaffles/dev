@@ -17,6 +17,28 @@ SPEAKER_MATCH_THRESHOLD = float(os.environ.get("SPEAKER_MATCH_THRESHOLD", "0.75"
 # Minimum diarization segment duration (seconds) for reliable embedding extraction
 MIN_EMBEDDING_SEGMENT_SECONDS = float(os.environ.get("MIN_EMBEDDING_SEGMENT_SECONDS", "5.0"))
 
+# Enable web verification (DuckDuckGo search) for uncertain terms during refinement.
+# Default to False for privacy.
+ENABLE_WEB_VERIFICATION = os.environ.get("ENABLE_WEB_VERIFICATION", "false").lower() == "true"
+
+# Transcript refinement provider.
+# - claude: Claude CLI, default for the current MVP.
+# - ollama: local Ollama /api/generate backend.
+# - disabled: no refinement service at startup.
+REFINEMENT_PROVIDER = os.environ.get("REFINEMENT_PROVIDER", "claude").strip().lower()
+REFINEMENT_MODEL = os.environ.get(
+    "REFINEMENT_MODEL",
+    "qwen3.5:27b" if REFINEMENT_PROVIDER == "ollama" else "sonnet",
+).strip()
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+
+# Vision-language model used by MLX-VLM for document/video visual analysis.
+VISION_MODEL_PATH = os.environ.get(
+    "VISION_MODEL_PATH",
+    "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+).strip()
+VISION_MODEL_LABEL = os.environ.get("VISION_MODEL_LABEL", VISION_MODEL_PATH.split("/")[-1]).strip()
+
 # Just Press Record iCloud path
 JPR_WATCH_PATH = Path(os.environ.get(
     "JPR_WATCH_PATH",

@@ -8,8 +8,12 @@ import threading
 from fastapi import Request, HTTPException
 
 
-# Config
-RATE_LIMIT = 10  # max requests per window
+# Config — 10/min was far too tight: the UI polls /health and /jobs
+# continuously, so a handful of filter clicks were enough to 429. With the
+# IP allowlist already restricting traffic to loopback + Tailscale + RFC1918,
+# 120/min is plenty of headroom for a single user while still throttling
+# abuse from a compromised LAN device.
+RATE_LIMIT = 120  # max requests per window
 RATE_WINDOW = 60  # window in seconds
 _MAX_TRACKED_IPS = 10_000  # cap to prevent unbounded memory growth
 

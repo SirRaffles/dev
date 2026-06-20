@@ -8,7 +8,15 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS
+from config import (
+    SUPPORTED_LANGUAGES,
+    MLX_MODELS,
+    PARAKEET_MODELS,
+    REFINEMENT_MODEL,
+    REFINEMENT_PROVIDER,
+    VISION_MODEL_LABEL,
+    VISION_MODEL_PATH,
+)
 from services.model_manager import get_model_manager, ModelName
 import state
 
@@ -67,6 +75,10 @@ async def health(request: Request):
             "whisper": {"available": state.whisper_model_ready, "type": "local"},
         },
         "refinement_available": state.refinement_available,
+        "refinement_provider": REFINEMENT_PROVIDER,
+        "refinement_model": REFINEMENT_MODEL if state.refinement_available else None,
+        "vision_model_path": VISION_MODEL_PATH,
+        "vision_model_label": VISION_MODEL_LABEL,
         "active_jobs": state.job_store.get_active_count(),
         "total_jobs": len(state.job_store),
         "uptime_seconds": uptime_seconds,
@@ -110,6 +122,10 @@ async def list_models():
                 "two_pass": False,
             },
         },
+        "vision_model_path": VISION_MODEL_PATH,
+        "vision_model_label": VISION_MODEL_LABEL,
+        "refinement_provider": REFINEMENT_PROVIDER,
+        "refinement_model": REFINEMENT_MODEL,
     }
 
 

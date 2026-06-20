@@ -1,7 +1,7 @@
 """
 Model lifecycle management with memory-aware loading/unloading.
 
-Manages MLX-Whisper, GLM-4.6V-Flash, and Pyannote models with:
+Manages MLX-Whisper, the configured MLX-VLM vision model, and Pyannote models with:
 - Sequential loading to avoid OOM
 - Memory tracking
 - On-demand loading with automatic unloading
@@ -14,7 +14,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
 
+from config import VISION_MODEL_LABEL, VISION_MODEL_PATH
+
 logger = logging.getLogger(__name__)
+
+DEFAULT_VISION_MODEL_PATH = VISION_MODEL_PATH
 
 
 class ModelName(str, Enum):
@@ -37,7 +41,7 @@ class ModelConfig:
         },
         ModelName.VISION: {
             "priority": 3,  # Lowest - load on demand
-            "memory_mb": 8000,  # INT4 quantized GLM-4.6V-Flash
+            "memory_mb": 8000,  # INT4 quantized MLX-VLM model
             "unloadable": True,
             "load_timeout": 120,
         },
@@ -214,7 +218,7 @@ class ModelManager:
 
         Args:
             model_name: HuggingFace model name or local path.
-                        Default: mlx-community/Qwen2.5-VL-3B-Instruct-4bit
+                        Default: config.VISION_MODEL_PATH
         """
         if self.is_loaded(ModelName.VISION):
             return True
@@ -229,7 +233,7 @@ class ModelManager:
 
             # Use a lightweight quantized model that works well on Apple Silicon
             if model_name is None:
-                model_name = self._vision_model_path or "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
+                model_name = self._vision_model_path or DEFAULT_VISION_MODEL_PATH
 
             logger.info(f"Loading vision model via MLX-VLM: {model_name}")
 
@@ -446,6 +450,8 @@ class ModelManager:
                 }
                 for name, status in self._model_status.items()
             },
+            "vision_model_path": DEFAULT_VISION_MODEL_PATH,
+            "vision_model_label": VISION_MODEL_LABEL,
             "total_memory_used_mb": self.get_total_loaded_memory_mb(),
             "available_memory_mb": self.get_available_memory_mb(),
             "memory_threshold_mb": self.MEMORY_THRESHOLD_MB,
