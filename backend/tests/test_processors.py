@@ -487,8 +487,7 @@ class TestProcessorIntegration:
             temp_path = Path(f.name)
 
         try:
-            loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(processor.run(temp_path))
+            result = asyncio.run(processor.run(temp_path))
 
             assert result.status == "completed"
             assert callback.call_count >= 2  # Two progress updates in process()
@@ -500,8 +499,7 @@ class TestProcessorIntegration:
         job = MultiModalJob(source_type="audio", source_filename="test.wav")
         processor = ConcreteProcessor(job)
 
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(processor.run(Path("/nonexistent.wav")))
+        result = asyncio.run(processor.run(Path("/nonexistent.wav")))
 
         assert result.status == "failed"
         assert result.error is not None

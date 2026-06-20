@@ -193,9 +193,7 @@ class TestVisionService:
         import asyncio
         service = VisionService()
         with pytest.raises(FileNotFoundError):
-            asyncio.get_event_loop().run_until_complete(
-                service.analyze(Path("/nonexistent/image.jpg"))
-            )
+            asyncio.run(service.analyze(Path("/nonexistent/image.jpg")))
 
     def test_tesseract_ocr_available(self):
         """Test Tesseract OCR availability check."""
