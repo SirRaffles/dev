@@ -4,7 +4,6 @@ Job data models and storage.
 
 import os
 import json
-import sqlite3
 import threading
 import logging
 from datetime import datetime
@@ -94,8 +93,11 @@ class JobStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._cache = {}
+        # Cache-coherence lock — distinct from Database's connection lock.
         self._lock = threading.Lock()
+        self.db.init_pragmas()
         self._init_db()
         try:
             os.chmod(self.db_path, 0o600)
@@ -110,18 +112,12 @@ class JobStore:
         )
         self._prune_thread.start()
 
-    def _get_connection(self):
-        # TODO(audit #14): switch to thread-local cached connections. Current
-        # implementation opens a fresh handle per call, which is safe but slow.
-        return sqlite3.connect(self.db_path, check_same_thread=False)
-
     def _init_db(self):
-        with self._get_connection() as conn:
-            # Audit #14: WAL + relaxed sync + in-memory temp + mmap for perf.
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA temp_store=MEMORY")
-            conn.execute("PRAGMA mmap_size=268435456")
+        # Pragmas (WAL + relaxed sync + in-memory temp + mmap) are applied once
+        # via self.db.init_pragmas() in __init__. Here we only own the schema:
+        # defensive CREATE TABLE / ALTER TABLE so the store works even if the
+        # migration runner has not run against this DB file.
+        with self.db.connection() as conn:
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
@@ -165,39 +161,35 @@ class JobStore:
 
     def _cleanup_stale_pending(self):
         """Mark jobs stuck in pending/processing for >24h as failed on startup."""
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "UPDATE jobs SET status='failed', error='stale: auto-cleaned on startup', "
-                "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('pending', 'processing') "
-                "AND updated_at < datetime('now', '-24 hours')"
-            )
-            if cursor.rowcount:
-                conn.commit()
-                logger.info("Cleaned %d stale pending/processing jobs", cursor.rowcount)
+        cleaned = self.db.mutate(
+            "UPDATE jobs SET status='failed', error='stale: auto-cleaned on startup', "
+            "updated_at=CURRENT_TIMESTAMP "
+            "WHERE status IN ('pending', 'processing') "
+            "AND updated_at < datetime('now', '-24 hours')"
+        )
+        if cleaned:
+            logger.info("Cleaned %d stale pending/processing jobs", cleaned)
 
     def _load_active_jobs(self):
-        with self._get_connection() as conn:
-            # Any "processing" OR "pending" job from a previous backend
-            # instance is orphaned — processing jobs lost their executor
-            # thread; pending jobs lost their executor.submit() call from
-            # the route handler. Neither will resume on its own, so mark
-            # them all as failed and let the user retry.
-            orphan_cursor = conn.execute(
-                "UPDATE jobs SET status='failed', "
-                "error='Backend restarted mid-job — please retry', "
-                "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('processing', 'pending')"
+        # Any "processing" OR "pending" job from a previous backend
+        # instance is orphaned — processing jobs lost their executor
+        # thread; pending jobs lost their executor.submit() call from
+        # the route handler. Neither will resume on its own, so mark
+        # them all as failed and let the user retry.
+        orphaned = self.db.mutate(
+            "UPDATE jobs SET status='failed', "
+            "error='Backend restarted mid-job — please retry', "
+            "updated_at=CURRENT_TIMESTAMP "
+            "WHERE status IN ('processing', 'pending')"
+        )
+        if orphaned:
+            logger.info(
+                "Marked %d orphan 'processing'/'pending' jobs as failed on startup",
+                orphaned,
             )
-            if orphan_cursor.rowcount:
-                conn.commit()
-                logger.info(
-                    "Marked %d orphan 'processing'/'pending' jobs as failed on startup",
-                    orphan_cursor.rowcount,
-                )
-            # No active jobs survive a restart — the executor work is lost.
-            # Leaving _cache empty matches that reality; the UI shows real
-            # failure states + retry buttons instead of zombie polling.
+        # No active jobs survive a restart — the executor work is lost.
+        # Leaving _cache empty matches that reality; the UI shows real
+        # failure states + retry buttons instead of zombie polling.
         logger.info(f"Loaded {len(self._cache)} active jobs from database")
 
     def _prune_loop(self):
@@ -217,14 +209,11 @@ class JobStore:
             return default
 
     def _row_to_job(self, row, description=None) -> TranscriptionJob:
-        columns = [col[0] for col in description] if description else []
-
+        # row is a dict (Database returns sqlite3.Row mapped to dict). The
+        # `description` parameter is retained for signature compatibility but is
+        # no longer needed now that rows arrive keyed by column name.
         def by_name(name: str, fallback_index: int = None, default=None):
-            if name in columns:
-                return row[columns.index(name)]
-            if fallback_index is not None and fallback_index < len(row):
-                return row[fallback_index]
-            return default
+            return row.get(name, default)
 
         job = TranscriptionJob(by_name("job_id", 0))
         job.status = by_name("status", 1)
@@ -292,14 +281,11 @@ class JobStore:
     def prune_completed(self, max_age_hours: int = 720):
         """Remove completed/failed jobs older than max_age_hours from DB and cache."""
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM jobs WHERE status IN ('completed', 'failed') "
-                    "AND updated_at < datetime('now', ? || ' hours')",
-                    (f"-{max_age_hours}",)
-                )
-                pruned = cursor.rowcount
-                conn.commit()
+            pruned = self.db.mutate(
+                "DELETE FROM jobs WHERE status IN ('completed', 'failed') "
+                "AND updated_at < datetime('now', ? || ' hours')",
+                (f"-{max_age_hours}",)
+            )
             if pruned:
                 # Remove stale entries from cache too
                 stale = [
@@ -317,77 +303,67 @@ class JobStore:
         # Audit #14: prune is now a scheduled job; do not run it synchronously here.
         with self._lock:
             self._cache[job.job_id] = job
-            with self._get_connection() as conn:
-                conn.execute('''
-                    INSERT INTO jobs (job_id, status, progress, progress_message,
-                                     result, error, language, language_probability,
-                                     segments, speakers, file_path, settings, youtube_url,
-                                     phase, refinement_status, speaker_review_status,
-                                     auto_speaker_matches, learning_status, learning_summary)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', self._job_to_row(job, file_path, settings, youtube_url))
-                conn.commit()
+            self.db.mutate('''
+                INSERT INTO jobs (job_id, status, progress, progress_message,
+                                 result, error, language, language_probability,
+                                 segments, speakers, file_path, settings, youtube_url,
+                                 phase, refinement_status, speaker_review_status,
+                                 auto_speaker_matches, learning_status, learning_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', self._job_to_row(job, file_path, settings, youtube_url))
 
     def get(self, job_id: str) -> Optional[TranscriptionJob]:
         with self._lock:
             if job_id in self._cache:
                 return self._cache[job_id]
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    job = self._row_to_job(row, cursor.description)
-                    self._cache[job_id] = job
-                    return job
+            row = self.db.query_one("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+            if row:
+                job = self._row_to_job(row)
+                self._cache[job_id] = job
+                return job
             return None
 
     def get_job_meta(self, job_id: str) -> Optional[dict]:
         """Return stored settings and youtube_url for a job (for retry)."""
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT file_path, settings, youtube_url FROM jobs WHERE job_id = ?", (job_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return {
-                    "file_path": row[0],
-                    "settings": json.loads(row[1]) if row[1] else None,
-                    "youtube_url": row[2],
-                }
+            row = self.db.query_one(
+                "SELECT file_path, settings, youtube_url FROM jobs WHERE job_id = ?", (job_id,)
+            )
+            if not row:
+                return None
+            return {
+                "file_path": row["file_path"],
+                "settings": json.loads(row["settings"]) if row["settings"] else None,
+                "youtube_url": row["youtube_url"],
+            }
 
     def update(self, job: TranscriptionJob):
         with self._lock:
             job.speaker_review_status = _job_review_status(job)
             job.speakers_resolved = _resolved_from_review_status(job.speaker_review_status)
             self._cache[job.job_id] = job
-            with self._get_connection() as conn:
-                conn.execute('''
-                    UPDATE jobs SET status=?, progress=?, progress_message=?,
-                                   result=?, error=?, language=?, language_probability=?,
-                                   segments=?, speakers=?,
-                                   phase=?, refinement_status=?, speaker_review_status=?,
-                                   auto_speaker_matches=?, learning_status=?, learning_summary=?,
-                                   updated_at=CURRENT_TIMESTAMP
-                    WHERE job_id=?
-                ''', (
-                    job.status, job.progress, job.progress_message,
-                    json.dumps(job.result) if job.result else None,
-                    job.error, job.language, job.language_probability,
-                    json.dumps(job.segments) if job.segments else None,
-                    json.dumps(job.speakers) if job.speakers else None,
-                    job.phase,
-                    job.refinement_status,
-                    _job_review_status(job),
-                    json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
-                    job.learning_status,
-                    json.dumps(job.learning_summary) if job.learning_summary else None,
-                    job.job_id
-                ))
-                conn.commit()
+            self.db.mutate('''
+                UPDATE jobs SET status=?, progress=?, progress_message=?,
+                               result=?, error=?, language=?, language_probability=?,
+                               segments=?, speakers=?,
+                               phase=?, refinement_status=?, speaker_review_status=?,
+                               auto_speaker_matches=?, learning_status=?, learning_summary=?,
+                               updated_at=CURRENT_TIMESTAMP
+                WHERE job_id=?
+            ''', (
+                job.status, job.progress, job.progress_message,
+                json.dumps(job.result) if job.result else None,
+                job.error, job.language, job.language_probability,
+                json.dumps(job.segments) if job.segments else None,
+                json.dumps(job.speakers) if job.speakers else None,
+                job.phase,
+                job.refinement_status,
+                _job_review_status(job),
+                json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
+                job.learning_status,
+                json.dumps(job.learning_summary) if job.learning_summary else None,
+                job.job_id
+            ))
             # Evict old completed/failed jobs from cache to bound memory
             if len(self._cache) > 1000:
                 to_evict = [
@@ -400,19 +376,15 @@ class JobStore:
     def update_settings(self, job_id: str, settings: dict) -> None:
         """Replace the stored settings JSON for a job."""
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "UPDATE jobs SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
-                    (json.dumps(settings) if settings else None, job_id),
-                )
-                conn.commit()
+            self.db.mutate(
+                "UPDATE jobs SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (json.dumps(settings) if settings else None, job_id),
+            )
 
     def delete(self, job_id: str):
         with self._lock:
             self._cache.pop(job_id, None)
-            with self._get_connection() as conn:
-                conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
-                conn.commit()
+            self.db.mutate("DELETE FROM jobs WHERE job_id=?", (job_id,))
 
     def get_all(self) -> dict:
         return dict(self._cache)
@@ -420,48 +392,45 @@ class JobStore:
     def list_recent(self, limit: int = 50, offset: int = 0, status: str = None) -> List[dict]:
         """List recent jobs from DB (not just cache). Returns lightweight summaries."""
         with self._lock:
-            with self._get_connection() as conn:
-                if status:
-                    cursor = conn.execute(
-                        "SELECT job_id, status, progress, progress_message, language, "
-                        "created_at, updated_at, file_path "
-                        "FROM jobs WHERE status = ? "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (status, limit, offset)
-                    )
-                else:
-                    cursor = conn.execute(
-                        "SELECT job_id, status, progress, progress_message, language, "
-                        "created_at, updated_at, file_path "
-                        "FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset)
-                    )
-                rows = cursor.fetchall()
-                return [
-                    {
-                        "job_id": r[0],
-                        "status": r[1],
-                        "progress": r[2] or 0,
-                        "progress_message": r[3] or "",
-                        "language": r[4],
-                        "created_at": r[5],
-                        "updated_at": r[6],
-                        "file_path": os.path.basename(r[7]) if r[7] else None,
-                    }
-                    for r in rows
-                ]
+            if status:
+                rows = self.db.query(
+                    "SELECT job_id, status, progress, progress_message, language, "
+                    "created_at, updated_at, file_path "
+                    "FROM jobs WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (status, limit, offset)
+                )
+            else:
+                rows = self.db.query(
+                    "SELECT job_id, status, progress, progress_message, language, "
+                    "created_at, updated_at, file_path "
+                    "FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset)
+                )
+            return [
+                {
+                    "job_id": r["job_id"],
+                    "status": r["status"],
+                    "progress": r["progress"] or 0,
+                    "progress_message": r["progress_message"] or "",
+                    "language": r["language"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "file_path": os.path.basename(r["file_path"]) if r["file_path"] else None,
+                }
+                for r in rows
+            ]
 
     def count(self, status: str = None) -> int:
         """Count jobs, optionally filtered by status."""
         with self._lock:
-            with self._get_connection() as conn:
-                if status:
-                    cursor = conn.execute(
-                        "SELECT COUNT(*) FROM jobs WHERE status = ?", (status,)
-                    )
-                else:
-                    cursor = conn.execute("SELECT COUNT(*) FROM jobs")
-                return cursor.fetchone()[0]
+            if status:
+                row = self.db.query_one(
+                    "SELECT COUNT(*) AS n FROM jobs WHERE status = ?", (status,)
+                )
+            else:
+                row = self.db.query_one("SELECT COUNT(*) AS n FROM jobs")
+            return row["n"]
 
     def get_active_count(self) -> int:
         return len([j for j in self._cache.values() if j.status == "processing"])

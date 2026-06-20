@@ -95,9 +95,9 @@ async def create_speaker(req: SpeakerCreateRequest):
     profile = {
         "speaker_id": speaker_id,
         "name": name,
-        "created_at": str(state.speaker_store._get_connection().execute(
-            "SELECT datetime('now')"
-        ).fetchone()[0]),
+        "created_at": str(
+            state.speaker_store.db.query_one("SELECT datetime('now') AS now")["now"]
+        ),
     }
     (folder / "profile.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
 
