@@ -140,8 +140,13 @@ async def test_confirm_speaker_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_generate_deliverables_not_found(client):
-    """POST /calls/{job_id}/generate-deliverables returns 404 for nonexistent call."""
+async def test_generate_deliverables_not_found(client, monkeypatch):
+    """POST /calls/{job_id}/generate-deliverables returns 404 for nonexistent call.
+
+    Deliverable availability is the precondition under test here (claude CLI may
+    be absent, e.g. in CI), so force it on to exercise the 404 path itself."""
+    import state
+    monkeypatch.setattr(state, "deliverable_available", True)
     resp = await client.post("/calls/nonexistent-id/generate-deliverables")
     assert resp.status_code == 404
 

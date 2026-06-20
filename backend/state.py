@@ -104,7 +104,12 @@ if os.environ.get("DISABLE_PARAKEET_PROBE", "false").lower() != "true":
 # Refinement state
 refinement_available = False
 refinement_service = None
-refinement_store = None
+# The refinement store is a plain SQLite store — independent of whether a
+# refinement provider (claude CLI / ollama) is available. Always create it so
+# callers can record/inspect refinement rows even when refinement is disabled
+# (e.g. CI, or a host without the claude CLI). Only the SERVICE + the
+# `refinement_available` capability flag are gated on the provider.
+refinement_store = RefinementStore(DB_PATH)
 
 # Configure refinement service
 import shutil as _shutil
@@ -121,7 +126,6 @@ elif REFINEMENT_PROVIDER == "ollama":
         model=REFINEMENT_MODEL,
         ollama_host=OLLAMA_HOST,
     )
-    refinement_store = RefinementStore(DB_PATH)
     refinement_available = True
 elif _claude_path:
     from services.refinement import RefinementService
@@ -130,7 +134,6 @@ elif _claude_path:
         provider="claude",
         model=REFINEMENT_MODEL,
     )
-    refinement_store = RefinementStore(DB_PATH)
     refinement_available = True
 
 # Application startup time for uptime tracking
