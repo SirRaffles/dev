@@ -10,7 +10,20 @@ import state
 
 
 def jobs():
-    """The primary JobStore (a.k.a. ``state.job_store`` / legacy ``state.jobs``)."""
+    """The canonical job store via the legacy ``state.jobs`` alias.
+
+    ``state.jobs`` and ``state.job_store`` are the same object in production but
+    rebind independently under monkeypatch, and the test suite patches them
+    separately. Call sites must use the accessor matching the name the original
+    code used: ``jobs()`` for ``state.jobs``, ``job_store()`` for
+    ``state.job_store``.
+    """
+    return state.jobs
+
+
+def job_store():
+    """The job store via the ``state.job_store`` name (kept distinct from the
+    ``state.jobs`` alias — see ``jobs()`` for the rationale)."""
     return state.job_store
 
 

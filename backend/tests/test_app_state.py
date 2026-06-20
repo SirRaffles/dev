@@ -4,8 +4,25 @@ import app_state
 
 def test_jobs_reads_through(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(state, "job_store", sentinel)
+    monkeypatch.setattr(state, "jobs", sentinel)
     assert app_state.jobs() is sentinel
+
+
+def test_job_store_reads_through(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(state, "job_store", sentinel)
+    assert app_state.job_store() is sentinel
+
+
+def test_jobs_and_job_store_are_independent(monkeypatch):
+    """state.jobs (alias) and state.job_store rebind independently under
+    monkeypatch — the façade must NOT collapse them onto one global."""
+    jobs_sentinel = object()
+    store_sentinel = object()
+    monkeypatch.setattr(state, "jobs", jobs_sentinel)
+    monkeypatch.setattr(state, "job_store", store_sentinel)
+    assert app_state.jobs() is jobs_sentinel
+    assert app_state.job_store() is store_sentinel
 
 
 def test_batch_jobs_reads_through(monkeypatch):

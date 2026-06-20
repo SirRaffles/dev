@@ -116,7 +116,7 @@ async def get_call(job_id: str):
 async def register_call(job_id: str, req: RegisterCallRequest):
     """Register a completed transcription as a call."""
     # Verify job exists
-    job = app_state.jobs().get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -173,7 +173,7 @@ async def identify_speakers(job_id: str):
         raise HTTPException(status_code=404, detail="Call not found")
 
     # Get the job's diarization results
-    job = app_state.jobs().get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Transcription job not found")
     if job.status != "completed":
@@ -184,7 +184,7 @@ async def identify_speakers(job_id: str):
     # Get audio path — check job metadata for file_path or source_path
     audio_path = call.get("source_path")
     if not audio_path:
-        meta = app_state.jobs().get_job_meta(job_id)
+        meta = app_state.job_store().get_job_meta(job_id)
         audio_path = meta.get("file_path") if meta else None
     if not audio_path:
         raise HTTPException(
@@ -231,7 +231,7 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    job = app_state.jobs().get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -296,7 +296,7 @@ async def confirm_speaker(job_id: str, req: ConfirmSpeakerRequest):
         for seg in job.segments:
             if seg.get("speaker") == req.speaker_label:
                 seg["speaker"] = speaker_name
-        app_state.jobs().update(job)
+        app_state.job_store().update(job)
 
     # Check if all speakers are now confirmed
     if app_state.call_speaker_store().all_confirmed(job_id):

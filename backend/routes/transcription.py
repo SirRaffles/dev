@@ -32,6 +32,7 @@ from services.refinement_policy import build_refinement_policy, normalize_refine
 from services.speaker_match_scope import resolve_match_scope
 from utils.export import generate_txt, generate_markdown, generate_srt, generate_vtt, generate_pdf, generate_docx, generate_json_export
 import app_state
+import state  # noqa: F401 — re-exported so tests can monkeypatch transcription.state.* (reach-through to the real state module read live by app_state)
 
 logger = logging.getLogger(__name__)
 

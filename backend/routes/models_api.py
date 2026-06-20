@@ -81,8 +81,8 @@ async def health(request: Request):
         "refinement_model": REFINEMENT_MODEL if app_state.refinement_available() else None,
         "vision_model_path": VISION_MODEL_PATH,
         "vision_model_label": VISION_MODEL_LABEL,
-        "active_jobs": app_state.jobs().get_active_count(),
-        "total_jobs": len(app_state.jobs()),
+        "active_jobs": app_state.job_store().get_active_count(),
+        "total_jobs": len(app_state.job_store()),
         "uptime_seconds": uptime_seconds,
         "supported_languages": list(SUPPORTED_LANGUAGES.keys())
     }

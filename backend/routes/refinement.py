@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 import app_state
+import state  # noqa: F401 — re-exported so tests can monkeypatch refmod.state.* (reach-through to the real state module read live by app_state)
 from utils.export import format_timestamp
 
 # dispatch_refinement_for_job + its shared _set_refinement_status helper now live
@@ -200,7 +201,7 @@ def _run_refinement_for_job(job_id: str, speaker_ids: Optional[List[str]] = None
     )
     from services.glossary import load_global_glossary, load_global_glossary_terms
 
-    job = app_state.jobs().get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         app_state.refinement_store().update_status(job_id, "failed", "Job not found")
         return
@@ -322,7 +323,7 @@ async def start_refinement(job_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=503, detail="Refinement not available (claude CLI not found)")
 
     # Check job exists
-    job = app_state.jobs().get(job_id)
+    job = app_state.job_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -412,7 +413,7 @@ async def batch_refine(
 
     results = []
     for job_id in job_ids:
-        job = app_state.jobs().get(job_id)
+        job = app_state.job_store().get(job_id)
         if not job:
             results.append({"job_id": job_id, "status": "error", "message": "Job not found"})
             continue
