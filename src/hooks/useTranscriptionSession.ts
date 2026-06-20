@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { API_URL } from '../utils/api';
 
-interface TranscriptionSessionSettings {
+export interface TranscriptionSessionSettings {
   language: string;
   enableDiarization: boolean;
   enableNoiseReduction: boolean;
