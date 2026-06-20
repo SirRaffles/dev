@@ -1,0 +1,49 @@
+# Test dependencies for the Backend Tests CI workflow (.github/workflows/test.yml).
+#
+# SINGLE SOURCE OF TRUTH for what CI installs to run `pytest tests/`. It is the
+# minimal subset needed to COLLECT and RUN the suite — NOT the full runtime
+# environment (the production venv also carries heavy ML packages — mlx,
+# lightning, pyannote, etc. — that the tests mock).
+#
+# If a new test imports a package not listed here, CI will fail at collection or
+# runtime: add the package HERE rather than re-embedding deps in the workflow YAML.
+# (This file exists because that hardcoded YAML list silently drifted and left CI
+# red for over a month.)
+#
+# NOTE: CPU-only torch (silero VAD import in tests/test_audio_vad.py) is installed
+# separately in the workflow from the PyTorch CPU index, to avoid the multi-GB
+# CUDA build. It is intentionally NOT listed here.
+
+# Web framework / API surface
+fastapi
+uvicorn
+python-multipart
+pydantic
+httpx
+
+# HTTP / external services exercised by services under test
+requests
+youtube-transcript-api
+yt-dlp
+
+# Test runner
+pytest
+pytest-asyncio
+pytest-timeout
+
+# Document / export generation (utils.export, processors)
+reportlab
+python-docx
+markdown
+
+# Imaging / vision / media processing
+Pillow
+imagehash
+opencv-python-headless
+scenedetect
+
+# Audio / signal processing
+numpy
+scipy
+noisereduce
+soundfile
