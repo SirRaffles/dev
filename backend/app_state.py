@@ -81,3 +81,15 @@ def deliverable_available():
 
 def startup_time():
     return state.startup_time
+
+
+def whisper_model_ready():
+    return bool(state.whisper_model_ready)
+
+
+def whisper_model_path():
+    return state.whisper_model_path
+
+
+def parakeet_available():
+    return bool(state._parakeet_available)

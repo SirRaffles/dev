@@ -843,6 +843,10 @@ async def update_segments(job_id: str, request: SegmentUpdate):
 # existing call sites (insights extraction, re-refine validation, etc.)
 # unchanged — they reference `_is_anonymous_label` directly.
 from services.labels import is_anonymous_label as _is_anonymous_label  # noqa: F401
+# Speaker-insight extraction now lives in services.learning (F1 follow-up) so no
+# service imports a route. Re-exported here for the two route callers below and
+# for tests that reference routes.transcription._extract_speaker_insights_sync.
+from services.learning import _extract_speaker_insights_sync  # noqa: F401
 
 
 def _longest_turn_for_label(turns: list, label: str) -> Optional[dict]:
@@ -884,75 +888,6 @@ def _resolve_job_audio_path(job_id: str) -> Optional[str]:
             except Exception:
                 logger.warning("JPR rglob fallback failed", exc_info=True)
     return None
-
-
-def _extract_speaker_insights_sync(job_id: str) -> dict:
-    """For each named (non-anonymous) speaker in the job's segments, refresh
-    both their EXPLICIT-insights and IMPLICIT-insights markdown from this
-    transcript. The user-maintained `profile.md` (bio) is never touched
-    by the LLM.
-
-    Result shape: {
-      "updated": ["Arnaud:explicit", "Arnaud:implicit", ...],
-      "skipped": [{speaker, reason}, ...],
-      "errors":  ["Arnaud:explicit: <err>", ...]
-    }"""
-    result = {"updated": [], "skipped": [], "errors": []}
-
-    if not app_state.deliverable_available() or app_state.deliverable_service() is None:
-        result["errors"].append("claude CLI not available — insights skipped")
-        return result
-
-    job = app_state.jobs().get(job_id)
-    if not job or not job.segments:
-        result["errors"].append("job has no segments")
-        return result
-
-    from services.deliverable_service import _build_transcript_text, SPEAKERS_DIR
-
-    named = {
-        (seg.get("speaker") or "").strip()
-        for seg in job.segments
-        if seg.get("speaker") and not _is_anonymous_label(seg.get("speaker"))
-    }
-    if not named:
-        result["errors"].append("no named speakers to extract insights for")
-        return result
-
-    transcript_text = _build_transcript_text(job.segments)
-
-    sections = (
-        ("explicit", "explicit_insights.md", "update_explicit_insights"),
-        ("implicit", "implicit_insights.md", "update_implicit_insights"),
-    )
-
-    for name in sorted(named):
-        speaker_lines = [
-            line for line in transcript_text.split("\n")
-            if f"] {name}:" in line
-        ]
-        if not speaker_lines:
-            result["skipped"].append({"speaker": name, "reason": "no lines"})
-            continue
-        speaker_transcript = "\n".join(speaker_lines[:100])
-
-        speaker_folder = SPEAKERS_DIR / name
-        speaker_folder.mkdir(parents=True, exist_ok=True)
-
-        for tag, filename, method_name in sections:
-            try:
-                path = speaker_folder / filename
-                existing = path.read_text(encoding="utf-8") if path.exists() else ""
-                logger.info("Updating %s for %s from job %s", tag, name, job_id)
-                method = getattr(app_state.deliverable_service(), method_name)
-                updated = method(name, speaker_transcript, existing)
-                path.write_text(updated, encoding="utf-8")
-                result["updated"].append(f"{name}:{tag}")
-            except Exception as e:
-                logger.error("Insight extraction failed for %s:%s: %s", name, tag, e, exc_info=True)
-                result["errors"].append(f"{name}:{tag}: {e}")
-
-    return result
 
 
 class SpeakerAssignment(BaseModel):

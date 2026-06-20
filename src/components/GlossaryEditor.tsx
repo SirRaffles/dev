@@ -27,11 +27,10 @@ function promoteLine(body: string, line: string): string {
   let inPending = false;
   let inActive = false;
   let activeEndIdx = -1;
-  let promotedTerm = '';
 
   // Extract just the term from the bullet (strip "- " prefix and " (from ...)" suffix).
   const match = line.match(/^-\s+([^(]+?)\s*(?:\(from\b.*)?$/);
-  promotedTerm = (match?.[1] ?? line.replace(/^-\s+/, '')).trim();
+  const promotedTerm = (match?.[1] ?? line.replace(/^-\s+/, '')).trim();
 
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];

@@ -20,6 +20,7 @@ import useWakeOnLan from './hooks/useWakeOnLan';
 import useTheme from './hooks/useTheme';
 import useGlobalKeyboard from './hooks/useGlobalKeyboard';
 import useTranscriptionSession from './hooks/useTranscriptionSession';
+import type { TranscriptionSessionSettings } from './hooks/useTranscriptionSession';
 
 // Utils
 import { API_URL, JobStatus, cancelJob } from './utils/api';
@@ -179,7 +180,9 @@ function App() {
     file,
     files,
     youtubeUrl,
-    settings,
+    // App holds settings loosely (Record) to bridge SettingsPanel's `Settings`
+    // type and the session hook's stricter shape; they share the same 9 keys.
+    settings: settings as TranscriptionSessionSettings,
     isDocumentMode: Boolean(isDocumentMode),
     macState,
     triggerWake,

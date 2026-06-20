@@ -117,3 +117,22 @@ def test_startup_time_reads_through(monkeypatch):
     sentinel = 12345.6
     monkeypatch.setattr(state, "startup_time", sentinel)
     assert app_state.startup_time() == sentinel
+
+
+def test_whisper_model_ready_reads_through(monkeypatch):
+    monkeypatch.setattr(state, "whisper_model_ready", True)
+    assert app_state.whisper_model_ready() is True
+    monkeypatch.setattr(state, "whisper_model_ready", False)
+    assert app_state.whisper_model_ready() is False
+
+
+def test_whisper_model_path_reads_through(monkeypatch):
+    monkeypatch.setattr(state, "whisper_model_path", "/models/whisper")
+    assert app_state.whisper_model_path() == "/models/whisper"
+
+
+def test_parakeet_available_reads_through(monkeypatch):
+    monkeypatch.setattr(state, "_parakeet_available", True)
+    assert app_state.parakeet_available() is True
+    monkeypatch.setattr(state, "_parakeet_available", False)
+    assert app_state.parakeet_available() is False
