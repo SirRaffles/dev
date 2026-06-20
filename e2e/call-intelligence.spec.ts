@@ -1,12 +1,5 @@
-import { test, expect, Page } from '@playwright/test';
-
-// Helper: navigate to a tab by clicking it
-async function navigateToTab(page: Page, tabName: string) {
-  // Nav tabs use role="tab" (ARIA tablist pattern)
-  await page.getByRole('tab', { name: tabName, exact: true }).click();
-  // Wait for lazy-loaded content to appear
-  await page.waitForTimeout(800);
-}
+import { test, expect, type Page } from '@playwright/test';
+import { navigateToTab, openTab } from './helpers';
 
 // Unique name generator for test isolation
 function uniqueName(prefix: string) {
@@ -41,32 +34,27 @@ test.describe('Navigation', () => {
   });
 
   test('clicking Recordings tab shows recordings view', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Recordings');
+    await openTab(page, 'Recordings');
     await expect(page.getByText('Just Press Record')).toBeVisible({ timeout: 5000 });
   });
 
   test('clicking Calls tab shows calls view', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Calls');
+    await openTab(page, 'Calls');
     await expect(page.getByRole('heading', { name: /calls/i })).toBeVisible();
   });
 
   test('clicking Speakers tab shows speakers view', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     await expect(page.getByRole('heading', { name: /speakers/i })).toBeVisible();
   });
 
   test('clicking Contexts tab shows contexts view', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Contexts');
+    await openTab(page, 'Contexts');
     await expect(page.getByRole('heading', { name: /contexts/i })).toBeVisible();
   });
 
   test('switching tabs back to Transcribe restores upload UI', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     await expect(page.getByText('Upload File')).not.toBeVisible();
     await navigateToTab(page, 'Transcribe');
     await expect(page.getByText('Upload File')).toBeVisible();
@@ -75,15 +63,13 @@ test.describe('Navigation', () => {
 
 test.describe('Recordings View', () => {
   test('shows recordings list or empty state', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Recordings');
+    await openTab(page, 'Recordings');
     // Should show the "Just Press Record" heading in the recordings view
     await expect(page.getByText('Just Press Record')).toBeVisible({ timeout: 5000 });
   });
 
   test('refresh button is visible', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Recordings');
+    await openTab(page, 'Recordings');
     // RefreshCw button exists (it's the only button after the heading besides Plus)
     const buttons = page.locator('button');
     await expect(buttons.first()).toBeVisible();
@@ -92,8 +78,7 @@ test.describe('Recordings View', () => {
 
 test.describe('Speakers View', () => {
   test('shows empty state when no speakers exist', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     // May show speakers or empty state depending on existing data
     const heading = page.getByRole('heading', { name: /speakers/i });
     await expect(heading).toBeVisible();
@@ -101,8 +86,7 @@ test.describe('Speakers View', () => {
 
   test('create speaker flow', async ({ page }) => {
     const name = uniqueName('TestSpeaker');
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
 
     // Click the plus button to open create form
     // The plus button is near the heading
@@ -133,8 +117,7 @@ test.describe('Speakers View', () => {
       data: { name },
     });
 
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     await page.waitForTimeout(500);
 
     // Find the speaker in the list
@@ -166,8 +149,7 @@ test.describe('Speakers View', () => {
       data: { name },
     });
 
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     await page.waitForTimeout(500);
 
     // Click on the speaker to open profile
@@ -188,23 +170,20 @@ test.describe('Speakers View', () => {
 
 test.describe('Calls View', () => {
   test('shows calls list or empty state', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Calls');
+    await openTab(page, 'Calls');
     // Should show either the calls list or "No calls yet" message
     const callsHeading = page.getByRole('heading', { name: /calls/i });
     await expect(callsHeading).toBeVisible();
   });
 
   test('status filter buttons are visible', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Calls');
+    await openTab(page, 'Calls');
     // Filter buttons should be visible
     await expect(page.getByRole('button', { name: 'All', exact: true }).first()).toBeVisible();
   });
 
   test('clicking filter button changes active styling', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Calls');
+    await openTab(page, 'Calls');
 
     // Click a filter button and verify it changes
     const allButton = page.getByRole('button', { name: 'All', exact: true }).first();
@@ -218,15 +197,13 @@ test.describe('Calls View', () => {
 
 test.describe('Contexts View', () => {
   test('shows contexts heading', async ({ page }) => {
-    await page.goto('/');
-    await navigateToTab(page, 'Contexts');
+    await openTab(page, 'Contexts');
     await expect(page.getByRole('heading', { name: /contexts/i })).toBeVisible();
   });
 
   test('create context folder flow', async ({ page }) => {
     const folderName = uniqueName('TestCtx');
-    await page.goto('/');
-    await navigateToTab(page, 'Contexts');
+    await openTab(page, 'Contexts');
 
     // Click plus button to open create form
     await page.locator('button').nth(1).click();
@@ -254,8 +231,7 @@ test.describe('Contexts View', () => {
       data: { path: folderName, description: 'test folder' },
     });
 
-    await page.goto('/');
-    await navigateToTab(page, 'Contexts');
+    await openTab(page, 'Contexts');
     await page.waitForTimeout(500);
 
     // The folder should be visible in the tree
@@ -292,8 +268,7 @@ test.describe('Cross-view navigation', () => {
       data: { name },
     });
 
-    await page.goto('/');
-    await navigateToTab(page, 'Speakers');
+    await openTab(page, 'Speakers');
     await expect(page.getByText(name)).toBeVisible({ timeout: 5000 });
 
     // Switch to Calls and back

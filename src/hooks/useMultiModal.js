@@ -4,7 +4,7 @@ import { usePollingJob } from './usePollingJob';
 
 const fetchMultiModalStatus = (id) => fetchJobStatus(id, true);
 
-export function useMultiModal() {
+function useMultiModal() {
   const job = usePollingJob(fetchMultiModalStatus);
 
   const processDocument = useCallback(async (file, options = {}) => {

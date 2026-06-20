@@ -29,7 +29,7 @@ from processors.pptx_processor import PPTXProcessor
 from processors.video_processor import VideoProcessor
 from utils.export import format_timestamp, format_srt_timestamp
 from utils.export_multimodal import generate_multimodal_markdown, generate_multimodal_json
-import state
+import app_state
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ async def process_multimodal(
         enable_visual_analysis=enable_visual_analysis,
         enable_ocr=enable_ocr,
     )
-    state.multimodal_jobs[job.job_id] = job
+    app_state.multimodal_jobs()[job.job_id] = job
 
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / f"input{file_ext}"
@@ -160,7 +160,7 @@ async def process_pdf(
         source_type="pdf",
         source_filename=file.filename,
     )
-    state.multimodal_jobs[job.job_id] = job
+    app_state.multimodal_jobs()[job.job_id] = job
 
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / "input.pdf"
@@ -211,7 +211,7 @@ async def process_pptx(
         source_type="pptx",
         source_filename=file.filename,
     )
-    state.multimodal_jobs[job.job_id] = job
+    app_state.multimodal_jobs()[job.job_id] = job
 
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / f"input{ext}"
@@ -273,7 +273,7 @@ async def process_video_multimodal(
         enable_diarization=enable_diarization,
         enable_visual_analysis=enable_visual_analysis,
     )
-    state.multimodal_jobs[job.job_id] = job
+    app_state.multimodal_jobs()[job.job_id] = job
 
     temp_dir = Path(tempfile.mkdtemp())
     input_path = temp_dir / f"input{ext}"
@@ -311,7 +311,7 @@ async def process_video_multimodal(
 @router.get("/process/job/{job_id}")
 async def get_multimodal_job_status(job_id: str):
     """Get the status and result of a multi-modal processing job."""
-    job = state.multimodal_jobs.get(job_id)
+    job = app_state.multimodal_jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -358,7 +358,7 @@ async def get_multimodal_job_status(job_id: str):
 @router.get("/process/job/{job_id}/visual-content")
 async def get_visual_content(job_id: str):
     """Get extracted visual content for a multi-modal job."""
-    job = state.multimodal_jobs.get(job_id)
+    job = app_state.multimodal_jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -380,7 +380,7 @@ async def get_visual_content(job_id: str):
 @router.get("/process/job/{job_id}/image/{element_id}")
 async def get_visual_element_image(job_id: str, element_id: str):
     """Get an image from a visual element."""
-    job = state.multimodal_jobs.get(job_id)
+    job = app_state.multimodal_jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -430,10 +430,10 @@ async def get_visual_element_image(job_id: str, element_id: str):
 @router.delete("/process/job/{job_id}")
 async def delete_multimodal_job(job_id: str):
     """Delete a multi-modal processing job."""
-    if job_id not in state.multimodal_jobs:
+    if job_id not in app_state.multimodal_jobs():
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = state.multimodal_jobs[job_id]
+    job = app_state.multimodal_jobs()[job_id]
 
     if job.image_dir:
         image_dir_path = Path(job.image_dir)
@@ -443,7 +443,7 @@ async def delete_multimodal_job(job_id: str):
             except Exception as e:
                 logger.warning(f"Failed to clean up image_dir {job.image_dir}: {e}")
 
-    del state.multimodal_jobs[job_id]
+    del app_state.multimodal_jobs()[job_id]
     return {"status": "deleted"}
 
 
@@ -454,7 +454,7 @@ async def export_multimodal_transcript(
     include_visuals: bool = Query(True, description="Include visual content in export"),
 ):
     """Export multi-modal transcript in various formats."""
-    job = state.multimodal_jobs.get(job_id)
+    job = app_state.multimodal_jobs().get(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

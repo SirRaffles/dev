@@ -6,7 +6,7 @@ Quick mode -> Parakeet v3 multilingual + pyannote + Sonnet refinement.
 
 This module is intentionally thin: it owns dispatch + phase transitions, and
 delegates work to existing helpers in services.transcription, services.diarization,
-and routes.refinement.
+and services.refinement_dispatch.
 """
 
 import logging
@@ -23,6 +23,7 @@ from services.transcription import (
     _update_job,
 )
 from services.refinement_policy import build_refinement_policy
+from services.refinement_dispatch import dispatch_refinement_for_job
 from services.diarization import (
     run_diarization,
     assign_speakers_to_segments,
@@ -32,6 +33,7 @@ from services.diarization import (
 from services.postprocess import normalize_segments
 from services.audio import apply_noise_reduction
 from services.labels import is_anonymous_label
+from services.speaker_match_scope import resolve_match_scope
 from job_models import (
     SPEAKER_REVIEW_NEEDS_REVIEW,
     SPEAKER_REVIEW_NOT_NEEDED,
@@ -156,7 +158,6 @@ def _dispatch_refinement(job, settings, audio_path: Optional[str],
                          mode: Literal["best", "quick"] = "best") -> bool:
     job_id = job.job_id
     try:
-        from routes.refinement import dispatch_refinement_for_job
         policy = build_refinement_policy(settings, job)
         dispatch_refinement_for_job(
             job,
@@ -311,8 +312,7 @@ def orchestrate_transcription(
         if speakers and state.refinement_available:
             _update_job(job, progress=68, message="Matching voices to registered speakers...")
             try:
-                from routes.transcription import _resolve_match_scope
-                restrict_ids, prefer_ids, scope_mode = _resolve_match_scope({
+                restrict_ids, prefer_ids, scope_mode = resolve_match_scope({
                     "speaker_ids": settings.speaker_ids,
                     "num_speakers": settings.num_speakers,
                 })

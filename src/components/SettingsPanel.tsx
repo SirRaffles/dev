@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Languages, Globe, Users, Volume2, VolumeX, FolderOpen, Shield, Sparkles } from 'lucide-react';
 import { LANGUAGES, fetchContextTree, ContextTree, fetchSpeakers, createSpeaker, Speaker } from '../utils/api';
 import QualityDial, { QualityMode } from './QualityDial';
+import { SpeakerPicker } from './SpeakerPicker';
 
 interface Settings {
   language?: string;
@@ -81,66 +82,20 @@ function SettingsPanel({
     return () => { cancelled = true; };
   }, []);
 
-  // Expected-speakers combobox state.
-  const [speakerSearch, setSpeakerSearch] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [speakerCreating, setSpeakerCreating] = useState(false);
-  const [speakerCreateError, setSpeakerCreateError] = useState<string | null>(null);
-
-  // Integer num_speakers gates the picker.
+  // Integer num_speakers gates the picker (used as the combobox cap).
   const parsedNumSpeakers = useMemo(() => {
     if (numSpeakers === '' || numSpeakers === 'auto') return null;
     const n = parseInt(String(numSpeakers), 10);
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [numSpeakers]);
 
-  const pickedSpeakers = useMemo(
-    () => speakersAvailable.filter((s) => speakerIds.includes(s.speaker_id)),
-    [speakersAvailable, speakerIds]
-  );
-
-  const filteredCandidates = useMemo(() => {
-    const q = speakerSearch.trim().toLowerCase();
-    return speakersAvailable
-      .filter((s) => !speakerIds.includes(s.speaker_id))
-      .filter((s) => !q || s.name.toLowerCase().includes(q));
-  }, [speakersAvailable, speakerIds, speakerSearch]);
-
-  const capReached = parsedNumSpeakers !== null && speakerIds.length >= parsedNumSpeakers;
-
-  const exactMatch = speakersAvailable.find(
-    (s) => s.name.toLowerCase() === speakerSearch.trim().toLowerCase()
-  );
-  const canInlineCreate = speakerSearch.trim().length > 0 && !exactMatch && !capReached;
-
-  const pickExisting = (s: Speaker) => {
-    if (capReached) return;
-    handleChange('speakerIds', [...speakerIds, s.speaker_id]);
-    setSpeakerSearch('');
-    setMenuOpen(false);
-  };
-
-  const removePick = (id: string) => {
-    handleChange('speakerIds', speakerIds.filter((sid) => sid !== id));
-  };
-
-  const createAndPick = async () => {
-    const name = speakerSearch.trim();
-    if (!name || capReached || speakerCreating) return;
-    setSpeakerCreating(true);
-    setSpeakerCreateError(null);
-    try {
-      const created = await createSpeaker(name);
-      const list = await fetchSpeakers();
-      setSpeakersAvailable(list);
-      handleChange('speakerIds', [...speakerIds, created.speaker_id]);
-      setSpeakerSearch('');
-      setMenuOpen(false);
-    } catch (e: any) {
-      setSpeakerCreateError(e?.message || 'Could not create speaker');
-    } finally {
-      setSpeakerCreating(false);
-    }
+  // Inline-create: make the speaker, refresh the registry so the picked chip
+  // resolves, and hand its id back to the shared combobox to append.
+  const handleCreateSpeaker = async (name: string): Promise<string> => {
+    const created = await createSpeaker(name);
+    const list = await fetchSpeakers();
+    setSpeakersAvailable(list);
+    return created.speaker_id;
   };
 
   // For document processing, only show relevant settings
@@ -151,7 +106,7 @@ function SettingsPanel({
           Document processing will extract text, images, and visual content.
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Charts and diagrams will be analyzed using GLM-4.6V vision model.
+          Charts and diagrams will be analyzed using the configured MLX-VLM vision model.
         </p>
       </div>
     );
@@ -381,82 +336,15 @@ function SettingsPanel({
               </p>
             ) : (
               <>
-                {/* Picked chips */}
-                {pickedSpeakers.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {pickedSpeakers.map((s) => (
-                      <span
-                        key={s.speaker_id}
-                        className="inline-flex items-center gap-1 pl-3 pr-1 py-1 rounded-full text-xs font-medium bg-violet-500 text-white"
-                      >
-                        {s.name}
-                        <button
-                          type="button"
-                          onClick={() => removePick(s.speaker_id)}
-                          aria-label={`Remove ${s.name} from expected speakers`}
-                          className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-violet-600"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Search + menu */}
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={speakerSearch}
-                    onChange={(e) => { setSpeakerSearch(e.target.value); setMenuOpen(true); }}
-                    onFocus={() => setMenuOpen(true)}
-                    onBlur={() => setTimeout(() => setMenuOpen(false), 150)}
-                    disabled={disabled || capReached}
-                    placeholder={capReached ? 'Cap reached — remove one to pick another' : 'Search or type a new speaker name…'}
-                    aria-label="Search expected speakers"
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 dark:bg-slate-700 dark:border-slate-600 dark:text-white placeholder-slate-400 focus:outline-none focus:border-violet-400 disabled:opacity-50"
-                  />
-                  {menuOpen && !capReached && (filteredCandidates.length > 0 || canInlineCreate) && (
-                    <div className="absolute z-20 left-0 right-0 mt-1 max-h-60 overflow-auto rounded-lg bg-white border border-slate-200 dark:bg-slate-700 dark:border-slate-600 shadow-lg">
-                      {filteredCandidates.map((s) => (
-                        <button
-                          key={s.speaker_id}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => pickExisting(s)}
-                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-600"
-                        >
-                          <span className="truncate">{s.name}</span>
-                          <span
-                            className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                              s.embedding_path
-                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                                : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                            }`}
-                            title={s.embedding_path ? 'Has a voice sample — will auto-match' : 'No voice sample yet — will be learned from this recording'}
-                          >
-                            {s.embedding_path ? '✓ voice' : '⚠ no voice'}
-                          </span>
-                        </button>
-                      ))}
-                      {canInlineCreate && (
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={createAndPick}
-                          disabled={speakerCreating}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm border-t border-slate-200 dark:border-slate-600 text-blue-600 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-60"
-                        >
-                          ＋ Create new speaker:&nbsp;<span className="font-medium">{speakerSearch.trim()}</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {speakerCreateError && (
-                  <p role="alert" className="text-xs text-red-500 mt-1">{speakerCreateError}</p>
-                )}
+                <SpeakerPicker
+                  candidates={speakersAvailable}
+                  pickedIds={speakerIds}
+                  cap={parsedNumSpeakers}
+                  disabled={disabled}
+                  onPick={(id) => handleChange('speakerIds', [...speakerIds, id])}
+                  onRemove={(id) => handleChange('speakerIds', speakerIds.filter((sid) => sid !== id))}
+                  onCreate={handleCreateSpeaker}
+                />
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
                   Picks bias the transcription prompt AND narrow post-transcription voice auto-match.
                   {speakerIds.length === parsedNumSpeakers

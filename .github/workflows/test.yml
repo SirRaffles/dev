@@ -21,10 +21,13 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install fastapi uvicorn python-multipart pydantic httpx \
+          # CPU-only torch (silero VAD import in tests/test_audio_vad.py) — keep it
+          # off the default index so we don't pull the multi-GB CUDA build.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install fastapi uvicorn python-multipart pydantic httpx requests \
                     pytest pytest-asyncio pytest-timeout reportlab python-docx markdown \
-                    Pillow imagehash numpy scipy noisereduce yt-dlp \
-                    opencv-python-headless scenedetect
+                    Pillow imagehash numpy scipy noisereduce yt-dlp youtube-transcript-api \
+                    soundfile opencv-python-headless scenedetect
 
       - name: Run tests
         working-directory: backend

@@ -68,3 +68,11 @@ ENV/
 
 # Playwright MCP output
 .playwright-mcp/
+
+# Graphify / audit scratch artifacts
+graphify-out/
+graphify-comparison/
+
+# Local audio test fixtures
+*.m4a
+/Tests/

@@ -4,13 +4,14 @@ Job data models and storage.
 
 import os
 import json
-import sqlite3
 import threading
 import logging
 from datetime import datetime
 from typing import Optional, List, Literal
 
 from pydantic import BaseModel
+
+from persistence import Database
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +93,11 @@ class JobStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._cache = {}
+        # Cache-coherence lock — distinct from Database's connection lock.
         self._lock = threading.Lock()
+        self.db.init_pragmas()
         self._init_db()
         try:
             os.chmod(self.db_path, 0o600)
@@ -108,18 +112,12 @@ class JobStore:
         )
         self._prune_thread.start()
 
-    def _get_connection(self):
-        # TODO(audit #14): switch to thread-local cached connections. Current
-        # implementation opens a fresh handle per call, which is safe but slow.
-        return sqlite3.connect(self.db_path, check_same_thread=False)
-
     def _init_db(self):
-        with self._get_connection() as conn:
-            # Audit #14: WAL + relaxed sync + in-memory temp + mmap for perf.
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA temp_store=MEMORY")
-            conn.execute("PRAGMA mmap_size=268435456")
+        # Pragmas (WAL + relaxed sync + in-memory temp + mmap) are applied once
+        # via self.db.init_pragmas() in __init__. Here we only own the schema:
+        # defensive CREATE TABLE / ALTER TABLE so the store works even if the
+        # migration runner has not run against this DB file.
+        with self.db.connection() as conn:
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
@@ -163,39 +161,35 @@ class JobStore:
 
     def _cleanup_stale_pending(self):
         """Mark jobs stuck in pending/processing for >24h as failed on startup."""
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "UPDATE jobs SET status='failed', error='stale: auto-cleaned on startup', "
-                "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('pending', 'processing') "
-                "AND updated_at < datetime('now', '-24 hours')"
-            )
-            if cursor.rowcount:
-                conn.commit()
-                logger.info("Cleaned %d stale pending/processing jobs", cursor.rowcount)
+        cleaned = self.db.mutate(
+            "UPDATE jobs SET status='failed', error='stale: auto-cleaned on startup', "
+            "updated_at=CURRENT_TIMESTAMP "
+            "WHERE status IN ('pending', 'processing') "
+            "AND updated_at < datetime('now', '-24 hours')"
+        )
+        if cleaned:
+            logger.info("Cleaned %d stale pending/processing jobs", cleaned)
 
     def _load_active_jobs(self):
-        with self._get_connection() as conn:
-            # Any "processing" OR "pending" job from a previous backend
-            # instance is orphaned — processing jobs lost their executor
-            # thread; pending jobs lost their executor.submit() call from
-            # the route handler. Neither will resume on its own, so mark
-            # them all as failed and let the user retry.
-            orphan_cursor = conn.execute(
-                "UPDATE jobs SET status='failed', "
-                "error='Backend restarted mid-job — please retry', "
-                "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('processing', 'pending')"
+        # Any "processing" OR "pending" job from a previous backend
+        # instance is orphaned — processing jobs lost their executor
+        # thread; pending jobs lost their executor.submit() call from
+        # the route handler. Neither will resume on its own, so mark
+        # them all as failed and let the user retry.
+        orphaned = self.db.mutate(
+            "UPDATE jobs SET status='failed', "
+            "error='Backend restarted mid-job — please retry', "
+            "updated_at=CURRENT_TIMESTAMP "
+            "WHERE status IN ('processing', 'pending')"
+        )
+        if orphaned:
+            logger.info(
+                "Marked %d orphan 'processing'/'pending' jobs as failed on startup",
+                orphaned,
             )
-            if orphan_cursor.rowcount:
-                conn.commit()
-                logger.info(
-                    "Marked %d orphan 'processing'/'pending' jobs as failed on startup",
-                    orphan_cursor.rowcount,
-                )
-            # No active jobs survive a restart — the executor work is lost.
-            # Leaving _cache empty matches that reality; the UI shows real
-            # failure states + retry buttons instead of zombie polling.
+        # No active jobs survive a restart — the executor work is lost.
+        # Leaving _cache empty matches that reality; the UI shows real
+        # failure states + retry buttons instead of zombie polling.
         logger.info(f"Loaded {len(self._cache)} active jobs from database")
 
     def _prune_loop(self):
@@ -215,14 +209,11 @@ class JobStore:
             return default
 
     def _row_to_job(self, row, description=None) -> TranscriptionJob:
-        columns = [col[0] for col in description] if description else []
-
+        # row is a dict (Database returns sqlite3.Row mapped to dict). The
+        # `description` parameter is retained for signature compatibility but is
+        # no longer needed now that rows arrive keyed by column name.
         def by_name(name: str, fallback_index: int = None, default=None):
-            if name in columns:
-                return row[columns.index(name)]
-            if fallback_index is not None and fallback_index < len(row):
-                return row[fallback_index]
-            return default
+            return row.get(name, default)
 
         job = TranscriptionJob(by_name("job_id", 0))
         job.status = by_name("status", 1)
@@ -290,14 +281,11 @@ class JobStore:
     def prune_completed(self, max_age_hours: int = 720):
         """Remove completed/failed jobs older than max_age_hours from DB and cache."""
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM jobs WHERE status IN ('completed', 'failed') "
-                    "AND updated_at < datetime('now', ? || ' hours')",
-                    (f"-{max_age_hours}",)
-                )
-                pruned = cursor.rowcount
-                conn.commit()
+            pruned = self.db.mutate(
+                "DELETE FROM jobs WHERE status IN ('completed', 'failed') "
+                "AND updated_at < datetime('now', ? || ' hours')",
+                (f"-{max_age_hours}",)
+            )
             if pruned:
                 # Remove stale entries from cache too
                 stale = [
@@ -315,77 +303,67 @@ class JobStore:
         # Audit #14: prune is now a scheduled job; do not run it synchronously here.
         with self._lock:
             self._cache[job.job_id] = job
-            with self._get_connection() as conn:
-                conn.execute('''
-                    INSERT INTO jobs (job_id, status, progress, progress_message,
-                                     result, error, language, language_probability,
-                                     segments, speakers, file_path, settings, youtube_url,
-                                     phase, refinement_status, speaker_review_status,
-                                     auto_speaker_matches, learning_status, learning_summary)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', self._job_to_row(job, file_path, settings, youtube_url))
-                conn.commit()
+            self.db.mutate('''
+                INSERT INTO jobs (job_id, status, progress, progress_message,
+                                 result, error, language, language_probability,
+                                 segments, speakers, file_path, settings, youtube_url,
+                                 phase, refinement_status, speaker_review_status,
+                                 auto_speaker_matches, learning_status, learning_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', self._job_to_row(job, file_path, settings, youtube_url))
 
     def get(self, job_id: str) -> Optional[TranscriptionJob]:
         with self._lock:
             if job_id in self._cache:
                 return self._cache[job_id]
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    job = self._row_to_job(row, cursor.description)
-                    self._cache[job_id] = job
-                    return job
+            row = self.db.query_one("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+            if row:
+                job = self._row_to_job(row)
+                self._cache[job_id] = job
+                return job
             return None
 
     def get_job_meta(self, job_id: str) -> Optional[dict]:
         """Return stored settings and youtube_url for a job (for retry)."""
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT file_path, settings, youtube_url FROM jobs WHERE job_id = ?", (job_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return {
-                    "file_path": row[0],
-                    "settings": json.loads(row[1]) if row[1] else None,
-                    "youtube_url": row[2],
-                }
+            row = self.db.query_one(
+                "SELECT file_path, settings, youtube_url FROM jobs WHERE job_id = ?", (job_id,)
+            )
+            if not row:
+                return None
+            return {
+                "file_path": row["file_path"],
+                "settings": json.loads(row["settings"]) if row["settings"] else None,
+                "youtube_url": row["youtube_url"],
+            }
 
     def update(self, job: TranscriptionJob):
         with self._lock:
             job.speaker_review_status = _job_review_status(job)
             job.speakers_resolved = _resolved_from_review_status(job.speaker_review_status)
             self._cache[job.job_id] = job
-            with self._get_connection() as conn:
-                conn.execute('''
-                    UPDATE jobs SET status=?, progress=?, progress_message=?,
-                                   result=?, error=?, language=?, language_probability=?,
-                                   segments=?, speakers=?,
-                                   phase=?, refinement_status=?, speaker_review_status=?,
-                                   auto_speaker_matches=?, learning_status=?, learning_summary=?,
-                                   updated_at=CURRENT_TIMESTAMP
-                    WHERE job_id=?
-                ''', (
-                    job.status, job.progress, job.progress_message,
-                    json.dumps(job.result) if job.result else None,
-                    job.error, job.language, job.language_probability,
-                    json.dumps(job.segments) if job.segments else None,
-                    json.dumps(job.speakers) if job.speakers else None,
-                    job.phase,
-                    job.refinement_status,
-                    _job_review_status(job),
-                    json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
-                    job.learning_status,
-                    json.dumps(job.learning_summary) if job.learning_summary else None,
-                    job.job_id
-                ))
-                conn.commit()
+            self.db.mutate('''
+                UPDATE jobs SET status=?, progress=?, progress_message=?,
+                               result=?, error=?, language=?, language_probability=?,
+                               segments=?, speakers=?,
+                               phase=?, refinement_status=?, speaker_review_status=?,
+                               auto_speaker_matches=?, learning_status=?, learning_summary=?,
+                               updated_at=CURRENT_TIMESTAMP
+                WHERE job_id=?
+            ''', (
+                job.status, job.progress, job.progress_message,
+                json.dumps(job.result) if job.result else None,
+                job.error, job.language, job.language_probability,
+                json.dumps(job.segments) if job.segments else None,
+                json.dumps(job.speakers) if job.speakers else None,
+                job.phase,
+                job.refinement_status,
+                _job_review_status(job),
+                json.dumps(job.auto_speaker_matches) if job.auto_speaker_matches else None,
+                job.learning_status,
+                json.dumps(job.learning_summary) if job.learning_summary else None,
+                job.job_id
+            ))
             # Evict old completed/failed jobs from cache to bound memory
             if len(self._cache) > 1000:
                 to_evict = [
@@ -398,19 +376,15 @@ class JobStore:
     def update_settings(self, job_id: str, settings: dict) -> None:
         """Replace the stored settings JSON for a job."""
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "UPDATE jobs SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
-                    (json.dumps(settings) if settings else None, job_id),
-                )
-                conn.commit()
+            self.db.mutate(
+                "UPDATE jobs SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (json.dumps(settings) if settings else None, job_id),
+            )
 
     def delete(self, job_id: str):
         with self._lock:
             self._cache.pop(job_id, None)
-            with self._get_connection() as conn:
-                conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
-                conn.commit()
+            self.db.mutate("DELETE FROM jobs WHERE job_id=?", (job_id,))
 
     def get_all(self) -> dict:
         return dict(self._cache)
@@ -418,48 +392,45 @@ class JobStore:
     def list_recent(self, limit: int = 50, offset: int = 0, status: str = None) -> List[dict]:
         """List recent jobs from DB (not just cache). Returns lightweight summaries."""
         with self._lock:
-            with self._get_connection() as conn:
-                if status:
-                    cursor = conn.execute(
-                        "SELECT job_id, status, progress, progress_message, language, "
-                        "created_at, updated_at, file_path "
-                        "FROM jobs WHERE status = ? "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (status, limit, offset)
-                    )
-                else:
-                    cursor = conn.execute(
-                        "SELECT job_id, status, progress, progress_message, language, "
-                        "created_at, updated_at, file_path "
-                        "FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset)
-                    )
-                rows = cursor.fetchall()
-                return [
-                    {
-                        "job_id": r[0],
-                        "status": r[1],
-                        "progress": r[2] or 0,
-                        "progress_message": r[3] or "",
-                        "language": r[4],
-                        "created_at": r[5],
-                        "updated_at": r[6],
-                        "file_path": os.path.basename(r[7]) if r[7] else None,
-                    }
-                    for r in rows
-                ]
+            if status:
+                rows = self.db.query(
+                    "SELECT job_id, status, progress, progress_message, language, "
+                    "created_at, updated_at, file_path "
+                    "FROM jobs WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (status, limit, offset)
+                )
+            else:
+                rows = self.db.query(
+                    "SELECT job_id, status, progress, progress_message, language, "
+                    "created_at, updated_at, file_path "
+                    "FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset)
+                )
+            return [
+                {
+                    "job_id": r["job_id"],
+                    "status": r["status"],
+                    "progress": r["progress"] or 0,
+                    "progress_message": r["progress_message"] or "",
+                    "language": r["language"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "file_path": os.path.basename(r["file_path"]) if r["file_path"] else None,
+                }
+                for r in rows
+            ]
 
     def count(self, status: str = None) -> int:
         """Count jobs, optionally filtered by status."""
         with self._lock:
-            with self._get_connection() as conn:
-                if status:
-                    cursor = conn.execute(
-                        "SELECT COUNT(*) FROM jobs WHERE status = ?", (status,)
-                    )
-                else:
-                    cursor = conn.execute("SELECT COUNT(*) FROM jobs")
-                return cursor.fetchone()[0]
+            if status:
+                row = self.db.query_one(
+                    "SELECT COUNT(*) AS n FROM jobs WHERE status = ?", (status,)
+                )
+            else:
+                row = self.db.query_one("SELECT COUNT(*) AS n FROM jobs")
+            return row["n"]
 
     def get_active_count(self) -> int:
         return len([j for j in self._cache.values() if j.status == "processing"])
@@ -541,14 +512,12 @@ class RefinementStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._lock = threading.Lock()
         self._init_db()
 
-    def _get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
-
     def _init_db(self):
-        with self._get_connection() as conn:
+        with self.db.connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS refinements (
@@ -568,72 +537,62 @@ class RefinementStore:
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_refinements_status ON refinements(status)
             ''')
-            conn.commit()
         logger.info("Refinement store initialized")
 
     def create(self, job_id: str):
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO refinements (job_id, status) VALUES (?, 'pending')",
-                    (job_id,)
-                )
-                conn.commit()
+            self.db.mutate(
+                "INSERT OR REPLACE INTO refinements (job_id, status) VALUES (?, 'pending')",
+                (job_id,),
+            )
 
     def get(self, job_id: str) -> Optional[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM refinements WHERE job_id = ?", (job_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return self._row_to_dict(row, cursor.description)
+            row = self.db.query_one(
+                "SELECT * FROM refinements WHERE job_id = ?", (job_id,)
+            )
+            if not row:
+                return None
+            return self._decode(row)
 
     def update_status(self, job_id: str, status: str, error: str = None):
         with self._lock:
-            with self._get_connection() as conn:
-                if error:
-                    conn.execute(
-                        "UPDATE refinements SET status=?, error=? WHERE job_id=?",
-                        (status, error, job_id)
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE refinements SET status=? WHERE job_id=?",
-                        (status, job_id)
-                    )
-                conn.commit()
+            if error:
+                self.db.mutate(
+                    "UPDATE refinements SET status=?, error=? WHERE job_id=?",
+                    (status, error, job_id),
+                )
+            else:
+                self.db.mutate(
+                    "UPDATE refinements SET status=? WHERE job_id=?",
+                    (status, job_id),
+                )
 
     def save_result(self, job_id: str, result: dict):
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute('''
-                    UPDATE refinements SET
-                        status='completed',
-                        analysis=?,
-                        refined_segments=?,
-                        speaker_mapping=?,
-                        corrections_applied=?,
-                        speakers_identified=?,
-                        web_searches_performed=?,
-                        completed_at=CURRENT_TIMESTAMP
-                    WHERE job_id=?
-                ''', (
-                    json.dumps(result.get("analysis")),
-                    json.dumps(result.get("refined_segments")),
-                    json.dumps(result.get("speaker_mapping")),
-                    result.get("corrections_applied", 0),
-                    result.get("speakers_identified", 0),
-                    result.get("web_searches_performed", 0),
-                    job_id,
-                ))
-                conn.commit()
+            self.db.mutate('''
+                UPDATE refinements SET
+                    status='completed',
+                    analysis=?,
+                    refined_segments=?,
+                    speaker_mapping=?,
+                    corrections_applied=?,
+                    speakers_identified=?,
+                    web_searches_performed=?,
+                    completed_at=CURRENT_TIMESTAMP
+                WHERE job_id=?
+            ''', (
+                json.dumps(result.get("analysis")),
+                json.dumps(result.get("refined_segments")),
+                json.dumps(result.get("speaker_mapping")),
+                result.get("corrections_applied", 0),
+                result.get("speakers_identified", 0),
+                result.get("web_searches_performed", 0),
+                job_id,
+            ))
 
-    def _row_to_dict(self, row, description) -> dict:
-        columns = [col[0] for col in description]
-        d = dict(zip(columns, row))
+    @staticmethod
+    def _decode(d: dict) -> dict:
         # Parse JSON fields
         for field in ("analysis", "refined_segments", "speaker_mapping"):
             if d.get(field):
@@ -662,47 +621,29 @@ class SpeakerStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._lock = threading.Lock()
-
-    def _get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
 
     def create(self, speaker_id: str, name: str, folder_path: str, embedding_path: str = None) -> dict:
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO speakers (speaker_id, name, folder_path, embedding_path) "
-                    "VALUES (?, ?, ?, ?)",
-                    (speaker_id, name, folder_path, embedding_path),
-                )
-                conn.commit()
+            self.db.mutate(
+                "INSERT INTO speakers (speaker_id, name, folder_path, embedding_path) "
+                "VALUES (?, ?, ?, ?)",
+                (speaker_id, name, folder_path, embedding_path),
+            )
         return {"speaker_id": speaker_id, "name": name, "folder_path": folder_path}
 
     def get(self, speaker_id: str) -> Optional[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT * FROM speakers WHERE speaker_id = ?", (speaker_id,))
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return self._row_to_dict(row, cursor.description)
+            return self.db.query_one("SELECT * FROM speakers WHERE speaker_id = ?", (speaker_id,))
 
     def get_by_name(self, name: str) -> Optional[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT * FROM speakers WHERE name = ?", (name,))
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return self._row_to_dict(row, cursor.description)
+            return self.db.query_one("SELECT * FROM speakers WHERE name = ?", (name,))
 
     def list_all(self) -> List[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM speakers ORDER BY name"
-                )
-                return [self._row_to_dict(r, cursor.description) for r in cursor.fetchall()]
+            return self.db.query("SELECT * FROM speakers ORDER BY name")
 
     def update(self, speaker_id: str, **kwargs) -> bool:
         allowed = {"name", "folder_path", "embedding_path", "call_count", "total_speaking_time_seconds"}
@@ -712,35 +653,24 @@ class SpeakerStore:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         values = list(updates.values()) + [speaker_id]
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    f"UPDATE speakers SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE speaker_id=?",
-                    values,
-                )
-                conn.commit()
+            self.db.mutate(
+                f"UPDATE speakers SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE speaker_id=?",
+                values,
+            )
         return True
 
     def delete(self, speaker_id: str) -> bool:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("DELETE FROM speakers WHERE speaker_id=?", (speaker_id,))
-                conn.commit()
-                return cursor.rowcount > 0
+            return self.db.mutate("DELETE FROM speakers WHERE speaker_id=?", (speaker_id,)) > 0
 
     def increment_call_count(self, speaker_id: str, speaking_time: float = 0):
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "UPDATE speakers SET call_count = call_count + 1, "
-                    "total_speaking_time_seconds = total_speaking_time_seconds + ?, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE speaker_id = ?",
-                    (speaking_time, speaker_id),
-                )
-                conn.commit()
-
-    def _row_to_dict(self, row, description) -> dict:
-        columns = [col[0] for col in description]
-        return dict(zip(columns, row))
+            self.db.mutate(
+                "UPDATE speakers SET call_count = call_count + 1, "
+                "total_speaking_time_seconds = total_speaking_time_seconds + ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE speaker_id = ?",
+                (speaking_time, speaker_id),
+            )
 
 
 class CallSpeakerStore:
@@ -750,74 +680,56 @@ class CallSpeakerStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._lock = threading.Lock()
-
-    def _get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
 
     def add(self, call_id: str, speaker_id: str, speaker_label: str = None,
             confidence: float = 0, speaking_time: float = 0) -> dict:
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO call_speakers "
-                    "(call_id, speaker_id, speaker_label, confidence, speaking_time_seconds) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (call_id, speaker_id, speaker_label, confidence, speaking_time),
-                )
-                conn.commit()
+            self.db.mutate(
+                "INSERT OR REPLACE INTO call_speakers "
+                "(call_id, speaker_id, speaker_label, confidence, speaking_time_seconds) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (call_id, speaker_id, speaker_label, confidence, speaking_time),
+            )
         return {"call_id": call_id, "speaker_id": speaker_id}
 
     def confirm(self, call_id: str, speaker_id: str) -> bool:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "UPDATE call_speakers SET confirmed=1 WHERE call_id=? AND speaker_id=?",
-                    (call_id, speaker_id),
-                )
-                conn.commit()
-                return cursor.rowcount > 0
+            return self.db.mutate(
+                "UPDATE call_speakers SET confirmed=1 WHERE call_id=? AND speaker_id=?",
+                (call_id, speaker_id),
+            ) > 0
 
     def get_for_call(self, call_id: str) -> List[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT cs.*, s.name as speaker_name FROM call_speakers cs "
-                    "LEFT JOIN speakers s ON cs.speaker_id = s.speaker_id "
-                    "WHERE cs.call_id = ?",
-                    (call_id,),
-                )
-                return [self._row_to_dict(r, cursor.description) for r in cursor.fetchall()]
+            return self.db.query(
+                "SELECT cs.*, s.name as speaker_name FROM call_speakers cs "
+                "LEFT JOIN speakers s ON cs.speaker_id = s.speaker_id "
+                "WHERE cs.call_id = ?",
+                (call_id,),
+            )
 
     def get_for_speaker(self, speaker_id: str) -> List[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT cs.*, cm.title as call_title FROM call_speakers cs "
-                    "LEFT JOIN call_metadata cm ON cs.call_id = cm.job_id "
-                    "WHERE cs.speaker_id = ? ORDER BY cs.call_id DESC",
-                    (speaker_id,),
-                )
-                return [self._row_to_dict(r, cursor.description) for r in cursor.fetchall()]
+            return self.db.query(
+                "SELECT cs.*, cm.title as call_title FROM call_speakers cs "
+                "LEFT JOIN call_metadata cm ON cs.call_id = cm.job_id "
+                "WHERE cs.speaker_id = ? ORDER BY cs.call_id DESC",
+                (speaker_id,),
+            )
 
     def all_confirmed(self, call_id: str) -> bool:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT COUNT(*) FROM call_speakers WHERE call_id=? AND confirmed=0",
-                    (call_id,),
-                )
-                return cursor.fetchone()[0] == 0
+            row = self.db.query_one(
+                "SELECT COUNT(*) AS n FROM call_speakers WHERE call_id=? AND confirmed=0",
+                (call_id,),
+            )
+            return row["n"] == 0
 
     def delete_for_call(self, call_id: str):
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute("DELETE FROM call_speakers WHERE call_id=?", (call_id,))
-                conn.commit()
-
-    def _row_to_dict(self, row, description) -> dict:
-        columns = [col[0] for col in description]
-        return dict(zip(columns, row))
+            self.db.mutate("DELETE FROM call_speakers WHERE call_id=?", (call_id,))
 
 
 class CallMetadataStore:
@@ -827,31 +739,22 @@ class CallMetadataStore:
         if db_path is None:
             db_path = os.path.expanduser("~/.whisper_transcription_jobs.db")
         self.db_path = db_path
+        self.db = Database(db_path)
         self._lock = threading.Lock()
-
-    def _get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
 
     def create(self, job_id: str, source_type: str = "upload", source_path: str = None,
                title: str = None) -> dict:
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO call_metadata "
-                    "(job_id, source_type, source_path, title) VALUES (?, ?, ?, ?)",
-                    (job_id, source_type, source_path, title),
-                )
-                conn.commit()
+            self.db.mutate(
+                "INSERT OR IGNORE INTO call_metadata "
+                "(job_id, source_type, source_path, title) VALUES (?, ?, ?, ?)",
+                (job_id, source_type, source_path, title),
+            )
         return {"job_id": job_id, "source_type": source_type}
 
     def get(self, job_id: str) -> Optional[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT * FROM call_metadata WHERE job_id = ?", (job_id,))
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                return self._row_to_dict(row, cursor.description)
+            return self.db.query_one("SELECT * FROM call_metadata WHERE job_id = ?", (job_id,))
 
     def update(self, job_id: str, **kwargs) -> bool:
         allowed = {
@@ -865,72 +768,60 @@ class CallMetadataStore:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         values = list(updates.values()) + [job_id]
         with self._lock:
-            with self._get_connection() as conn:
-                conn.execute(
-                    f"UPDATE call_metadata SET {set_clause}, updated_at=CURRENT_TIMESTAMP "
-                    f"WHERE job_id=?",
-                    values,
-                )
-                conn.commit()
+            self.db.mutate(
+                f"UPDATE call_metadata SET {set_clause}, updated_at=CURRENT_TIMESTAMP "
+                f"WHERE job_id=?",
+                values,
+            )
         return True
 
     def list_recent(self, limit: int = 50, offset: int = 0, status_filter: str = None) -> List[dict]:
         with self._lock:
-            with self._get_connection() as conn:
-                if status_filter == "pending_speakers":
-                    cursor = conn.execute(
-                        "SELECT * FROM call_metadata WHERE speakers_identified=0 "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset),
-                    )
-                elif status_filter == "pending_context":
-                    cursor = conn.execute(
-                        "SELECT * FROM call_metadata WHERE speakers_identified=1 AND context_assigned=0 "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset),
-                    )
-                elif status_filter == "ready":
-                    cursor = conn.execute(
-                        "SELECT * FROM call_metadata WHERE speakers_identified=1 "
-                        "AND context_assigned=1 AND deliverables_generated=0 "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset),
-                    )
-                elif status_filter == "delivered":
-                    cursor = conn.execute(
-                        "SELECT * FROM call_metadata WHERE deliverables_generated=1 "
-                        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset),
-                    )
-                else:
-                    cursor = conn.execute(
-                        "SELECT * FROM call_metadata ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                        (limit, offset),
-                    )
-                return [self._row_to_dict(r, cursor.description) for r in cursor.fetchall()]
+            if status_filter == "pending_speakers":
+                return self.db.query(
+                    "SELECT * FROM call_metadata WHERE speakers_identified=0 "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            elif status_filter == "pending_context":
+                return self.db.query(
+                    "SELECT * FROM call_metadata WHERE speakers_identified=1 AND context_assigned=0 "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            elif status_filter == "ready":
+                return self.db.query(
+                    "SELECT * FROM call_metadata WHERE speakers_identified=1 "
+                    "AND context_assigned=1 AND deliverables_generated=0 "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            elif status_filter == "delivered":
+                return self.db.query(
+                    "SELECT * FROM call_metadata WHERE deliverables_generated=1 "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            else:
+                return self.db.query(
+                    "SELECT * FROM call_metadata ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
 
     def count(self, status_filter: str = None) -> int:
         with self._lock:
-            with self._get_connection() as conn:
-                if status_filter == "pending_speakers":
-                    cursor = conn.execute(
-                        "SELECT COUNT(*) FROM call_metadata WHERE speakers_identified=0"
-                    )
-                elif status_filter == "delivered":
-                    cursor = conn.execute(
-                        "SELECT COUNT(*) FROM call_metadata WHERE deliverables_generated=1"
-                    )
-                else:
-                    cursor = conn.execute("SELECT COUNT(*) FROM call_metadata")
-                return cursor.fetchone()[0]
+            if status_filter == "pending_speakers":
+                row = self.db.query_one(
+                    "SELECT COUNT(*) AS n FROM call_metadata WHERE speakers_identified=0"
+                )
+            elif status_filter == "delivered":
+                row = self.db.query_one(
+                    "SELECT COUNT(*) AS n FROM call_metadata WHERE deliverables_generated=1"
+                )
+            else:
+                row = self.db.query_one("SELECT COUNT(*) AS n FROM call_metadata")
+            return row["n"]
 
     def delete(self, job_id: str) -> bool:
         with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.execute("DELETE FROM call_metadata WHERE job_id=?", (job_id,))
-                conn.commit()
-                return cursor.rowcount > 0
-
-    def _row_to_dict(self, row, description) -> dict:
-        columns = [col[0] for col in description]
-        return dict(zip(columns, row))
+            return self.db.mutate("DELETE FROM call_metadata WHERE job_id=?", (job_id,)) > 0

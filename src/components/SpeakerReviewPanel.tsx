@@ -8,8 +8,12 @@ import {
   reRefineJob,
   confirmSpeakers,
 } from '../utils/api';
+import {
+  buildSpeakerAssignments,
+  CorrectionAction,
+} from '../utils/speakerReviewDecisions';
+import { isAnonymousLabel } from '../utils/speakerLabels';
 import RejectMatchModal, { RejectTarget } from './RejectMatchModal';
-import { isAnonymousLabel } from './TranscriptView';
 
 /**
  * Speaker review surface — context-aware off `speakerReviewStatus`:
@@ -50,13 +54,6 @@ interface Props {
  *   - ignore: leave the label anonymous, no embedding extraction, no
  *     profile change. Needs-review mode only.
  */
-type CorrectionAction =
-  | { kind: 'confirm'; speakerId: string; name: string }
-  | { kind: 'existing'; speakerId: string; name: string }
-  | { kind: 'new'; name: string }
-  | { kind: 'unknown' }
-  | { kind: 'ignore' };
-
 export default function SpeakerReviewPanel({
   jobId,
   segments,
@@ -181,43 +178,9 @@ export default function SpeakerReviewPanel({
     setAction(label, { kind: 'ignore' });
   };
 
-  // Build the assignments map for the submit. The serialization differs
-  // by mode: post-refinement maps 'unknown' → 'unknown'; needs-review
-  // doesn't expose 'unknown' (uses 'ignore' instead — slightly different
-  // semantics: 'unknown' strips an existing name, 'ignore' is a no-op
-  // because there was no name to strip yet).
-  const buildAssignments = (): Record<string, string> => {
-    const assignments: Record<string, string> = {};
-    for (const [label, action] of pendingCorrections.entries()) {
-      switch (action.kind) {
-        case 'confirm':
-        case 'existing':
-          assignments[label] = action.speakerId;
-          break;
-        case 'new':
-          assignments[label] = `new:${action.name}`;
-          break;
-        case 'unknown':
-          // In post-refinement mode (`/re-refine`), 'unknown' is a legacy
-          // value that backend accepts. In needs-review mode
-          // (`/confirm-speakers`, Plan 7A), the endpoint only enumerates
-          // UUID / 'new:name' / 'ignore'. Map 'unknown' → 'ignore' when
-          // pre-refining so a RejectMatchModal "Mark as Unknown" choice
-          // doesn't 400. The semantics are equivalent in this mode (both
-          // = "don't attach this label to any profile").
-          assignments[label] = needsReviewMode ? 'ignore' : 'unknown';
-          break;
-        case 'ignore':
-          assignments[label] = 'ignore';
-          break;
-      }
-    }
-    return assignments;
-  };
-
   const handleApply = async () => {
     if (pendingCorrections.size === 0) return;
-    const assignments = buildAssignments();
+    const assignments = buildSpeakerAssignments(pendingCorrections, needsReviewMode);
     setSubmitting(true);
     setSubmitError(null);
     try {

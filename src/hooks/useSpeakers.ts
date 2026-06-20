@@ -31,5 +31,22 @@ export default function useSpeakers() {
     await refresh();
   }, [refresh]);
 
-  return { speakers, loading, error, refresh, addSpeaker, removeSpeaker };
+  const removeMany = useCallback(async (ids: string[]): Promise<{ ok: number; failed: { id: string; error: string }[] }> => {
+    const failed: { id: string; error: string }[] = [];
+    let ok = 0;
+    // Sequential — the API rate limit is 120/min so bulk deletes are safe,
+    // but keeping it serial avoids spiking against the current user's budget.
+    for (const id of ids) {
+      try {
+        await deleteSpeaker(id);
+        ok += 1;
+      } catch (e: any) {
+        failed.push({ id, error: e?.message || 'Delete failed' });
+      }
+    }
+    await refresh();
+    return { ok, failed };
+  }, [refresh]);
+
+  return { speakers, loading, error, refresh, addSpeaker, removeSpeaker, removeMany };
 }

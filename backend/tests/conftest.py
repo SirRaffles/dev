@@ -15,6 +15,7 @@ _TEST_HOME = os.path.join(tempfile.gettempdir(), "whisper_test_home")
 os.makedirs(_TEST_HOME, exist_ok=True)
 os.environ["HOME"] = _TEST_HOME
 os.environ.setdefault("LOG_FILE", os.path.join(tempfile.gettempdir(), "whisper_test.log"))
+os.environ.setdefault("DISABLE_PARAKEET_PROBE", "true")
 
 if "mlx_whisper" not in sys.modules:
     mlx_whisper = types.ModuleType("mlx_whisper")

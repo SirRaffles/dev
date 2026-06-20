@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 
 from config import JPR_WATCH_PATH
-import state
+import app_state
 from routes.jpr import list_recordings as _jpr_list_recordings
 
 logger = logging.getLogger(__name__)
@@ -92,14 +92,15 @@ async def list_recordings(
 
     # Pull recent jobs — wider than `limit` since we'll filter out JPR-backed
     # ones. 5× headroom is a sane upper bound for typical job volumes.
-    job_summaries = state.jobs.list_recent(limit=max(limit * 5, 200), offset=0)
+    job_summaries = app_state.jobs().list_recent(limit=max(limit * 5, 200), offset=0)
 
     upload_items: list = []
     for js in job_summaries:
         job_id = js.get("job_id")
         if not job_id:
             continue
-        meta = state.jobs.get_job_meta(job_id) if hasattr(state.jobs, "get_job_meta") else None
+        _jobs = app_state.jobs()
+        meta = _jobs.get_job_meta(job_id) if hasattr(_jobs, "get_job_meta") else None
         settings = (meta or {}).get("settings") or {}
         youtube_url = (meta or {}).get("youtube_url")
 

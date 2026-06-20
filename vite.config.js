@@ -33,4 +33,8 @@ export default defineConfig({
     outDir: 'build',
     sourcemap: false,
   },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
 });

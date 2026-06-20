@@ -14,6 +14,12 @@ BACKEND_DIR="$PROJECT_DIR/backend"
 VENV_DIR="$BACKEND_DIR/venv"
 WHISPER_ENV="$HOME/.whisper-env"
 
+# Include ~/.local/bin so the backend can find the `claude` CLI (used by
+# DeliverableService for post-transcription insight extraction). Without
+# this, state.deliverable_available=False and speaker insights silently
+# no-op when the plist launcher runs us with a narrow PATH.
+export PATH="$HOME/.local/bin:$PATH"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -97,6 +103,12 @@ echo -e "${YELLOW}First startup will download Whisper model (~3GB)${NC}"
 echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
 echo ""
 
-# Start the server (bound to localhost by default; Tailscale-fronted deployment)
+# Start the server (bound to localhost by default; Tailscale-fronted deployment).
+# Wrap in caffeinate so macOS can't doze the machine and starve the decoder
+# when the lid is closed or the display sleeps during a long transcription:
+#   -i  prevent idle sleep (display-sleep-driven)
+#   -s  prevent system sleep while on AC power
+# The launchd KeepAlive policy still handles crashes, so there's no risk of
+# caffeinate masking a runaway process.
 cd "$BACKEND_DIR"
-exec uvicorn main:app --host "${UVICORN_HOST:-127.0.0.1}" --port 8000
+exec /usr/bin/caffeinate -is uvicorn main:app --host "${UVICORN_HOST:-127.0.0.1}" --port 8000

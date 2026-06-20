@@ -14,6 +14,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { openHistoryJobFromApp } from './helpers';
 
 const TARGET_JOB_ID = '7015f471-225a-4e30-a4e9-f3fe694fb757';
 const BACKEND = 'http://localhost:8000';
@@ -29,23 +30,11 @@ test.describe('SpeakerReviewPanel', () => {
   });
 
   test('panel renders for a completed job with mixed speakers', async ({ page }) => {
-    await page.goto('/');
-
-    // Wait for the app shell.
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 10_000 });
-
     // Inject the job into the App via the History flow: the easiest deep-link
     // is to call loadHistoryJob via the exposed JobHistory UI. The transcribe
     // tab has a JobHistory expander.
-    // First open History.
-    const historyToggle = page.getByRole('button', { name: /Recent Transcriptions/i });
-    await expect(historyToggle).toBeVisible({ timeout: 5000 });
-    await historyToggle.click();
-    await page.waitForTimeout(800);
-
-    // Find the job row by its 8-char id prefix.
-    const jobRow = page.getByText(TARGET_JOB_ID.slice(0, 8), { exact: false });
-    if (!(await jobRow.isVisible({ timeout: 3000 }).catch(() => false))) {
+    const jobOpened = await openHistoryJobFromApp(page, TARGET_JOB_ID);
+    if (!jobOpened) {
       // Fallback: trigger loadHistoryJob directly via page.evaluate, mimicking
       // what the UI does. This isolates the panel-rendering question from
       // the JobHistory-find-the-row question.
@@ -59,11 +48,6 @@ test.describe('SpeakerReviewPanel', () => {
       }, TARGET_JOB_ID);
       test.skip(true, 'JobHistory row not found in DOM — need to expose deep link first');
     }
-
-    await jobRow.click();
-
-    // Wait for the transcript view to mount.
-    await page.waitForTimeout(1500);
 
     // Section A header
     const identifiedHeader = page.getByText('Identified', { exact: true });
@@ -88,19 +72,10 @@ test.describe('SpeakerReviewPanel', () => {
   });
 
   test('typing a name + clicking Create enables Apply button', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 10_000 });
-
-    const historyToggle = page.getByRole('button', { name: /Recent Transcriptions/i });
-    await expect(historyToggle).toBeVisible({ timeout: 5000 });
-    await historyToggle.click();
-    await page.waitForTimeout(800);
-    const jobRow = page.getByText(TARGET_JOB_ID.slice(0, 8), { exact: false });
-    if (!(await jobRow.isVisible({ timeout: 3000 }).catch(() => false))) {
+    const jobOpened = await openHistoryJobFromApp(page, TARGET_JOB_ID);
+    if (!jobOpened) {
       test.skip(true, 'JobHistory row not found');
     }
-    await jobRow.click();
-    await page.waitForTimeout(1500);
 
     // Find an input inside the unknown-labels section. The plan's draft input
     // likely has placeholder text or aria-label.

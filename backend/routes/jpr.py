@@ -14,9 +14,10 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Body
+from pydantic import BaseModel
 
 from config import JPR_WATCH_PATH, JPR_STATE_FILE
-import state
+import app_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["jpr"])
@@ -139,7 +140,7 @@ def _job_speakers(job_id: Optional[str]) -> list:
     if not job_id:
         return []
     try:
-        job = state.jobs.get(job_id)
+        job = app_state.jobs().get(job_id)
         if not job:
             return []
         seen = set()
@@ -319,7 +320,7 @@ async def get_recording_transcript(path: str):
     job_id = file_status.get("job_id")
     if job_id:
         try:
-            job = state.jobs.get(job_id)
+            job = app_state.jobs().get(job_id)
             if job and getattr(job, "segments", None):
                 segments = job.segments
                 speakers = _job_speakers(job_id)
@@ -457,3 +458,67 @@ async def reprocess_recording(path: str):
         _write_watcher_state(watcher_state)
 
     return {"status": "queued" if keys_to_remove else "not_tracked", "path": path}
+
+
+class RenameSourceRequest(BaseModel):
+    new_name: str
+
+
+@router.post("/jpr/job/{job_id}/rename")
+async def rename_job_source(job_id: str, req: RenameSourceRequest):
+    """Rename the JPR audio file backing this job. JPR-only (jobs whose
+    settings.original_filename does not resolve under JPR_WATCH_PATH return 400).
+    Auto-suffixes (2), (3), ... on conflict. Updates settings.original_filename
+    so subsequent _resolve_job_audio_path calls find the renamed file.
+
+    Note: this intentionally does NOT update the JPR watcher state file
+    (~/.jpr_watcher_state.json). The watcher re-discovers renames on its own
+    next scan.
+    """
+    _jobs = app_state.jobs()
+    meta = _jobs.get_job_meta(job_id) if hasattr(_jobs, "get_job_meta") else None
+    settings = (meta or {}).get("settings") or {}
+    original_filename = settings.get("original_filename")
+    if not original_filename:
+        raise HTTPException(status_code=400, detail="Job has no original_filename — not a JPR-sourced job")
+
+    # Resolve the current file location via JPR_WATCH_PATH (defensive: also
+    # accept any path stored in settings.file_path).
+    candidates = list(JPR_WATCH_PATH.rglob(original_filename))
+    if not candidates:
+        raise HTTPException(status_code=404, detail=f"JPR file '{original_filename}' not found under watch path")
+    src = candidates[0]
+
+    # Validate new name. No path separators, no leading dot (hidden), no
+    # empty. Preserve the original extension if user didn't include one.
+    raw = req.new_name.strip()
+    if not raw or "/" in raw or "\\" in raw or raw.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not raw.endswith(src.suffix):
+        raw = raw + src.suffix
+
+    # Conflict resolution: (2), (3), ...
+    dest = src.parent / raw
+    if dest == src:
+        return {"status": "noop", "old_name": original_filename, "new_name": original_filename}
+    counter = 2
+    stem = (src.parent / raw).stem
+    while dest.exists():
+        dest = src.parent / f"{stem} ({counter}){src.suffix}"
+        counter += 1
+
+    try:
+        src.rename(dest)
+    except OSError as exc:
+        logger.exception("Rename failed: %s -> %s", src, dest)
+        raise HTTPException(status_code=500, detail=f"Rename failed: {exc}")
+
+    # Persist the new original_filename so future audio resolution works.
+    new_settings = dict(settings)
+    new_settings["original_filename"] = dest.name
+    try:
+        app_state.jobs().update_settings(job_id, new_settings)
+    except Exception:
+        logger.warning("Failed to persist updated original_filename for %s", job_id, exc_info=True)
+
+    return {"status": "renamed", "old_name": original_filename, "new_name": dest.name}

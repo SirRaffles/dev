@@ -162,7 +162,7 @@ class BaseProcessor(ABC):
 
         Combines:
         - Document text (from Docling/MarkItDown/PyMuPDF4LLM)
-        - Visual descriptions (from GLM-4.6V-Flash)
+        - Visual descriptions (from the configured MLX-VLM model)
         - OCR text (from Tesseract)
         - Transcription (for audio/video)
         - Speaker notes (for PPTX)

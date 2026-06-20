@@ -8,9 +8,18 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from config import SUPPORTED_LANGUAGES, MLX_MODELS, PARAKEET_MODELS
+from config import (
+    SUPPORTED_LANGUAGES,
+    MLX_MODELS,
+    PARAKEET_MODELS,
+    REFINEMENT_MODEL,
+    REFINEMENT_PROVIDER,
+    VISION_MODEL_LABEL,
+    VISION_MODEL_PATH,
+)
 from services.model_manager import get_model_manager, ModelName
 import state
+import app_state
 
 router = APIRouter()
 
@@ -45,8 +54,9 @@ async def health(request: Request):
         return {"status": status}
 
     uptime_seconds = None
-    if state.startup_time:
-        uptime_seconds = int(time.time() - state.startup_time)
+    _startup_time = app_state.startup_time()
+    if _startup_time:
+        uptime_seconds = int(time.time() - _startup_time)
 
     gpu_available = False
     try:
@@ -66,9 +76,13 @@ async def health(request: Request):
         "engines": {
             "whisper": {"available": state.whisper_model_ready, "type": "local"},
         },
-        "refinement_available": state.refinement_available,
-        "active_jobs": state.job_store.get_active_count(),
-        "total_jobs": len(state.job_store),
+        "refinement_available": app_state.refinement_available(),
+        "refinement_provider": REFINEMENT_PROVIDER,
+        "refinement_model": REFINEMENT_MODEL if app_state.refinement_available() else None,
+        "vision_model_path": VISION_MODEL_PATH,
+        "vision_model_label": VISION_MODEL_LABEL,
+        "active_jobs": app_state.job_store().get_active_count(),
+        "total_jobs": len(app_state.job_store()),
         "uptime_seconds": uptime_seconds,
         "supported_languages": list(SUPPORTED_LANGUAGES.keys())
     }
@@ -110,6 +124,10 @@ async def list_models():
                 "two_pass": False,
             },
         },
+        "vision_model_path": VISION_MODEL_PATH,
+        "vision_model_label": VISION_MODEL_LABEL,
+        "refinement_provider": REFINEMENT_PROVIDER,
+        "refinement_model": REFINEMENT_MODEL,
     }
 
 

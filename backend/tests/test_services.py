@@ -41,6 +41,19 @@ class TestModelManager:
         assert ModelConfig.CONFIGS[ModelName.WHISPER]["memory_mb"] == 3000
         assert ModelConfig.CONFIGS[ModelName.VISION]["memory_mb"] == 8000
 
+    def test_vision_model_default_comes_from_config(self, monkeypatch):
+        """The VLM name should be a single config value, not stale GLM text in one layer."""
+        import importlib
+        import config
+        import services.model_manager as model_manager
+
+        monkeypatch.setenv("VISION_MODEL_PATH", "mlx-community/Test-Vision-Model-4bit")
+        importlib.reload(config)
+        importlib.reload(model_manager)
+
+        assert config.VISION_MODEL_PATH == "mlx-community/Test-Vision-Model-4bit"
+        assert model_manager.DEFAULT_VISION_MODEL_PATH == config.VISION_MODEL_PATH
+
     def test_get_available_memory(self):
         """Test getting available memory."""
         manager = ModelManager()
@@ -180,9 +193,7 @@ class TestVisionService:
         import asyncio
         service = VisionService()
         with pytest.raises(FileNotFoundError):
-            asyncio.get_event_loop().run_until_complete(
-                service.analyze(Path("/nonexistent/image.jpg"))
-            )
+            asyncio.run(service.analyze(Path("/nonexistent/image.jpg")))
 
     def test_tesseract_ocr_available(self):
         """Test Tesseract OCR availability check."""

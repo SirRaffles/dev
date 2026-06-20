@@ -7,15 +7,10 @@ import RefinementBadge from './RefinementBadge';
 import SpeakerReviewPanel from './SpeakerReviewPanel';
 import RenameFileModal from './RenameFileModal';
 import { useJobAutoRefinePolling } from '../hooks/useJobAutoRefinePolling';
-
-// Diarization emits generic labels like SPEAKER_00 / "Speaker 1". Anything
-// that matches this shape is still waiting for a real name.
-export const ANON_SPEAKER_RE = /^(?:SPEAKER_\d+|Speaker\s*\d+|Unknown)$/i;
-export const isAnonymousLabel = (name: string | null | undefined) =>
-  !name ? true : ANON_SPEAKER_RE.test(name.trim());
-
-// Escape special regex characters to prevent ReDoS
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+import { isAnonymousLabel } from '../utils/speakerLabels';
+import { escapeRegExp } from '../utils/transcriptEditOps';
+import { useTranscriptEditing } from '../hooks/useTranscriptEditing';
+import { useTranscriptSearch } from '../hooks/useTranscriptSearch';
 
 interface TranscriptResult {
   language?: string;
@@ -66,36 +61,78 @@ function TranscriptView({
   }, [jobId]);
   const [showTimestamps, setShowTimestamps] = useState(true);
   const [showSpeakers, setShowSpeakers] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  // Edit-mode draft: a mutable copy of result.segments that the editor
-  // writes into for every operation — text edits, per-segment speaker
-  // changes, and splits. Becomes the authoritative payload sent to
-  // PUT /job/{id}/segments on Save. Null outside edit mode.
-  const [draftSegments, setDraftSegments] = useState<Segment[] | null>(null);
-  // Per-segment refs so Split can read the textarea's caret position to
-  // decide where to break the text.
-  const segmentTextareaRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
-  // Local error (e.g. split refused because cursor is at edge).
-  const [splitError, setSplitError] = useState<string | null>(null);
 
   // Speaker labels — read from segments. SpeakerReviewPanel owns all
   // renaming + re-attribution flows (Plan 5). The transcript display below
   // shows `segment.speaker` directly with no client-side override.
 
+  // Edit-mode (draft, split, save) state + handlers live in a dedicated hook.
+  // The hook persists the cleaned draft via the callback below: it strips
+  // client-only flags, derives the next distinct-speakers set, and surfaces
+  // the new segments to the parent.
+  const editing = useTranscriptEditing({
+    segments: result?.segments,
+    persist: async (cleaned) => {
+      await updateSegments(jobId, cleaned);
+      const nextSpeakers = Array.from(new Set(
+        cleaned.map((s) => s.speaker).filter(Boolean)
+      )) as string[];
+      onResultUpdate?.({
+        ...result,
+        segments: cleaned,
+        speakers: nextSpeakers,
+      });
+      setReExtractResult(null);
+      setReExtractError(null);
+    },
+  });
+  const {
+    isEditing,
+    isSaving,
+    saveError,
+    splitError,
+    setSplitError,
+    draftSegments,
+    segmentTextareaRefs,
+    enterEditMode,
+    exitEditMode,
+    editSegment: handleEditSegment,
+    changeSegmentSpeaker: handleChangeSegmentSpeaker,
+    splitAt: handleSplitSegment,
+    save,
+  } = editing;
+
+  // Search & replace state + handlers live in a dedicated hook. Replace
+  // operations persist directly against the committed segments (one-shot
+  // auto-save), matching the existing UX.
+  const search = useTranscriptSearch({
+    segments: result?.segments,
+    persist: async (next) => {
+      await updateSegments(jobId, next);
+      onResultUpdate?.({ ...result, segments: next });
+    },
+  });
+  const {
+    searchQuery,
+    setSearchQuery,
+    replaceText,
+    setReplaceText,
+    searchResults,
+    isReplacing,
+    replaceError,
+    performSearch,
+    replaceInSegment,
+    replaceAll: replaceAllOp,
+    resetSearch,
+  } = search;
+
   // Confirmation modals
   const [confirmSave, setConfirmSave] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState<number>(0);
 
-  // Search & replace
+  // Search & replace panel visibility (UI-only — the search state itself is
+  // owned by the hook above).
   const [showSearchPanel, setShowSearchPanel] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [replaceText, setReplaceText] = useState('');
-  const [searchResults, setSearchResults] = useState<number[]>([]);
-  const [isReplacing, setIsReplacing] = useState(false);
-  const [replaceError, setReplaceError] = useState<string | null>(null);
 
   const segmentRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -135,76 +172,6 @@ function TranscriptView({
     }
   }, [currentTime, result]);
 
-  // All edit-mode mutations go through the draft. Outside edit mode the
-  // draft is null and we read directly from result.segments.
-  const handleEditSegment = (index: number, newText: string) => {
-    setDraftSegments((prev) =>
-      prev ? prev.map((s, j) => (j === index ? { ...s, text: newText } : s)) : prev
-    );
-  };
-
-  const handleChangeSegmentSpeaker = (index: number, newSpeaker: string) => {
-    setDraftSegments((prev) =>
-      prev ? prev.map((s, j) => (j === index ? { ...s, speaker: newSpeaker } : s)) : prev
-    );
-  };
-
-  // Split the segment at the current cursor position in its textarea.
-  // Reject edge positions (0 or ≥ text length) so we never produce an empty
-  // half. Timestamps are char-proportional — exact enough for insight
-  // extraction and the user can still eyeball-adjust after the fact.
-  const handleSplitSegment = (index: number) => {
-    setSplitError(null);
-    setDraftSegments((prev) => {
-      if (!prev) return prev;
-      const seg = prev[index];
-      if (!seg) return prev;
-      const ta = segmentTextareaRefs.current[index];
-      if (!ta) {
-        setSplitError('Click inside the segment text first, then Split.');
-        return prev;
-      }
-      const pos = ta.selectionStart ?? 0;
-      const text = seg.text || '';
-      if (pos <= 0 || pos >= text.length) {
-        setSplitError('Place the cursor between two words inside this segment before splitting.');
-        return prev;
-      }
-      const duration = Math.max(0, (seg.end ?? 0) - (seg.start ?? 0));
-      const midpoint = (seg.start ?? 0) + duration * (pos / text.length);
-      const partA: Segment = {
-        ...seg,
-        text: text.slice(0, pos).trimEnd(),
-        end: midpoint,
-      };
-      const partB: Segment = {
-        ...seg,
-        text: text.slice(pos).trimStart(),
-        start: midpoint,
-        // Transient marker for the amber ring; stripped before the PUT.
-        _justSplit: true,
-      } as Segment;
-      const next = [...prev];
-      next.splice(index, 1, partA, partB);
-      return next;
-    });
-  };
-
-  const enterEditMode = () => {
-    setDraftSegments(
-      (result?.segments || []).map((s) => ({ ...s }))
-    );
-    setSplitError(null);
-    setSaveError(null);
-    setIsEditing(true);
-  };
-
-  const exitEditMode = () => {
-    setDraftSegments(null);
-    setSplitError(null);
-    setIsEditing(false);
-  };
-
   // After saveEdits we may want to re-run insight extraction. This is async
   // + long-running; we surface a status line next to the "Re-extract" button.
   const [reExtracting, setReExtracting] = useState(false);
@@ -227,154 +194,32 @@ function TranscriptView({
     }
   };
 
+  // Drive the save-confirm modal: the hook decides whether a confirmation is
+  // warranted (multi-segment change) and only persists once confirmed.
   const saveEdits = async () => {
-    if (!jobId || !draftSegments) {
+    if (!jobId) {
       exitEditMode();
       return;
     }
-
-    // Diff draft vs original to decide whether the save is worth issuing and
-    // how many changes we're about to commit (drives the confirm modal).
-    const original = result?.segments || [];
-    const lengthChanged = draftSegments.length !== original.length;
-    const alignedChanged = !lengthChanged && draftSegments.some((s, i) => {
-      const o = original[i];
-      return !o
-        || (s.text ?? '') !== (o.text ?? '')
-        || (s.speaker ?? '') !== (o.speaker ?? '')
-        || Number(s.start) !== Number(o.start)
-        || Number(s.end) !== Number(o.end);
-    });
-    if (!lengthChanged && !alignedChanged) {
-      exitEditMode();
-      return;
-    }
-
-    // Rough change count for the confirm modal — enough to nudge the user
-    // but doesn't need to be perfectly precise.
-    const changeCount = lengthChanged
-      ? Math.abs(draftSegments.length - original.length) + draftSegments.filter((s, i) => {
-          const o = original[i];
-          return o && ((s.text ?? '') !== (o.text ?? '') || (s.speaker ?? '') !== (o.speaker ?? ''));
-        }).length
-      : draftSegments.reduce((n, s, i) => {
-          const o = original[i];
-          return n + (!o || (s.text ?? '') !== (o.text ?? '') || (s.speaker ?? '') !== (o.speaker ?? '') ? 1 : 0);
-        }, 0);
-    if (changeCount > 1 && !confirmSave) {
+    const { needsConfirm } = await save(confirmSave);
+    if (needsConfirm) {
       setConfirmSave(true);
       return;
     }
-
     setConfirmSave(false);
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      // Strip client-only flags before hitting the backend.
-      const cleaned = draftSegments.map(({ _justSplit: _js, ...s }: any) => s);
-      await updateSegments(jobId, cleaned);
-
-      const nextSpeakers = Array.from(new Set(
-        cleaned.map((s: any) => s.speaker).filter(Boolean)
-      )) as string[];
-
-      onResultUpdate?.({
-        ...result,
-        segments: cleaned,
-        speakers: nextSpeakers,
-      });
-
-      exitEditMode();
-      setReExtractResult(null);
-      setReExtractError(null);
-    } catch (err: any) {
-      setSaveError(err.message || 'Failed to save changes');
-    } finally {
-      setIsSaving(false);
-    }
   };
 
-  // Search functions
-  const performSearch = () => {
-    if (!result?.segments || !searchQuery.trim()) {
-      setSearchResults([]);
-      return;
-    }
-
-    const matches: number[] = [];
-    const query = searchQuery.toLowerCase();
-    result.segments.forEach((segment, index) => {
-      if (segment.text.toLowerCase().includes(query)) {
-        matches.push(index);
-      }
-    });
-    setSearchResults(matches);
-  };
-
-  const replaceInSegment = async (index: number) => {
-    if (!searchQuery || !result?.segments) return;
-
-    setIsReplacing(true);
-    setReplaceError(null);
-
-    const segment = result.segments[index];
-    const newText = segment.text.replace(new RegExp(escapeRegExp(searchQuery), 'gi'), replaceText);
-
-    // Used to be edit-mode-aware; now search & replace just operates on
-    // the committed segments directly and auto-saves — matching the
-    // existing UX where each Replace is a one-shot persist.
-    const updatedSegments = result.segments.map((seg, i) => (
-      i === index ? { ...seg, text: newText } : seg
-    ));
-
-    try {
-      await updateSegments(jobId, updatedSegments);
-      onResultUpdate?.({ ...result, segments: updatedSegments });
-      performSearch();
-    } catch (err: any) {
-      setReplaceError(err.message || 'Failed to replace text');
-    } finally {
-      setIsReplacing(false);
-    }
-  };
-
+  // Drive the replace-all confirm modal: the hook returns the occurrence count
+  // so we can confirm before applying, then re-invokes with `confirmed: true`.
   const replaceAll = async () => {
-    if (!searchQuery || !result?.segments) return;
-
-    // Count total occurrences across all segments
-    const regex = new RegExp(escapeRegExp(searchQuery), 'gi');
-    let totalOccurrences = 0;
-    result.segments.forEach((segment) => {
-      const matches = segment.text.match(regex);
-      if (matches) totalOccurrences += matches.length;
-    });
-
-    if (totalOccurrences === 0) return;
-
-    if (!confirmReplace) {
-      setConfirmReplace(totalOccurrences);
+    if (confirmReplace) {
+      setConfirmReplace(0);
+      await replaceAllOp(true);
       return;
     }
-
-    setConfirmReplace(0);
-    setIsReplacing(true);
-    setReplaceError(null);
-
-    const updatedSegments = result.segments.map((segment) => ({
-      ...segment,
-      text: segment.text.replace(new RegExp(escapeRegExp(searchQuery), 'gi'), replaceText)
-    }));
-
-    try {
-      await updateSegments(jobId, updatedSegments);
-      onResultUpdate?.({ ...result, segments: updatedSegments });
-      setSearchResults([]);
-      setSearchQuery('');
-      setReplaceText('');
-    } catch (err: any) {
-      setReplaceError(err.message || 'Failed to replace all');
-    } finally {
-      setIsReplacing(false);
+    const count = await replaceAllOp(false);
+    if (count > 0) {
+      setConfirmReplace(count);
     }
   };
 
@@ -538,10 +383,7 @@ function TranscriptView({
             const next = !showSearchPanel;
             setShowSearchPanel(next);
             if (!next) {
-              setSearchQuery('');
-              setReplaceText('');
-              setSearchResults([]);
-              setReplaceError(null);
+              resetSearch();
             }
           }}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
@@ -608,7 +450,7 @@ function TranscriptView({
             )}
             {searchQuery && (
               <button
-                onClick={() => { setSearchQuery(''); setReplaceText(''); setSearchResults([]); setReplaceError(null); }}
+                onClick={resetSearch}
                 className="flex items-center gap-1 px-2 py-2 text-slate-500 dark:text-slate-400 hover:text-slate-300 transition-colors"
               >
                 <X className="w-4 h-4" />

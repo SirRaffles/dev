@@ -147,7 +147,7 @@ class PPTXProcessor(BaseProcessor):
 
             current_step += 1
 
-        # Step 5: Describe slides with VLM (GLM-4.6V-Flash)
+        # Step 5: Describe slides with the configured VLM
         if self.settings.describe_slides and self.job.visual_elements:
             self.update_progress(
                 "slide_analysis",
@@ -156,7 +156,7 @@ class PPTXProcessor(BaseProcessor):
                 message="Loading vision model...",
             )
 
-            # Load GLM-4.6V-Flash vision model if not already loaded
+            # Load the configured vision model if not already loaded
             if not self._vision_loaded:
                 try:
                     await self.model_manager.load_vision()

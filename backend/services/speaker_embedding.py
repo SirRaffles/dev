@@ -285,12 +285,15 @@ class SpeakerEmbeddingService:
         }
         (folder / "profile.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
 
-        # Initialize personality.md
-        if not (folder / "personality.md").exists():
-            (folder / "personality.md").write_text(
-                f"# {name}\n\n*No personality insights yet. These will accrue as calls are analyzed.*\n",
-                encoding="utf-8",
-            )
+        # Initialize profile artifacts
+        for filename, default_content in (
+            ("profile.md", f"# Profile: {name}\n\n*Add a factual bio — role, employer, focus areas, relevant background.*\n"),
+            ("explicit_insights.md", f"# Explicit insights\n\n*Concrete observations captured from transcripts will land here.*\n"),
+            ("implicit_insights.md", f"# Implicit insights\n\n*Inferred personality, style, and preferences will land here.*\n"),
+        ):
+            p = folder / filename
+            if not p.exists():
+                p.write_text(default_content, encoding="utf-8")
 
         # DB entry
         state.speaker_store.create(speaker_id, name, folder_path, embedding_path)

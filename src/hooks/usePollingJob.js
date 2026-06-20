@@ -143,5 +143,3 @@ export function usePollingJob(fetchStatusFn) {
     pollJobStatus,
   };
 }
-
-export default usePollingJob;

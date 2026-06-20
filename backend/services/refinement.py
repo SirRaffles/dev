@@ -14,7 +14,11 @@ import logging
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from typing import List, Optional
+
+from config import ENABLE_WEB_VERIFICATION, OLLAMA_HOST, REFINEMENT_MODEL, REFINEMENT_PROVIDER
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +110,25 @@ def _find_claude_cli() -> Optional[str]:
     return shutil.which("claude")
 
 
-def _run_claude(prompt: str, schema: str, claude_path: str, timeout: int = 120) -> dict:
+def _extract_json_object(text_content: str, wrapper: object = None) -> dict:
+    """Extract a JSON object from a provider response string."""
+    json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text_content, re.DOTALL)
+    if json_match:
+        text_content = json_match.group(1).strip()
+
+    try:
+        return json.loads(text_content)
+    except json.JSONDecodeError:
+        pass
+
+    if isinstance(wrapper, dict) and any(k in wrapper for k in ("language", "speakers", "corrections", "additional_corrections")):
+        return wrapper
+
+    raise RuntimeError(f"Could not extract structured JSON from provider response: {text_content[:300]}")
+
+
+def _run_claude(prompt: str, schema: str, claude_path: str, timeout: int = 120,
+                model: str = "sonnet") -> dict:
     """
     Run claude CLI in pipe mode with structured JSON output.
 
@@ -115,7 +137,7 @@ def _run_claude(prompt: str, schema: str, claude_path: str, timeout: int = 120) 
     """
     cmd = [
         claude_path, "-p",
-        "--model", "sonnet",
+        "--model", model,
         "--output-format", "json",
         "--max-turns", "1",
         "--no-session-persistence",
@@ -166,23 +188,36 @@ def _run_claude(prompt: str, schema: str, claude_path: str, timeout: int = 120) 
     else:
         text_content = str(wrapper)
 
-    # Try to extract JSON from the text content
-    # Claude may wrap the JSON in markdown code blocks
-    json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text_content, re.DOTALL)
-    if json_match:
-        text_content = json_match.group(1).strip()
+    return _extract_json_object(text_content, wrapper)
 
-    # Try parsing as JSON directly
+
+def _run_ollama(prompt: str, schema: str, model: str, host: str = OLLAMA_HOST,
+                timeout: int = 120) -> dict:
+    """Run a local Ollama model and parse its structured JSON response."""
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{host.rstrip('/')}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        return json.loads(text_content)
-    except json.JSONDecodeError:
-        pass
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            wrapper = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ollama refinement failed for model {model!r}: {exc}") from exc
 
-    # If the wrapper itself matches our schema, use it
-    if isinstance(wrapper, dict) and any(k in wrapper for k in ("language", "speakers", "corrections", "additional_corrections")):
-        return wrapper
-
-    raise RuntimeError(f"Could not extract structured JSON from Claude response: {text_content[:300]}")
+    text_content = wrapper.get("response", "") if isinstance(wrapper, dict) else str(wrapper)
+    if not text_content:
+        raise RuntimeError("Ollama returned empty response")
+    return _extract_json_object(text_content, wrapper)
 
 
 def _build_transcript_text(segments: list) -> str:
@@ -210,14 +245,43 @@ def _format_timestamp(seconds: float) -> str:
 class RefinementService:
     """Orchestrates transcript refinement: analyze → web verify → apply."""
 
-    def __init__(self, claude_path: str):
+    def __init__(
+        self,
+        claude_path: Optional[str] = None,
+        provider: str = REFINEMENT_PROVIDER,
+        model: Optional[str] = None,
+        ollama_host: str = OLLAMA_HOST,
+    ):
+        self.provider = (provider or "claude").strip().lower()
+        self.model = (model or ("qwen3.5:27b" if self.provider == "ollama" else REFINEMENT_MODEL)).strip()
         self.claude_path = claude_path
+        self.ollama_host = ollama_host.rstrip("/")
         self._ddg_available = False
-        try:
-            from duckduckgo_search import DDGS
-            self._ddg_available = True
-        except ImportError:
-            logger.warning("duckduckgo-search not installed, web verification disabled")
+        if ENABLE_WEB_VERIFICATION:
+            try:
+                from duckduckgo_search import DDGS
+                self._ddg_available = True
+            except ImportError:
+                logger.warning("duckduckgo-search not installed, web verification disabled")
+        else:
+            logger.info("Web verification disabled by configuration")
+
+    def _run_structured(self, prompt: str, schema: str, timeout: int) -> dict:
+        if self.provider == "ollama":
+            return _run_ollama(
+                prompt,
+                schema,
+                model=self.model,
+                host=self.ollama_host,
+                timeout=timeout,
+            )
+        if self.provider != "claude":
+            raise RuntimeError(f"Unsupported refinement provider: {self.provider}")
+        if not self.claude_path:
+            raise RuntimeError("Claude refinement provider requires claude_path")
+        if self.model == "sonnet":
+            return _run_claude(prompt, schema, self.claude_path, timeout=timeout)
+        return _run_claude(prompt, schema, self.claude_path, timeout=timeout, model=self.model)
 
     def analyze(self, segments: list, context_text: Optional[str] = None,
                 glossary_terms: Optional[List[str]] = None,
@@ -265,7 +329,8 @@ class RefinementService:
 
         # Combo C — semantic diarization polish prompt block.
         # Emitted only when pyannote turn data is available. Turn list is
-        # capped at 50 entries to bound prompt size on long recordings.
+        # capped at 50 entries to bound prompt size on long recordings and
+        # keep local providers responsive.
         diarization_block = ""
         speaker_corrections_example = ""
         if speaker_turns:
@@ -327,7 +392,7 @@ Return ONLY the JSON object, no other text."""
         # + speaker bios + diarization context block observed taking >5 min on
         # a Pascal Weber/Manukai call (timed out at the previous 300s limit).
         # Bumped to give comfortable headroom without abandoning the user.
-        return _run_claude(prompt, ANALYSIS_SCHEMA, self.claude_path, timeout=600)
+        return self._run_structured(prompt, ANALYSIS_SCHEMA, timeout=600)
 
     def web_verify(self, terms: list) -> dict:
         """
@@ -338,8 +403,8 @@ Return ONLY the JSON object, no other text."""
         if not terms:
             return {}
 
-        if not self._ddg_available:
-            logger.info("Skipping web verification (duckduckgo-search not installed)")
+        if not self._ddg_available or not ENABLE_WEB_VERIFICATION:
+            logger.info("Skipping web verification (disabled or missing dependency)")
             return {}
 
         from duckduckgo_search import DDGS
@@ -401,7 +466,7 @@ Web search results for uncertain terms:
 
 Return ONLY the JSON object, no other text."""
 
-        return _run_claude(prompt, FINALIZE_SCHEMA, self.claude_path, timeout=60)
+        return self._run_structured(prompt, FINALIZE_SCHEMA, timeout=60)
 
     def apply_corrections(self, segments: list, analysis: dict) -> tuple:
         """
@@ -433,10 +498,12 @@ Return ONLY the JSON object, no other text."""
             text = seg.get("text", "")
             original_text = text
 
-            # Apply text corrections
+            # Apply text corrections using word-boundary aware regex
             for original, corrected in all_corrections:
-                if original in text:
-                    text = text.replace(original, corrected)
+                # \b matches word boundaries. We escape 'original' to handle
+                # special characters (e.g. 'C++').
+                pattern = r'\b' + re.escape(original) + r'\b'
+                text = re.sub(pattern, corrected, text)
 
             if text != original_text:
                 corrections_applied += 1

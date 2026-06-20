@@ -39,6 +39,9 @@ def _safe_path(user_path: str) -> Path:
     return resolved
 
 
+ALLOWED_FILE_EXTS = {".md", ".txt"}
+
+
 def _folder_to_dict(folder: Path, base: Path) -> dict:
     """Convert a folder Path to a response dict."""
     rel = str(folder.relative_to(base))
@@ -63,14 +66,36 @@ def _folder_to_dict(folder: Path, base: Path) -> dict:
     }
 
 
+def _list_folder_files(folder: Path, base: Path) -> list[dict]:
+    """List non-hidden, non-meta files in a folder as response dicts."""
+    files = sorted(
+        [f for f in folder.iterdir() if f.is_file() and f.name != "_meta.json"],
+        key=lambda f: f.name.lower(),
+    )
+    out = []
+    for f in files:
+        try:
+            stat = f.stat()
+        except OSError:
+            continue
+        out.append({
+            "name": f.name,
+            "path": str(f.relative_to(base)),
+            "size_bytes": stat.st_size,
+            "modified_at": stat.st_mtime,
+        })
+    return out
+
+
 def _build_tree(folder: Path, base: Path) -> dict:
-    """Recursively build a folder tree."""
+    """Recursively build a folder tree, with files attached at each level."""
     node = _folder_to_dict(folder, base)
     children = sorted(
         [f for f in folder.iterdir() if f.is_dir() and not f.name.startswith(".")],
         key=lambda f: f.name.lower(),
     )
     node["children"] = [_build_tree(c, base) for c in children]
+    node["files"] = _list_folder_files(folder, base)
     return node
 
 
@@ -184,15 +209,17 @@ async def read_context_file(path: str):
 
 @router.put("/contexts/files/{path:path}")
 async def write_context_file(path: str, req: FileWriteRequest):
-    """Write/update a markdown file in a context folder."""
+    """Write/update a text/markdown file in a context folder."""
     target = _safe_path(path)
 
-    # Audit #4: only allow markdown files under /contexts/files.
-    if target.suffix != ".md":
-        raise HTTPException(status_code=400, detail="Only .md files are allowed")
-
-    # Ensure parent directory exists
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.suffix.lower() not in ALLOWED_FILE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {', '.join(sorted(ALLOWED_FILE_EXTS))} files are allowed",
+        )
+    # Parent must already be a folder we created — no implicit folder creation.
+    if not target.parent.exists() or not target.parent.is_dir():
+        raise HTTPException(status_code=404, detail="Parent folder does not exist")
 
     target.write_text(req.content, encoding="utf-8")
     return {"status": "saved", "path": path}
@@ -234,6 +261,26 @@ async def write_global_glossary(req: FileWriteRequest):
                 tmp.unlink()
             except OSError:
                 pass
+
+
+@router.delete("/contexts/files/{path:path}")
+async def delete_context_file(path: str):
+    """Delete a file from a context folder."""
+    target = _safe_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Path is not a file")
+    if target.name == "_meta.json":
+        raise HTTPException(status_code=400, detail="Cannot delete folder metadata")
+
+    try:
+        target.unlink()
+    except OSError:
+        logger.error("Could not delete context file %s", target, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return {"status": "deleted", "path": path}
 
 
 @router.get("/contexts/search")

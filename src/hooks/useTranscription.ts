@@ -22,7 +22,7 @@ interface BatchResultItem {
   result: any;
 }
 
-export function useTranscription() {
+function useTranscription() {
   const job = usePollingJob(fetchTranscriptionStatus);
 
   // Batch-specific state (not shared with useMultiModal)
