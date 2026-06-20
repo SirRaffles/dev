@@ -48,12 +48,14 @@ def dispatch_refinement_for_job(
     from services.transcription import _update_job
     _update_job(job, phase="refining")
     job._defer_audio_cleanup = True
-    # Lazy import: the worker lives in routes.refinement. Importing it here
-    # (call time, not module load) keeps this service free of a route import
-    # cycle while preserving the original dispatch behaviour.
-    from routes.refinement import _run_refinement_for_job
+    # Lazy import: the worker still lives in routes.refinement. Resolving it at
+    # call time (not module load) keeps this service free of a route import
+    # cycle while preserving the original dispatch behaviour. `routes.refinement`
+    # imports this module at load, so a module-level route import here would be a
+    # true circular import; the deferred attribute lookup avoids that.
+    import routes.refinement as _refinement_routes
     state.transcription_executor.submit(
-        _run_refinement_for_job,
+        _refinement_routes._run_refinement_for_job,
         job.job_id,
         speaker_ids,
         context_path,

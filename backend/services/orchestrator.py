@@ -6,7 +6,7 @@ Quick mode -> Parakeet v3 multilingual + pyannote + Sonnet refinement.
 
 This module is intentionally thin: it owns dispatch + phase transitions, and
 delegates work to existing helpers in services.transcription, services.diarization,
-and routes.refinement.
+and services.refinement_dispatch.
 """
 
 import logging
@@ -23,6 +23,7 @@ from services.transcription import (
     _update_job,
 )
 from services.refinement_policy import build_refinement_policy
+from services.refinement_dispatch import dispatch_refinement_for_job
 from services.diarization import (
     run_diarization,
     assign_speakers_to_segments,
@@ -157,7 +158,6 @@ def _dispatch_refinement(job, settings, audio_path: Optional[str],
                          mode: Literal["best", "quick"] = "best") -> bool:
     job_id = job.job_id
     try:
-        from routes.refinement import dispatch_refinement_for_job
         policy = build_refinement_policy(settings, job)
         dispatch_refinement_for_job(
             job,
