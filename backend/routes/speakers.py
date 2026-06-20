@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
-import state
+import app_state
 from config import ICLOUD_BASE_PATH
 
 logger = logging.getLogger(__name__)
@@ -99,14 +99,14 @@ def _ensure_speaker_dir(name: str) -> Path:
 @router.get("/speakers")
 async def list_speakers():
     """List all registered speakers."""
-    speakers = state.speaker_store.list_all()
+    speakers = app_state.speaker_store().list_all()
     return {"speakers": speakers}
 
 
 @router.get("/speakers/{speaker_id}")
 async def get_speaker(speaker_id: str):
     """Get full speaker profile: voice status + 4 markdown sections + calls."""
-    speaker = state.speaker_store.get(speaker_id)
+    speaker = app_state.speaker_store().get(speaker_id)
     if not speaker:
         raise HTTPException(status_code=404, detail="Speaker not found")
 
@@ -117,7 +117,7 @@ async def get_speaker(speaker_id: str):
     explicit_md = _read_section(folder, _FILE_EXPLICIT)
     implicit_md = _read_section(folder, _FILE_IMPLICIT)
 
-    calls = state.call_speaker_store.get_for_speaker(speaker_id)
+    calls = app_state.call_speaker_store().get_for_speaker(speaker_id)
 
     return {
         **speaker,
@@ -140,7 +140,7 @@ async def create_speaker(req: SpeakerCreateRequest):
         raise HTTPException(status_code=400, detail="Speaker name is required")
 
     # Check for duplicate
-    existing = state.speaker_store.get_by_name(name)
+    existing = app_state.speaker_store().get_by_name(name)
     if existing:
         raise HTTPException(status_code=409, detail=f"Speaker '{name}' already exists")
 
@@ -153,7 +153,7 @@ async def create_speaker(req: SpeakerCreateRequest):
         "speaker_id": speaker_id,
         "name": name,
         "created_at": str(
-            state.speaker_store.db.query_one("SELECT datetime('now') AS now")["now"]
+            app_state.speaker_store().db.query_one("SELECT datetime('now') AS now")["now"]
         ),
     }
     (folder / "profile.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
@@ -161,14 +161,14 @@ async def create_speaker(req: SpeakerCreateRequest):
     # Scaffold the 4-section markdown files with placeholder copy.
     _ensure_speaker_files(folder)
 
-    result = state.speaker_store.create(speaker_id, name, folder_path)
+    result = app_state.speaker_store().create(speaker_id, name, folder_path)
     return result
 
 
 @router.put("/speakers/{speaker_id}")
 async def update_speaker(speaker_id: str, req: SpeakerUpdateRequest):
     """Update speaker details (e.g., rename)."""
-    speaker = state.speaker_store.get(speaker_id)
+    speaker = app_state.speaker_store().get(speaker_id)
     if not speaker:
         raise HTTPException(status_code=404, detail="Speaker not found")
 
@@ -178,7 +178,7 @@ async def update_speaker(speaker_id: str, req: SpeakerUpdateRequest):
             raise HTTPException(status_code=400, detail="Name cannot be empty")
 
         # Check duplicate
-        existing = state.speaker_store.get_by_name(new_name)
+        existing = app_state.speaker_store().get_by_name(new_name)
         if existing and existing["speaker_id"] != speaker_id:
             raise HTTPException(status_code=409, detail=f"Speaker '{new_name}' already exists")
 
@@ -189,7 +189,7 @@ async def update_speaker(speaker_id: str, req: SpeakerUpdateRequest):
             old_folder.rename(new_folder)
 
         new_folder_path = str(new_folder.relative_to(ICLOUD_BASE_PATH))
-        state.speaker_store.update(speaker_id, name=new_name, folder_path=new_folder_path)
+        app_state.speaker_store().update(speaker_id, name=new_name, folder_path=new_folder_path)
 
     return {"speaker_id": speaker_id, "status": "updated"}
 
@@ -197,7 +197,7 @@ async def update_speaker(speaker_id: str, req: SpeakerUpdateRequest):
 @router.delete("/speakers/{speaker_id}")
 async def delete_speaker(speaker_id: str):
     """Delete a speaker from the registry."""
-    speaker = state.speaker_store.get(speaker_id)
+    speaker = app_state.speaker_store().get(speaker_id)
     if not speaker:
         raise HTTPException(status_code=404, detail="Speaker not found")
 
@@ -210,13 +210,13 @@ async def delete_speaker(speaker_id: str):
         except OSError as e:
             logger.warning("Could not delete speaker folder %s: %s", folder, e)
 
-    state.speaker_store.delete(speaker_id)
+    app_state.speaker_store().delete(speaker_id)
     return {"status": "deleted"}
 
 
 def _write_section(speaker_id: str, filename: str, content: str) -> dict:
     """Shared writer for the 4 section PUT routes."""
-    speaker = state.speaker_store.get(speaker_id)
+    speaker = app_state.speaker_store().get(speaker_id)
     if not speaker:
         raise HTTPException(status_code=404, detail="Speaker not found")
     folder = SPEAKERS_DIR / speaker["name"]
@@ -250,7 +250,7 @@ async def get_personality(speaker_id: str):
     Kept so old callers still work. New code should use GET /speakers/{id}
     which exposes all 4 sections.
     """
-    speaker = state.speaker_store.get(speaker_id)
+    speaker = app_state.speaker_store().get(speaker_id)
     if not speaker:
         raise HTTPException(status_code=404, detail="Speaker not found")
     folder = SPEAKERS_DIR / speaker["name"]
